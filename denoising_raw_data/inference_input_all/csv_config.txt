@@ -1,0 +1,15 @@
+# -------------------------------------------------------- #
+# Config file for reading input file
+# -------------------------------------------------------- #
+# lines staring with '#' are ignored
+# Note: Everything behind the '=' sign (excluding l/r whitespaces) is taken
+
+time_col = time_sec
+rescale_time = 60
+
+length_col = length_um
+length_islog = false
+
+fp_col = gfp_nb
+cell_tags=cell
+parent_tags=parent

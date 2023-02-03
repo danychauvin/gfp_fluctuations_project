@@ -1,0 +1,26 @@
+---
+title: "Import all data"
+author: "Dany Chauvin"
+date: '2022-12-14'
+output: html_document
+---
+
+```{r}
+list_of_scripts <- c("./hi1_acetate005.Rmd","./hi1_acetate020.Rmd","./hi1_glycerol040.Rmd","./hi1_glucose020.Rmd","./hi1_glucoseaa020.Rmd")
+```
+
+# DO NOT EDIT BELOW
+
+```{r}
+#set plot to TRUE to plot all traces
+plot<-FALSE
+source("../mother_machine_experiments_toolbox/load_functions_and_packages.R")
+
+myframes_list <- list()
+for(i in 1:length(list_of_scripts)){
+  source(knitr::purl(list_of_scripts[i]))
+  myframes_list[[i]] <- myframes}
+
+myframes_all <- myframes_list %>% 
+  do.call(rbind,.)
+```

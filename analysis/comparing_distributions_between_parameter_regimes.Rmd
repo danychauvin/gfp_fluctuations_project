@@ -1,0 +1,172 @@
+---
+title: "simulations_hi1.Rmd"
+author: "Dany Chauvin"
+date: '2023-01-24'
+output: html_document
+---
+
+```{r}
+source("../mother_machine_experiments_toolbox/load_functions_and_packages.R")
+#data_folder <- "/scicore/home/nimwegen/rocasu25/Documents/Projects/biozentrum/gfp_fluctuations_project/hybrid_simulations_output/hybrid_simulations_20221219_10h"
+simulation_data_folder <- "/scicore/home/nimwegen/rocasu25/Documents/Projects/biozentrum/gfp_fluctuations_project/denoising_raw_data/denoising_20230201134400/integration"
+experimental_data_folder <- "/scicore/home/nimwegen/rocasu25/Documents/Projects/biozentrum/gfp_fluctuations_project/denoised_data_complete_cycles"
+#experimental_data_folder <- "/scicore/home/nimwegen/rocasu25/Documents/Projects/biozentrum/gfp_fluctuations_project/denoised_data"
+source("../mother_machine_experiments_toolbox/load_simulation_data.R")
+```
+
+# Filter data to keep only the steady state
+
+```{r}
+noise_contribution_data <- noise_contribution_data %>% 
+  group_by(cell) %>% 
+  arrange(time_sec) %>% 
+  mutate(div_time=(last(time_sec)-first(time_sec))/3600) %>% 
+  ungroup()
+
+p <- 6 #number of doubling times to consider to get rid of the transient
+#6 typical doubling times
+
+conditions <- c("acetate005","acetate020","glycerol040","glucose020","glucoseaa020")
+
+doubling_times_df <- experimental_data %>% 
+  filter(condition %in% conditions) %>% 
+  group_by(condition,promoter,cell) %>% 
+  sample_n(1) %>% 
+  ungroup %>% 
+  group_by(condition,promoter) %>% 
+  mutate(#w=sum(1/abs(cov_ll)),
+         #w_i=1/abs(cov_ll),
+         #mean_l=sum(lambda*w_i)*1/w,
+         mean_l=mean(lambda,.na.rm=TRUE),
+         mean_doubling_time=1/(mean_l*60/log(2))) %>% 
+  ungroup() %>% 
+  distinct(condition,mean_doubling_time) %>% 
+  mutate(time_interval=p*mean_doubling_time)
+
+noise_ss <- noise_contribution_data %>% 
+  left_join(doubling_times_df,by=c("condition")) %>% 
+  group_by(condition) %>% 
+  mutate(time_h_rescaled=time_sec/3600-min(time_sec)/3600) %>% 
+  filter(time_h_rescaled>time_interval) %>% 
+  ungroup() %>% 
+  #filter(div_time<mean_doubling_time*3) %>% 
+  mutate(concentration=gfp_nb/length_um)
+```
+
+# Plot distributions of concentration
+
+```{r}
+library(RColorBrewer)
+c25 <- c(
+  "dodgerblue2", "#E31A1C", # red
+  "green4",
+  "#6A3D9A", # purple
+  "#FF7F00", # orange
+  "black", "gold1",
+  "skyblue2", "#FB9A99", # lt pink
+  "palegreen2",
+  "#CAB2D6", # lt purple
+  "#FDBF6F", # lt orange
+  "gray70", "khaki2",
+  "maroon", "orchid1", "deeppink1", "blue1", "steelblue4",
+  "darkturquoise", "green1", "yellow4", "yellow3",
+  "darkorange4", "brown"
+)
+
+datatypes <- c("experimentaldata","allnoisesources","noprodnoise","nogrowthnoise","nodivisionnoise","onlyprodnoise","onlygrowthnoise","onlydivisionnoise","nonoise")
+datatypes_restricted <- c("experimentaldata","allnoisesources","noprodnoise","nogrowthnoise","nodivisionnoise","nonoise")
+
+
+noise_ss %>% 
+  filter(datatype %in% datatypes_restricted) %>% 
+  mutate(datatype=factor(datatype,levels=datatypes_restricted)) %>% 
+  mutate(condition=factor(condition,levels=conditions)) %>% 
+  ggplot(aes(x=concentration))+
+  geom_freqpoly(aes(y=after_stat(density),col=datatype))+
+  theme_cowplot()+
+  scale_y_continuous(trans="log10")+
+  facet_wrap(~condition,scale="free")+
+  scale_color_manual(values=c25)+
+  ylab("Density")+
+  xlab("Concentration")
+
+ggsave("./figures/compare_concentration_distributions_hi1.pdf",width=15,height=8)
+```
+
+# Plot distributions in scatter plot
+
+```{r}
+.datatype <- "nogrowthnoise"
+
+noise_ss %>% 
+  filter(gl_id!="20190515.5.7") %>% 
+  filter(datatype %in% datatypes_restricted) %>% 
+  filter(datatype %in% c("experimentaldata",.datatype)) %>% 
+  mutate(datatype=factor(datatype,levels=datatypes_restricted)) %>% 
+  mutate(condition=factor(condition,levels=conditions)) %>% 
+  select(condition,datatype,concentration,cell,time_sec) %>% 
+  group_by(condition,datatype) %>% 
+  mutate(mean_concentration=mean(concentration)) %>% 
+  mutate(sd_concentration=sd(concentration)) %>% 
+  ungroup() %>% 
+  pivot_wider(names_from = c("datatype"),values_from = c("concentration","mean_concentration","sd_concentration")) %>% 
+  ggplot()+
+  geom_point(aes(concentration_experimentaldata,concentration_nogrowthnoise),alpha=0.1)+
+  geom_abline(aes(intercept=0,slope=1),alpha=1,col="red",linetype="dashed")+
+  geom_hline(aes(yintercept=mean_concentration_nogrowthnoise),alpha=0.5,col="red",linetype="dashed")+
+  geom_vline(aes(xintercept=mean_concentration_experimentaldata),alpha=0.5,col="red",linetype="dashed")+
+  geom_hline(aes(yintercept=mean_concentration_nogrowthnoise+sd_concentration_nogrowthnoise),alpha=0.1,col="red",linetype="dashed")+
+  geom_vline(aes(xintercept=mean_concentration_experimentaldata+sd_concentration_experimentaldata),alpha=0.1,col="red",linetype="dashed")+
+  geom_hline(aes(yintercept=mean_concentration_nogrowthnoise-sd_concentration_nogrowthnoise),alpha=0.1,col="red",linetype="dashed")+
+  geom_vline(aes(xintercept=mean_concentration_experimentaldata-sd_concentration_experimentaldata),alpha=0.1,col="red",linetype="dashed")+
+  facet_wrap(~condition,nrow=1)+
+  coord_fixed(ratio=1) + 
+  theme_cowplot()+
+  ylab("No growth noise concentration")+
+  xlab("Experimental concentration")
+
+ggsave("./figures/nogrowthnoise_vs_experimentaldata.pdf",width=20,height=4)
+
+.datatype <- "noprodnoise"
+
+noise_ss %>% 
+  filter(gl_id!="20190515.5.7") %>% 
+  filter(datatype %in% datatypes_restricted) %>% 
+  filter(datatype %in% c("experimentaldata",.datatype)) %>% 
+  mutate(datatype=factor(datatype,levels=datatypes_restricted)) %>% 
+  mutate(condition=factor(condition,levels=conditions)) %>% 
+  select(condition,datatype,concentration,cell,time_sec) %>% 
+  group_by(condition,datatype) %>% 
+  mutate(mean_concentration=mean(concentration)) %>% 
+  mutate(sd_concentration=sd(concentration)) %>% 
+  ungroup() %>% 
+  pivot_wider(names_from = c("datatype"),values_from = c("concentration","mean_concentration","sd_concentration")) %>% 
+  ggplot()+
+  geom_point(aes(concentration_experimentaldata,concentration_noprodnoise),alpha=0.1)+
+  geom_abline(aes(intercept=0,slope=1),alpha=1,col="red",linetype="dashed")+
+  geom_hline(aes(yintercept=mean_concentration_noprodnoise),alpha=0.5,col="red",linetype="dashed")+
+  geom_vline(aes(xintercept=mean_concentration_experimentaldata),alpha=0.5,col="red",linetype="dashed")+
+  geom_hline(aes(yintercept=mean_concentration_noprodnoise+sd_concentration_noprodnoise),alpha=0.1,col="red",linetype="dashed")+
+  geom_vline(aes(xintercept=mean_concentration_experimentaldata+sd_concentration_experimentaldata),alpha=0.1,col="red",linetype="dashed")+
+  geom_hline(aes(yintercept=mean_concentration_noprodnoise-sd_concentration_noprodnoise),alpha=0.1,col="red",linetype="dashed")+
+  geom_vline(aes(xintercept=mean_concentration_experimentaldata-sd_concentration_experimentaldata),alpha=0.1,col="red",linetype="dashed")+
+  facet_wrap(~condition,nrow=1)+
+  coord_fixed(ratio=1) + 
+  theme_cowplot()+
+  ylab("No production noise concentration")+
+  xlab("Experimental concentration")
+
+ggsave("./figures/noprodnoise_vs_experimentaldata.pdf",width=20,height=4)
+```
+
+# Also loading denoised data
+
+```{r}
+source("../mother_machine_experiments_toolbox/load_functions_and_packages.R")
+source("../mother_machine_experiments_toolbox/inference_simulations_useful_functions.R")
+#load myframes uncomplete and complete cell cycles.
+#source("../mother_machine_experiments_toolbox/load_denoised_data.R")
+#load only full cell cycles
+source("../mother_machine_experiments_toolbox/load_denoised_data_complete_cycles.R")
+```
+

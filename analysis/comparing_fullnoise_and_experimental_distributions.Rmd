@@ -1,0 +1,547 @@
+---
+title: "simulations_hi1.Rmd"
+author: "Dany Chauvin"
+date: '2023-01-24'
+output: html_document
+---
+
+```{r}
+source("../mother_machine_experiments_toolbox/load_functions_and_packages.R")
+#data_folder <- "/scicore/home/nimwegen/rocasu25/Documents/Projects/biozentrum/gfp_fluctuations_project/hybrid_simulations_output/hybrid_simulations_20221219_10h"
+simulation_data_folder <- "/scicore/home/nimwegen/rocasu25/Documents/Projects/biozentrum/gfp_fluctuations_project/denoising_raw_data/denoising_20230201134400/integration"
+experimental_data_folder <- "/scicore/home/nimwegen/rocasu25/Documents/Projects/biozentrum/gfp_fluctuations_project/denoised_data_complete_cycles"
+source("../mother_machine_experiments_toolbox/load_simulation_data.R")
+```
+
+# Plot concentration histogram
+
+```{r}
+plot_histogram <- function(.cond,breakVec=seq(4000,43000,500),plot=FALSE){
+  exp_density <- density(noise_contribution_data %>% filter(condition==.cond,datatype=="experimentaldata") %>% .$concentration)
+  sim_density <- density(noise_contribution_data %>% filter(condition==.cond,datatype=="allnoisesources") %>% .$concentration)
+  exp <- noise_contribution_data %>% filter(condition==.cond,datatype=="experimentaldata") %>% .$concentration
+  sim <- noise_contribution_data %>% filter(condition==.cond,datatype=="allnoisesources") %>% .$concentration
+  exp_density
+  sim_density
+  print(exp_density)
+  print(sim_density)
+  h_exp <- hist(exp, breaks = breakVec,plot=FALSE)
+  h_sim <- hist(sim, breaks = breakVec,plot=FALSE)
+  if(plot){
+  print(
+  ggplot()+
+    geom_col(aes(x=h_exp$mids,y=h_exp$counts),fill="blue",alpha=0.5)+
+    geom_col(aes(x=h_sim$mids,y=h_sim$counts),fill="red",alpha=0.5))+
+      scale_y_continuous(trans = "log10")+
+      ylab("Counts")+
+      xlab("Concentration")}
+}
+
+breakVec=seq(8000,80000,200)
+plot_histogram("acetate005",breakVec,TRUE)
+
+breakVec=seq(7000,60000,200)
+plot_histogram("acetate020",breakVec,TRUE)
+
+breakVec=seq(100,45000,200)
+plot_histogram("glycerol040",breakVec,TRUE)
+
+breakVec=seq(4000,43000,200)
+plot_histogram("glucose020",breakVec,TRUE)
+
+breakVec=seq(4000,35000,200)
+plot_histogram("glucoseaa020",breakVec,TRUE)
+```
+
+# Plot length histogram
+
+```{r}
+plot_histogram <- function(.cond,breakVec=seq(4000,43000,500),plot=FALSE){
+  
+  exp_density <- density(noise_contribution_data %>% filter(condition==.cond,datatype=="experimentaldata") %>% .$length_um)
+  sim_density <- density(noise_contribution_data %>% filter(condition==.cond,datatype=="allnoisesources") %>% .$length_um)
+  exp <- noise_contribution_data %>% filter(condition==.cond,datatype=="experimentaldata") %>% .$length_um
+  sim <- noise_contribution_data %>% filter(condition==.cond,datatype=="allnoisesources") %>% .$length_um
+  exp_density
+  sim_density
+  print(exp_density)
+  print(sim_density)
+  h_exp <- hist(exp, breaks = breakVec,plot=FALSE)
+  h_sim <- hist(sim, breaks = breakVec,plot=FALSE)
+  if(plot){
+  print(
+  ggplot()+
+    geom_col(aes(x=h_exp$mids,y=h_exp$counts),fill="blue",alpha=0.5)+
+    geom_col(aes(x=h_sim$mids,y=h_sim$counts),fill="red",alpha=0.5))+
+      scale_y_continuous(trans = "log10")+
+      ylab("Counts")+
+      xlab("Cell-size")}
+}
+
+breakVec=seq(0.8,5,0.05)
+plot_histogram("acetate005",breakVec,TRUE)
+
+breakVec=seq(0.8,7,0.05)
+plot_histogram("acetate020",breakVec,TRUE)
+
+breakVec=seq(0.8,10,0.05)
+plot_histogram("glycerol040",breakVec,TRUE)
+
+breakVec=seq(1,16,0.05)
+plot_histogram("glucose020",breakVec,TRUE)
+
+breakVec=seq(1,24,0.05)
+plot_histogram("glucoseaa020",breakVec,TRUE)
+```
+
+# Plot log-length histogram
+
+```{r}
+plot_histogram <- function(.cond,breakVec=seq(4000,43000,500),plot=FALSE){
+  
+  exp_density <- density(noise_contribution_data %>% filter(condition==.cond,datatype=="experimentaldata") %>% mutate(ll=log(length_um)) %>%  .$ll)
+  sim_density <- density(noise_contribution_data %>% filter(condition==.cond,datatype=="allnoisesources") %>% mutate(ll=log(length_um)) %>%  .$ll)
+  exp <- noise_contribution_data %>% filter(condition==.cond,datatype=="experimentaldata") %>% mutate(ll=log(length_um)) %>% .$ll
+  sim <- noise_contribution_data %>% filter(condition==.cond,datatype=="allnoisesources") %>% mutate(ll=log(length_um)) %>% .$ll
+  exp_density
+  sim_density
+  print(exp_density)
+  print(sim_density)
+  h_exp <- hist(exp, breaks = breakVec,plot=FALSE)
+  h_sim <- hist(sim, breaks = breakVec,plot=FALSE)
+  if(plot){
+  print(
+  ggplot()+
+    geom_col(aes(x=h_exp$mids,y=h_exp$counts),fill="blue",alpha=0.5)+
+    geom_col(aes(x=h_sim$mids,y=h_sim$counts),fill="red",alpha=0.5))+
+      scale_y_continuous(trans = "log10")+
+      #scale_x_continuous(trans = "log10")+
+      ylab("Counts")+
+      xlab("Cell-size")}
+}
+
+breakVec=seq(0.005,1.6,0.01)
+plot_histogram("acetate005",breakVec,TRUE)
+
+breakVec=seq(0.003,2,0.01)
+plot_histogram("acetate020",breakVec,TRUE)
+
+breakVec=seq(0.07,2.5,0.05)
+plot_histogram("glycerol040",breakVec,TRUE)
+
+breakVec=seq(0.1,3,0.05)
+plot_histogram("glucose020",breakVec,TRUE)
+
+breakVec=seq(0.4,3.2,0.05)
+plot_histogram("glucoseaa020",breakVec,TRUE)
+```
+
+# Plot gfp histogram
+
+```{r}
+plot_histogram <- function(.cond,breakVec=seq(4000,43000,500),plot=FALSE){
+  
+  exp_density <- density(noise_contribution_data %>% filter(condition==.cond,datatype=="experimentaldata") %>% .$gfp_nb)
+  sim_density <- density(noise_contribution_data %>% filter(condition==.cond,datatype=="allnoisesources") %>% .$gfp_nb)
+  exp <- noise_contribution_data %>% filter(condition==.cond,datatype=="experimentaldata") %>% .$gfp_nb
+  sim <- noise_contribution_data %>% filter(condition==.cond,datatype=="allnoisesources") %>% .$gfp_nb
+  exp_density
+  sim_density
+  print(exp_density)
+  print(sim_density)
+  h_exp <- hist(exp, breaks = breakVec,plot=FALSE)
+  h_sim <- hist(sim, breaks = breakVec,plot=FALSE)
+  if(plot){
+  print(
+  ggplot()+
+    geom_col(aes(x=h_exp$mids,y=h_exp$counts),fill="blue",alpha=0.5)+
+    geom_col(aes(x=h_sim$mids,y=h_sim$counts),fill="red",alpha=0.5))+
+      scale_y_continuous(trans = "log10")+
+      ylab("Counts")+
+      xlab("GFP per cell")}
+}
+
+breakVec=seq(10000,300000,2000)
+plot_histogram("acetate005",breakVec,TRUE)
+
+breakVec=seq(10000,300000,2000)
+plot_histogram("acetate020",breakVec,TRUE)
+
+breakVec=seq(-1300,260000,2000)
+plot_histogram("glycerol040",breakVec,TRUE)
+
+breakVec=seq(5000,250000,2000)
+plot_histogram("glucose020",breakVec,TRUE)
+
+breakVec=seq(14000,330000,2000)
+plot_histogram("glucoseaa020",breakVec,TRUE)
+```
+
+# Plot log-gfp histogram
+
+```{r}
+plot_histogram <- function(.cond,breakVec=seq(4000,43000,500),plot=FALSE){
+  
+  exp_density <- density(noise_contribution_data %>% filter(condition==.cond,datatype=="experimentaldata") %>% mutate(ll=log(gfp_nb)) %>%  .$ll)
+  sim_density <- density(noise_contribution_data %>% filter(condition==.cond,datatype=="allnoisesources") %>% mutate(ll=log(gfp_nb)) %>%  .$ll)
+  exp <- noise_contribution_data %>% filter(condition==.cond,datatype=="experimentaldata") %>% mutate(ll=log(gfp_nb)) %>% .$ll
+  sim <- noise_contribution_data %>% filter(condition==.cond,datatype=="allnoisesources") %>% mutate(ll=log(gfp_nb)) %>% .$ll
+  exp_density
+  sim_density
+  print(exp_density)
+  print(sim_density)
+  h_exp <- hist(exp, breaks = breakVec,plot=FALSE)
+  h_sim <- hist(sim, breaks = breakVec,plot=FALSE)
+  if(plot){
+  print(
+  ggplot()+
+    geom_col(aes(x=h_exp$mids,y=h_exp$counts),fill="blue",alpha=0.5)+
+    geom_col(aes(x=h_sim$mids,y=h_sim$counts),fill="red",alpha=0.5))+
+      scale_y_continuous(trans = "log10")+
+      #scale_x_continuous(trans = "log10")+
+      ylab("Counts")+
+      xlab("Cell-size")}
+}
+
+breakVec=seq(9,13,0.05)
+plot_histogram("acetate005",breakVec,TRUE)
+
+breakVec=seq(9,13,0.05)
+plot_histogram("acetate020",breakVec,TRUE)
+
+breakVec=seq(7,13,0.05)
+plot_histogram("glycerol040",breakVec,TRUE)
+
+breakVec=seq(9,13,0.05)
+plot_histogram("glucose020",breakVec,TRUE)
+
+breakVec=seq(9,13,0.05)
+plot_histogram("glucoseaa020",breakVec,TRUE)
+```
+
+# Check differences between distributions
+
+```{r}
+glucose_data <- noise_contribution_data %>% 
+  filter(datatype %in% c("experimentaldata","allnoisesources")) %>% 
+  filter(condition=="glucose020")
+
+glucose_data %>% 
+  select(datatype,cell,time_sec,concentration) %>% 
+  pivot_wider(names_from = datatype,values_from = concentration) %>% 
+  mutate(delta_c=allnoisesources-experimentaldata) %>% 
+  mutate(delta_c=(allnoisesources-experimentaldata)/experimentaldata) %>% 
+  ggplot()+
+  geom_point(aes(time_sec/3600,delta_c),alpha=0.01)+
+  ylab("allnoisesources - experimentaldata")+
+  xlab("time (h)")
+```
+
+```{r}
+glucose_data %>% 
+  select(datatype,cell,time_sec,concentration) %>% 
+  pivot_wider(names_from = datatype,values_from = concentration) %>% 
+  mutate(delta_c=allnoisesources-experimentaldata) %>% 
+  #group_by(cell) %>% 
+  #sample_n(1) %>% 
+  #ungroup() %>% 
+  mutate(delta_c=delta_c/experimentaldata) %>% 
+  ggplot()+
+  geom_point(aes(experimentaldata,delta_c),alpha=0.01)+
+  ylab("(c_sim-c_exp)/c_exp")+
+  xlab("c_exp")
+```
+
+```{r}
+glucose_data %>% 
+  select(datatype,cell,time_sec,length_um) %>% 
+  pivot_wider(names_from = datatype,values_from = length_um) %>% 
+  mutate(delta_c=allnoisesources-experimentaldata) %>% 
+  #group_by(cell) %>% 
+  #sample_n(1) %>% 
+  #ungroup() %>% 
+  mutate(delta_c=delta_c/experimentaldata) %>% 
+  ggplot()+
+  geom_point(aes(experimentaldata,allnoisesources),alpha=0.01)+
+  geom_abline(slope=1,intercept=0,alpha=1,linetype="dashed")+
+  ylab("length um (forward integration)")+
+  xlab("length um (inferred data)")+
+  xlim(0,10)+
+  ylim(0,10)+
+  coord_fixed(ratio=1)
+```
+
+# Checking single cell traces
+
+```{r}
+glucose_data <- noise_contribution_data %>% 
+  filter(datatype %in% c("experimentaldata","allnoisesources")) %>% 
+  filter(condition=="glucose020")
+
+#Let's investigate, gl 3.6
+gl0 <- "20190515.3.6"
+
+glucose_data %>% 
+  filter(gl_id==gl0) %>% 
+  ggplot()+
+  geom_line(aes(time_sec/3600,log(length_um),col=datatype,group=interaction(cell,datatype)))+
+  xlab("Time (h)")+
+  ylab("Length (um)")+
+  scale_y_continuous(trans="log10")+
+  scale_color_manual(labels = c("Forward integration","Inferred data"),values=c("dodgerblue2","#FDBF6F"))+
+  theme_cowplot()
+
+ggsave("./figures/log_lentgh_time_hi1_glucose.pdf",height=8,width=60,limitsize = FALSE)
+```
+
+```{r}
+#Let's investigate, gl 3.6
+gl0 <- "20190515.3.6"
+
+glucose_data %>% 
+  filter(gl_id==gl0) %>% 
+  ggplot()+
+  geom_line(aes(time_sec/3600,gfp_nb,col=datatype,group=interaction(cell,datatype)))+
+  xlab("Time (h)")+
+  ylab("#GFP")+
+  #scale_y_continuous(trans="log10")+
+  scale_color_manual(labels = c("Forward integration","Inferred data"),values=c("dodgerblue2","#FDBF6F"))+
+  theme_cowplot()
+
+ggsave("./figures/gfp_time_hi1_glucose.pdf",height=10,width=40,limitsize = FALSE)
+```
+
+```{r}
+#Let's investigate, gl 3.6
+gl0 <- "20190515.3.6"
+
+glucose_data %>% 
+  filter(gl_id==gl0) %>% 
+  ggplot()+
+  geom_line(aes(time_sec/3600,concentration,col=datatype,group=interaction(cell,datatype)))+
+  xlab("Time (h)")+
+  ylab("Concentration")+
+  #scale_y_continuous(trans="log10")+
+  scale_color_manual(labels = c("Forward integration","Inferred data"),values=c("dodgerblue2","#FDBF6F"))+
+  theme_cowplot()
+
+ggsave("./concentration_time_hi1_glucose.pdf",height=10,width=40,limitsize = FALSE)
+```
+
+```{r}
+plot_histogram <- function(.cond,breakVec=seq(4000,43000,500),plot=FALSE){
+  
+  exp_density <- density(noise_contribution_data %>% filter(condition==.cond,datatype=="experimentaldata") %>% .$concentration)
+  sim_density <- density(noise_contribution_data %>% filter(condition==.cond,datatype=="allnoisesources") %>% .$concentration)
+  exp <- noise_contribution_data %>% filter(condition==.cond,datatype=="experimentaldata") %>% .$concentration
+  sim <- noise_contribution_data %>% filter(condition==.cond,datatype=="allnoisesources") %>% .$concentration
+  exp_density
+  sim_density
+  print(exp_density)
+  print(sim_density)
+  h_exp <- hist(exp, breaks = breakVec,plot=FALSE)
+  h_sim <- hist(sim, breaks = breakVec,plot=FALSE)
+  if(plot){
+  print(
+  ggplot()+
+    geom_col(aes(x=h_exp$mids,y=h_exp$counts,fill="#FDBF6F"),alpha=0.5)+
+    geom_col(aes(x=h_sim$mids,y=h_sim$counts,fill="dodgerblue2"),alpha=0.5))+
+      scale_y_continuous(trans = "log10")+
+      ylab("Counts")+
+      xlab("Concentration")+
+      labs(fill = "Legend") +
+      scale_fill_identity(name = "Data type",
+                       breaks = c("dodgerblue2", "#FDBF6F"),
+                       labels = c("Forward integration", "Inferred data"),
+                       guide = "legend")+
+      theme_cowplot()}
+}
+
+breakVec=seq(4000,45000,400)
+plot_histogram("glucose020",breakVec,TRUE)
+ggsave("./distribution.pdf",width=7,height=4)
+```
+The histograms look weird, but they are perfectly fine.
+Here is a plot that shows the content of this last bin.
+
+```{r}
+.cond <- "glucose020"
+breakVec=seq(4000,45000,400)
+exp_density <- density(noise_contribution_data %>% filter(condition==.cond,datatype=="experimentaldata") %>% .$concentration)
+sim_density <- density(noise_contribution_data %>% filter(condition==.cond,datatype=="allnoisesources") %>% .$concentration)
+exp <- noise_contribution_data %>% filter(condition==.cond,datatype=="experimentaldata") %>% .$concentration
+sim <- noise_contribution_data %>% filter(condition==.cond,datatype=="allnoisesources") %>% .$concentration
+exp_density
+sim_density
+print(exp_density)
+print(sim_density)
+h_exp <- hist(exp, breaks = breakVec,plot=FALSE)
+h_sim <- hist(sim, breaks = breakVec,plot=FALSE)
+
+
+ptot <- ggplot()+
+  geom_col(aes(x=h_exp$mids,y=h_exp$counts,fill="#FDBF6F"),alpha=0.5)+
+  geom_col(aes(x=h_sim$mids,y=h_sim$counts,fill="dodgerblue2"),alpha=0.5)+
+  scale_y_continuous(trans = "log10")+
+  ylab("Counts")+
+  xlab("Concentration")+
+  labs(fill = "Legend") +
+  scale_fill_identity(name = "Data type",
+                   breaks = c("dodgerblue2", "#FDBF6F"),
+                   labels = c("Forward integration", "Inferred data"),
+                   guide = "legend")+
+  theme_cowplot()
+
+ptot
+
+#Forward integration
+# Determine last bin that's not empty
+#n <- length(h_sim$breaks)
+#l <- length(h_sim$counts)
+n <- tail(which(h_sim$counts!=0),1)
+last_breaks <- h_sim$breaks[c(n,n+1)]
+
+last_bin <- noise_contribution_data %>% filter(condition==.cond,datatype=="allnoisesources") %>% 
+  filter(dplyr::between(concentration,last_breaks[1],last_breaks[2]))
+
+last_bin %>% 
+  ggplot()+
+  geom_point(aes(time_sec/3600,concentration))
+
+noise_contribution_data %>% 
+  filter(condition==.cond,datatype=="allnoisesources") %>%
+  ggplot()+
+  geom_point(aes(time_sec/3600,concentration),alpha=0.2)+
+  geom_hline(aes(yintercept=last_breaks[1]),col="red")+
+  geom_hline(aes(yintercept=last_breaks[2]),col="red")+
+  xlab("Time (h)")+
+  ylab("Concentration")
+
+ggsave("./last_bin_info.pdf",height=8,width=20)
+  
+```
+
+# Compute naive estimate of the cells growth rate
+
+Now that the data have been cleaned... I can produce a rough estimate of the growth rate.
+
+```{r}
+dt_df <- tibble(dt=c(12,12,6,3,1.5),condition=c("acetate005","acetate020","glycerol040","glucose020","glucoseaa020"))
+
+growth_data <- noise_contribution_data %>% 
+  left_join(dt_df,by=c("condition")) %>% 
+  group_by(promoter,condition,cell,datatype) %>% 
+  arrange(time_sec) %>% 
+  mutate(lambda_naive=(log_length-dplyr::lag(log_length))/dt) %>%
+  #mutate(lambda_naive=2) %>%
+  ungroup()
+
+growth_data %>% 
+  filter(condition=="glucose020",datatype %in% c("experimentaldata","allnoisesources")) %>% 
+  ggplot()+
+  geom_point(aes(lambda,lambda_naive,col=datatype),alpha=0.1)+
+  geom_abline(aes(slope=1,intercept=0))+
+  facet_wrap(~datatype)+
+  ylab("Lambda (naive)")+
+  xlab("Lambda (inferred)")
+  #labs(color = "Legend") +
+      #scale_color_identity(name = "Data type",
+                          #breaks = c("dodgerblue2", "#FDBF6F"),
+                          #labels = c("Forward integration", "Inferred data"))
+```
+
+# Comparison between two inferences
+
+```{r}
+
+experimental_data <- lapply(experimental_data_folder,function(.l){
+  list.files(path=.l,pattern="denoised.csv$",recursive = TRUE,full.names=TRUE)}) %>% 
+  unlist() %>% 
+  lapply(function(.l) readr::read_csv(.l) %>% 
+           mutate(path=.l)) %>% 
+  do.call(rbind, .) %>% 
+  mutate(datatype="experimentaldata") %>% 
+  mutate(time_sec=time_min*60) %>% 
+  mutate(log_length=log(length_um)) %>% 
+  select(c("cell","time_min","parent","log_length","gfp_nb","lambda","q","promoter","condition","carbon_source","carbon_source_concentration","time_sec","length_um","datatype","path","mean_cell_rank","gl_id"))
+
+mean_cell_rank_df <- experimental_data %>% 
+  distinct(cell,mean_cell_rank,gl_id)
+
+nrow(experimental_data %>% filter(condition=="glucose020"))
+nrow(noise_contribution_data %>% filter(condition=="glucose020") %>% filter(datatype=="allnoisesources"))
+```
+
+```{r}
+data_path <- c('/scicore/home/nimwegen/ksches0000/mother_machine/experimental_data/data_dany/data_dany_hi1_output_20230125/hi1_glucose020_f01234578910_b_prediction.csv','/scicore/home/nimwegen/rocasu25/Documents/Projects/biozentrum/gfp_fluctuations_project/denoising_raw_data/denoising_20230127152737/hi1_glucose020_rawdata_f01234578910_b_prediction.csv')
+source_df <- tibble(denoised_data_path=data_path,source=c("bjoern","dany"))
+
+our_data <- data_path %>% 
+  lapply(function(.l) readr::read_csv(.l,skip=13) %>% 
+           mutate(denoised_data_path=.l)) %>% 
+  do.call(rbind,.) %>% 
+  extract(denoised_data_path,"promotercondition","/([a-z0-9A-Z]{1,}_[0-9a-zA-Z]{1,})_[rawdata_]*[a-z0-9]{1,}_b_prediction.csv$",remove=FALSE,convert=FALSE) %>% 
+  separate(promotercondition,into=c("promoter","condition"),sep="_") %>% 
+  separate(condition,into=c("carbon_source","carbon_source_concentration"),sep="(?<=[A-Za-z])(?=[0-9])",remove=FALSE) %>% 
+  mutate(carbon_source_concentration=as.double(carbon_source_concentration)/100) %>% 
+  ungroup() %>% 
+  rename(cell=cell_id,
+         parent=parent_id,
+         time_min=time,
+         gfp_nb=mean_g,
+         lambda=mean_l,
+         q=mean_q) %>% 
+  mutate(time_sec=time_min*60,
+         length_um_raw=exp(log_length),
+         gfp_nb_raw=fp,
+         length_um=exp(mean_x)) %>% 
+  select(-c(log_length,fp,mean_x)) %>% 
+  left_join(source_df,by=c("denoised_data_path"))
+```
+
+```{r}
+#Checking length estimation
+our_data %>% 
+  select(cell,time_sec,length_um,source) %>% 
+  rename(variable=length_um) %>% 
+  pivot_wider(names_from = source,values_from = variable) %>% 
+  ggplot()+
+  geom_point(aes(dany,bjoern))+
+  ylab("Bjoern's length")+
+  xlab("Dany's length")
+  
+#GFP
+our_data %>% 
+  select(cell,time_sec,gfp_nb,source) %>% 
+  rename(variable=gfp_nb) %>% 
+  pivot_wider(names_from = source,values_from = variable) %>% 
+  ggplot()+
+  geom_point(aes(dany,bjoern))+
+  ylab("Bjoern's gfp")+
+  xlab("Dany's gfp")
+
+#lambda
+our_data %>% 
+  select(cell,time_sec,lambda,source) %>% 
+  rename(variable=lambda) %>% 
+  pivot_wider(names_from = source,values_from = variable) %>% 
+  ggplot()+
+  geom_abline(aes(slope=1,intercept=0),col="red")+
+  geom_point(aes(dany,bjoern),alpha=0.1)+
+  ylab("Bjoern's lambda")+
+  xlab("Dany's lambda")
+
+#production
+our_data %>% 
+  select(cell,time_sec,q,source) %>% 
+  rename(variable=q) %>% 
+  pivot_wider(names_from = source,values_from = variable) %>% 
+  ggplot()+
+  geom_point(aes(dany,bjoern),alpha=0.1)+
+  geom_abline(aes(slope=1,intercept=0),col="red")+
+  ylab("Bjoern's Q")+
+  xlab("Dany's Q")
+```
+
+
+

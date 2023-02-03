@@ -1,0 +1,127 @@
+---
+title: "Import all data"
+author: "Dany Chauvin"
+date: '2022-12-14'
+output: html_document
+---
+
+All raw data should be already loaded. For each data set, the following code produces new yaml files, that can be used to re-curate data if necessary.
+
+```{r}
+unique(myframes_all$file_path)
+columns <- colnames(myframes_all)
+columns[str_detect(columns,"path")]
+```
+
+
+Actually what I need to do first, is to look in each one of these files, if I can find "pruned" or not. Then I know which one I have to do again or not. Then if there are some I need to do again, I will go and try to find export log. To collect backups. Then finally redo curation if necessary. And clean data in the mean time.
+
+# Step 1, finding CellStats csv files containing "pruned"
+
+## Only a very few are found with "pruned"
+
+/scicore/home/nimwegen/rocasu25/MM_Data/Dany/20220824/curated_data/20220824_ch_hi1_curated/20220824_ace_1_MMStack_Pos4_GL57_curated/ExportedCellStats__20220824_ace_1_MMStack_Pos4_GL57.tif.csv
+/scicore/home/nimwegen/rocasu25/MM_Data/Dany/20220824/curated_data/20220824_ch_hi1_curated/20220824_ace_1_MMStack_Pos5_GL6_curated/ExportedCellStats__20220824_ace_1_MMStack_Pos5_GL6.tif.csv
+/scicore/home/nimwegen/rocasu25/MM_Data/Dany/20220824/curated_data/20220824_ch_hi1_curated/20220824_ace_1_MMStack_Pos4_GL39_curated/ExportedCellStats__20220824_ace_1_MMStack_Pos4_GL39.tif.csv
+
+# Step 2, search for export logs
+
+20190515, 
+First take a look at when exporting.
+## 20221121
+No exporting log.
+## 20220824
+
+# Step 3: recurating...
+## 20190515 hi1
+```{r}
+myframes_all %>% filter(date=="20190515") %>% filter(promoter=="hi1") %>%  group_by(pos,gl) %>% count()
+```
+## Generate file list
+```{r}
+file_list <- unique(myframes_all$file_path)
+#write_lines(file_list, "./file_list.txt")
+```
+
+## 20190515
+
+For 20190515, some curation had been done BEFORE. File names contain therefore: ExportedCellStats in there filenames.
+I should therefore only consider the following.
+
+```{r}
+all_20190515 <- file_list[str_detect(file_list,"20190515")]
+all_20190515[str_detect(all_20190515,"ExportedCellStats")]
+```
+Done, right and left should be curated again
+
+## 20221121
+
+Curation was finished at 20221128 11:56:52
+Export started at 20221128 12:37:58
+
+```{r}
+all_20221121 <- file_list[str_detect(file_list,"20221121")]
+all_20221121[str_detect(all_20190515,"CellStats")]
+
+myframes_all %>%
+  filter(condition=="acetate005") %>% 
+  filter(date=="20221121") %>% 
+  group_by(pos,gl) %>% 
+  count() %>% View()
+  
+```
+
+## 20220921
+
+```{r}
+all_20220921 <- file_list[str_detect(file_list,"20220921")]
+all_20220921[str_detect(all_20220921,"CellStats")]
+
+
+
+myframes_all %>%
+  #filter(condition=="glucoseaa020") %>% 
+  filter(date=="20220921") %>% 
+  group_by(pos,gl) %>% 
+  count() %>% 
+  mutate(pos=as.character(pos),gl=as.character(gl)) %>% 
+  mutate(pos=as.integer(pos),gl=as.integer(gl)) %>% 
+  arrange(pos,gl) %>% 
+  View()
+```
+
+## 20220824
+
+- No need to recurate these.
+
+```{r}
+all_20220824 <- file_list[str_detect(file_list,"20220824")]
+all_20220824[str_detect(all_20220824,"CellStats")]
+
+myframes_all %>%
+  #filter(condition=="glucoseaa020") %>% 
+  filter(date=="20220824") %>% 
+  group_by(pos,gl) %>% 
+  count() %>% 
+  mutate(pos=as.character(pos),gl=as.character(gl)) %>% 
+  mutate(pos=as.integer(pos),gl=as.integer(gl)) %>% 
+  arrange(pos,gl) %>% 
+  View()
+```
+
+# TODO
+
+## For hi1
+
+Rerun for the following:
+- 20190515
+- 20221121
+- 20220921
+
+Necessary recuration, prune, and export.
+
+
+
+
+
+

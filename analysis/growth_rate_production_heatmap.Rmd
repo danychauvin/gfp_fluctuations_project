@@ -1,0 +1,262 @@
+---
+title: "growth_production_heatmap.Rmd"
+author: "Dany Chauvin"
+date: '2023-01-30'
+output: html_document
+---
+
+We want to plot, a heat-map of actual growth-rate versus production (mean).
+For each condition for hi1.
+
+# Importing data
+
+We assume here, denoised data were already saved in ./denoised_data
+
+```{r message=FALSE,warning=FALSE}
+source("../mother_machine_experiments_toolbox/load_functions_and_packages.R")
+source("../mother_machine_experiments_toolbox/inference_simulations_useful_functions.R")
+#load myframes uncomplete and complete cell cycles.
+#source("../mother_machine_experiments_toolbox/load_denoised_data.R")
+#load only full cell cycles
+source("../mother_machine_experiments_toolbox/load_denoised_data_complete_cycles.R")
+```
+
+# Adding to myframes typical doubling times
+
+```{r}
+myframes <- myframes %>% 
+  group_by(cell) %>% 
+  arrange(time_sec) %>% 
+  mutate(div_time=(last(time_sec)-first(time_sec))/3600) %>% 
+  ungroup()
+
+p <- 6 #number of doubling times to consider to get rid of the transient
+#6 typical doubling times
+
+conditions <- c("acetate005","acetate020","glycerol040","glucose020","glucoseaa020")
+
+doubling_times_df <- myframes %>% 
+  filter(condition %in% conditions) %>% 
+  group_by(condition,promoter,cell) %>% 
+  sample_n(1) %>% 
+  ungroup %>% 
+  group_by(condition,promoter) %>% 
+  mutate(#w=sum(1/abs(cov_ll)),
+         #w_i=1/abs(cov_ll),
+         #mean_l=sum(lambda*w_i)*1/w,
+         mean_l=mean(lambda,.na.rm=TRUE),
+         mean_doubling_time=1/(mean_l*60/log(2))) %>% 
+  ungroup() %>% 
+  distinct(condition,mean_doubling_time) %>% 
+  mutate(time_interval=p*mean_doubling_time)
+
+myframes <- myframes %>% 
+  left_join(doubling_times_df,by=c("condition")) %>% 
+  group_by(condition) %>% 
+  mutate(time_h_rescaled=time_sec/3600-min(time_sec)/3600) %>% 
+  #filter(time_h_rescaled>time_interval) %>% 
+  ungroup() %>% 
+  #filter(div_time<mean_doubling_time*4) %>% 
+  mutate(concentration=gfp_nb/length_um)
+```
+
+# Plot scatter heat map on a single pdf file
+
+```{r}
+conditions <- c("acetate005","acetate020","glycerol040","glucose020","glucoseaa020")
+plot_heatscatter <- function(cond,prom){
+
+ x <- myframes %>%
+  filter(cell!="20220921.1.48.121") %>% 
+  filter(condition==cond,promoter==prom) %>% 
+  .$lambda
+  
+y <- myframes %>%
+  filter(cell!="20220921.1.48.121") %>% 
+  filter(condition==cond,promoter==prom) %>% 
+  .$q
+  
+nb_cell_cycles <- nrow(myframes %>%
+  filter(condition==cond,promoter==prom) %>% 
+  distinct(cell))
+
+nb_measurement <- nrow(myframes %>%
+  filter(condition==cond,promoter==prom))
+
+nb_gl <- nrow(myframes %>%
+  filter(condition==cond,promoter==prom) %>% 
+    distinct(gl_id))
+
+df <- data.frame(x,y)
+
+## Use densCols() output to get density at each point
+x <- densCols(x,y, colramp=colorRampPalette(c("black", "white")))
+df$dens <- col2rgb(x)[1,] + 1L
+
+## Map densities to colors
+cols <-  colorRampPalette(c("#000099", "#00FEFF", "#45FE4F", 
+                            "#FCFF00", "#FF9400", "#FF3100"))(256)
+df$col <- cols[df$dens]
+
+## Plot it, reordering rows so that densest points are plotted on top
+#pdf(file=paste("./figures/",cond,".pdf",sep=""))
+plot(y~x, data=df[order(df$dens),], pch=20, col=col, cex=2,
+           xlab="Exponential growth-rate (/min)",ylab="Volumic production (GFP/min)",main=sprintf("%s, %s observations, %s cycles, %s gls",cond,nb_measurement,nb_cell_cycles,nb_gl))
+#dev.off()}
+}
+```
+
+```{r}
+pdf(file=paste("./figures/all_2d_heatmap_scatter.pdf",sep=""),width=25,height=4)
+par(mfrow=c(1,5))
+plot_heatscatter("acetate005","hi1")
+plot_heatscatter("acetate020","hi1")
+plot_heatscatter("glycerol040","hi1")
+plot_heatscatter("glucose020","hi1")
+plot_heatscatter("glucoseaa020","hi1")
+dev.off()
+```
+
+# Plotting correlation with lines (to discard)
+
+This correlation are naive.
+
+```{r}
+plot_histogram_lambda <- function(.cond,breakVec=seq(4000,43000,500),plot=FALSE){
+  exp_density <- density(myframes %>% filter(condition==.cond) %>% .$lambda)
+  exp <- myframes %>% filter(condition==.cond) %>% filter(!(cell %in% c("20190515.3.9.79","20220921.1.48.121"))) %>% .$lambda
+  exp_density
+  print(exp_density)
+  h_exp <- hist(exp, breaks = breakVec,plot=FALSE)
+  if(plot){
+    plot(x=h_exp$mids,y=h_exp$counts, type='l', col='black',
+           xlab="Exponential growth-rate (/min)",ylab="Counts",main=sprintf("%s",.cond),log="y")}
+  #ggsave(sprintf("./lambda_1D_%s.pdf",.cond),width=6,height=4)
+}
+
+plot_histogram_q <- function(.cond,breakVec=seq(4000,43000,500),plot=FALSE){
+  exp_density <- density(myframes %>% filter(condition==.cond) %>% .$q)
+  exp <- myframes %>% filter(condition==.cond) %>% filter(!(cell %in% c("20190515.3.9.79","20220921.1.48.121"))) %>% .$q
+  exp_density
+  print(exp_density)
+  h_exp <- hist(exp, breaks = breakVec,plot=FALSE)
+  if(plot){
+    plot(x=h_exp$mids,y=h_exp$counts, type='l', col='black',
+           xlab="Production (GFP/min)",ylab="Counts",main=sprintf("%s",.cond),log="y")}
+  #ggsave(sprintf("./lambda_1D_%s.pdf",.cond),width=6,height=4)
+}
+```
+
+```{r}
+pdf(file=paste("./figures/all_1D_histogram.pdf",sep=""),width=25,height=8)
+par(mfrow=c(2,5))
+breakVec=seq(-0.0007,0.006,0.000025)
+plot_histogram_lambda("acetate005",breakVec,TRUE)
+breakVec=seq(-0.0013,0.01,0.000025)
+plot_histogram_lambda("acetate020",breakVec,TRUE)
+breakVec=seq(-0.0015,0.011,0.000025)
+plot_histogram_lambda("glycerol040",breakVec,TRUE)
+breakVec=seq(-0.005,0.022,0.0001)
+plot_histogram_lambda("glucose020",breakVec,TRUE)
+breakVec=seq(-0.0055,0.037,0.0001)
+plot_histogram_lambda("glucoseaa020",breakVec,TRUE)
+breakVec=seq(-14,91,0.6)
+plot_histogram_q("acetate005",breakVec,TRUE)
+breakVec=seq(-19,160,0.6)
+plot_histogram_q("acetate020",breakVec,TRUE)
+breakVec=seq(-110,350,1)
+plot_histogram_q("glycerol040",breakVec,TRUE)
+breakVec=seq(-130,600,1)
+plot_histogram_q("glucose020",breakVec,TRUE)
+breakVec=seq(-160,700,1)
+plot_histogram_q("glucoseaa020",breakVec,TRUE)
+dev.off()
+```
+
+# Converting histogram to proper dataframe for plotting (to discard)
+
+```{r}
+get_histogram_lambda <- function(.cond,breakVec=seq(4000,43000,500)){
+  exp_density <- density(myframes %>% filter(condition==.cond) %>% .$lambda)
+  exp <- myframes %>% filter(condition==.cond) %>% filter(!(cell %in% c("20190515.3.9.79","20220921.1.48.121"))) %>% .$lambda
+  exp_density
+  print(exp_density)
+  h_exp <- hist(exp, breaks = breakVec,plot=FALSE)
+  df <- tibble(counts=h_exp$counts,mids=h_exp$mids,condition=.cond,variable="q")
+  return(df)
+  }
+
+get_histogram_q <- function(.cond,breakVec=seq(4000,43000,500)){
+  exp_density <- density(myframes %>% filter(condition==.cond) %>% .$q)
+  exp <- myframes %>% filter(condition==.cond) %>% filter(!(cell %in% c("20190515.3.9.79","20220921.1.48.121"))) %>% .$q
+  exp_density
+  print(exp_density)
+  h_exp <- hist(exp, breaks = breakVec,plot=FALSE)
+  df <- tibble(counts=h_exp$counts,mids=h_exp$mids,condition=.cond,variable="lambda")
+  return(df)
+}
+
+data <- rbind(
+get_histogram_lambda("acetate005",seq(-0.0007,0.006,0.000025)),
+get_histogram_lambda("acetate020",seq(-0.0013,0.01,0.000025)),
+get_histogram_lambda("glycerol040",seq(-0.0015,0.011,0.000025)),
+get_histogram_lambda("glucose020",seq(-0.005,0.022,0.0001)),
+get_histogram_lambda("glucoseaa020",seq(-0.0055,0.037,0.0001)),
+get_histogram_q("acetate005",seq(-14,91,0.6)),
+get_histogram_q("acetate020",seq(-19,160,0.6)),
+get_histogram_q("glycerol040",seq(-110,350,1)),
+get_histogram_q("glucose020",seq(-130,600,1)),
+get_histogram_q("glucoseaa020",seq(-160,700,1)))
+
+```
+
+# Plotting production and growth rate distribution using ggplot
+
+```{r}
+myframes %>% 
+  mutate(condition=factor(condition,levels=conditions)) %>% 
+  filter(!(cell %in% c("20190515.3.9.79","20220921.1.48.121"))) %>% 
+  ggplot(aes(x=lambda))+
+  geom_freqpoly(aes(y=after_stat(density),col=condition),binwidth = 0.00005)+
+  theme_cowplot()+
+  ylab("Density")+
+  xlab("Growth-rate (/min)")
+ggsave("./figures/gr_all.pdf",width=10,height=5)
+
+myframes %>% 
+  mutate(condition=factor(condition,levels=conditions)) %>% 
+  filter(!(cell %in% c("20190515.3.9.79","20220921.1.48.121"))) %>% 
+  ggplot(aes(x=q))+
+  geom_freqpoly(aes(y=after_stat(density),col=condition),binwidth=1)+
+  theme_cowplot()+
+  ylab("Density")+
+  xlab("Production (#GFP/min)")
+ggsave("./figures/q_all.pdf",width=10,height=5)
+```
+```{r}
+gr <- myframes %>% 
+  mutate(condition=factor(condition,levels=conditions)) %>% 
+  filter(!(cell %in% c("20190515.3.9.79","20220921.1.48.121"))) %>% 
+  ggplot(aes(x=lambda))+
+  geom_freqpoly(aes(y=after_stat(density),col=condition),binwidth = 0.00005)+
+  theme_cowplot()+
+  scale_y_continuous(trans="log10")+
+  ylab("Density")+
+  xlab("Growth-rate (/min)")
+
+
+q <- myframes %>% 
+  mutate(condition=factor(condition,levels=conditions)) %>% 
+  filter(!(cell %in% c("20190515.3.9.79","20220921.1.48.121"))) %>% 
+  ggplot(aes(x=q))+
+  geom_freqpoly(aes(y=after_stat(density),col=condition),binwidth=1)+
+  theme_cowplot()+
+  scale_y_continuous(trans="log10")+
+  ylab("Density")+
+  xlab("Production (#GFP/min)")
+
+ptot <- plot_grid(gr,q,nrow=1)
+ptot
+ggsave("./figures/q_gr_all.pdf",width=15,height=5)
+```
+

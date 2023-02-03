@@ -1,0 +1,1216 @@
+---
+title: "simulations_hi1.Rmd"
+author: "Dany Chauvin"
+date: '2022-12-06'
+output: html_document
+---
+
+```{r}
+source("./mother_machine_experiments_toolbox/load_functions_and_packages.R")
+#data_folder <- "/scicore/home/nimwegen/rocasu25/Documents/Projects/biozentrum/gfp_fluctuations_project/hybrid_simulations_output/hybrid_simulations_20221219_10h"
+data_folder <- "/scicore/home/nimwegen/rocasu25/Documents/Projects/biozentrum/gfp_fluctuations_project/denoising_raw_data/denoising_20221215091650/integration"
+experimental_data_folder <- "/scicore/home/nimwegen/rocasu25/Documents/Projects/biozentrum/gfp_fluctuations_project/denoised_data"
+```
+
+# Import simulation data
+
+```{r}
+noise_contribution_data <- lapply(data_folder,function(.l){
+  list.files(path=.l,pattern=".csv$",recursive = TRUE,full.names=TRUE)}) %>% 
+  unlist() %>% 
+  lapply(function(.l) readr::read_csv(.l) %>% 
+           mutate(path=.l)) %>% 
+  do.call(rbind, .) %>% 
+  tidyr::extract(path,"promoter","/([0-9a-zA-Z]{1,})_[0-9a-zA-Z]{1,}_[a-z]{1,}.csv$",remove=FALSE,convert=FALSE) %>% 
+  tidyr::extract(path,"condition","/[0-9a-zA-Z]{1,}_([0-9a-zA-Z]{1,})_[a-z]{1,}.csv$",remove=FALSE,convert=FALSE) %>%
+  tidyr::extract(condition,"carbon_source_concentration","^[a-z]{1,}0([0-9]{2})",remove=FALSE,convert=FALSE) %>% 
+  mutate(carbon_source_concentration=as.double(carbon_source_concentration)/100) %>% 
+  tidyr::extract(condition,"carbon_source","^([a-z]{1,})0[0-9]{2}",remove=FALSE,convert=FALSE) %>% 
+  tidyr::extract(path,"datatype","/[0-9a-z]{1,}_[0-9a-zA-Z]{1,}_([a-z]{1,}).csv$",remove=FALSE,convert=FALSE) %>% 
+  rename(cell=cell_id,parent=parent_id,gfp_nb=gfp,lambda=lt,q=qt) %>% 
+  mutate(time_sec=time_min*60,
+  length_um=exp(log_length)) %>%
+  select(-c("...1"))
+
+experimental_data <- lapply(experimental_data_folder,function(.l){
+  list.files(path=.l,pattern="denoised.csv$",recursive = TRUE,full.names=TRUE)}) %>% 
+  unlist() %>% 
+  lapply(function(.l) readr::read_csv(.l) %>% 
+           mutate(path=.l)) %>% 
+  do.call(rbind, .) %>% 
+  mutate(datatype="experimentaldata") %>% 
+  mutate(time_sec=time_min*60) %>% 
+  mutate(log_length=log(length_um)) %>% 
+  select(c("cell","time_min","parent","log_length","gfp_nb","lambda","q","promoter","condition","carbon_source","carbon_source_concentration","time_sec","length_um","datatype","path","mean_cell_rank"))
+
+mean_cell_rank_df <- experimental_data %>% 
+  distinct(cell,mean_cell_rank)
+
+noise_contribution_data <- rbind(noise_contribution_data,
+                                 experimental_data %>% 
+                                   select(-mean_cell_rank)) %>% 
+  left_join(mean_cell_rank_df,by=c("cell"))
+```
+
+# Sample and plot the contributions of each process, all ranks
+
+In the following, we randomly sample observations from the dataset. And we repeat this 10 times to obtain error bars on CV computation.
+
+```{r}
+N <- 200
+N0 <- 10
+
+if(!exists("mycluster")){
+  mycluster <- min(30, parallel::detectCores()-1) %>%  # do not use more than 30 cores
+    default_cluster() %>% cluster_library( # load currently loaded packages on each core
+      names(sessionInfo()$otherPkgs))
+  
+  cluster_copy(mycluster,c("fit_exp_elongation_predict","fit_exp_elongation_slope","fit_exp_elongation_sd_slope","fit_exp_elongation_intercept","random_selection_no_replacement","N","N0"))
+}
+
+cluster_copy(mycluster,c("fit_exp_elongation_predict","fit_exp_elongation_slope","fit_exp_elongation_sd_slope","fit_exp_elongation_intercept","random_selection_no_replacement","N","N0"))
+
+noise_contribution_data_sampled <- noise_contribution_data %>% 
+  #semi_join(selected_conditions,by=c("promoter","mean_cell_rank","condition")) %>% 
+  group_by(cell,datatype) %>% 
+  partition(cluster=mycluster) %>%
+  arrange(time_sec) %>% 
+  mutate(alpha=fit_exp_elongation_slope(time_sec,length_um)) %>% 
+  mutate(lambda_cell=mean(lambda*60/log(2),na.remove=TRUE)) %>% 
+  mutate(q_cell=mean(q,na.remove=TRUE)) %>% 
+  #mutate(q_full_cellcycle=(last(gfp_nb_m)-first(gfp_nb_m))/(last(length_um_m)-first(length_um_m))*alpha) %>% 
+  collect() %>% 
+  ungroup() %>% 
+  group_by(condition,promoter,datatype) %>% 
+  partition(cluster=mycluster) %>%
+  do((function(.df){
+    .new_df <- random_selection_no_replacement(.df,N,N0)
+    return(.new_df)})
+    (.)) %>% 
+  collect() %>% 
+  ungroup()
+
+datatypes <- c("experimentaldata","allnoisesources","noprodnoise","nogrowthnoise","nodivisionnoise","onlyprodnoise","onlygrowthnoise","onlydivisionnoise","nonoise")
+
+full_noise_cv <- noise_contribution_data_sampled %>% 
+  filter(datatype=="allnoisesources") %>%
+  mutate(c=gfp_nb/length_um) %>% 
+  group_by(condition,sampling,datatype) %>% 
+  mutate(mean_c=mean(c)) %>%
+  mutate(sd_c=sd(c,na.rm=TRUE)) %>%
+  mutate(cv2_c=(sd_c/mean_c)**2) %>%
+  ungroup() %>% 
+  distinct(condition,sampling,datatype,.keep_all=TRUE) %>% 
+  group_by(condition,datatype) %>% 
+  mutate(mean_cv2_c=mean(cv2_c,na.rm=TRUE),
+         sd_cv2_c=sd(cv2_c,na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  distinct(condition,datatype,.keep_all=TRUE)
+
+toplot <- noise_contribution_data_sampled %>% 
+  filter(datatype %in% datatypes) %>% 
+  group_by(condition,sampling,datatype) %>% 
+  mutate(mean_c=mean(gfp_nb/length_um)) %>%
+  mutate(sd_c=sd(gfp_nb/length_um)) %>%
+  mutate(cv2_c=(sd_c/mean_c)**2) %>%
+  ungroup() %>% 
+  distinct(condition,sampling,datatype,.keep_all=TRUE) %>% 
+  group_by(condition,datatype) %>% 
+  mutate(mean_cv2_c=mean(cv2_c,na.rm=TRUE),
+         sd_cv2_c=sd(cv2_c,na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  distinct(condition,datatype,.keep_all=TRUE)
+
+toplot$datatype <- factor(toplot$datatype,levels=datatypes)
+toplot$condition <- factor(toplot$condition,levels=c("acetate005","acetate020","glycerol040","glucose020","glucoseaa020"))
+full_noise_cv$condition <- factor(full_noise_cv$condition,levels=c("acetate005","acetate020","glycerol040","glucose020","glucoseaa020"))
+
+toplot %>% 
+  arrange(condition) %>%
+  ggplot()+
+  geom_col(aes(datatype,mean_cv2_c,fill=condition))+
+  #geom_hline(aes(yintercept=exp_r),linetype="dashed",col="red") + 
+  geom_hline(data=full_noise_cv,aes(yintercept=mean_cv2_c),linetype="dashed")+
+  geom_errorbar(aes(x=datatype,ymax=mean_cv2_c+sd_cv2_c,ymin=mean_cv2_c-sd_cv2_c))+
+  facet_grid(condition~.)+
+  theme_cowplot()+
+  guides(fill=guide_legend("Condition"))+
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))+
+  theme(axis.title.x=element_blank())+
+  ylab(expression(~CV^2))+
+  coord_cartesian(ylim=c(0,0.20))
+
+ggsave("./figures/all_contributions_all_ranks.pdf",width=8,height=11)
+```
+
+```{r}
+noise_contribution_data_sampled_all_ranks <- noise_contribution_data_sampled
+```
+
+
+# Sample and plot the contributions of each process, rank0 only
+
+In the following, we randomly sample observations from the dataset. And we repeat this 10 times to obtain error bars on CV computation.
+
+```{r}
+N <- 200
+N0 <- 10
+
+if(!exists("mycluster")){
+  mycluster <- min(30, parallel::detectCores()-1) %>%  # do not use more than 30 cores
+    default_cluster() %>% cluster_library( # load currently loaded packages on each core
+      names(sessionInfo()$otherPkgs))
+  
+  cluster_copy(mycluster,c("fit_exp_elongation_predict","fit_exp_elongation_slope","fit_exp_elongation_sd_slope","fit_exp_elongation_intercept","random_selection_no_replacement","N","N0"))
+}
+
+cluster_copy(mycluster,c("fit_exp_elongation_predict","fit_exp_elongation_slope","fit_exp_elongation_sd_slope","fit_exp_elongation_intercept","random_selection_no_replacement","N","N0"))
+
+noise_contribution_data_sampled <- noise_contribution_data %>% 
+  #semi_join(selected_conditions,by=c("promoter","mean_cell_rank","condition")) %>% 
+  filter(mean_cell_rank==0) %>% 
+  group_by(cell,datatype) %>% 
+  partition(cluster=mycluster) %>%
+  arrange(time_sec) %>% 
+  mutate(alpha=fit_exp_elongation_slope(time_sec,length_um)) %>% 
+  mutate(lambda_cell=mean(lambda*60/log(2),na.remove=TRUE)) %>% 
+  mutate(q_cell=mean(q,na.remove=TRUE)) %>% 
+  #mutate(q_full_cellcycle=(last(gfp_nb_m)-first(gfp_nb_m))/(last(length_um_m)-first(length_um_m))*alpha) %>% 
+  collect() %>% 
+  ungroup() %>% 
+  group_by(condition,promoter,datatype) %>% 
+  partition(cluster=mycluster) %>%
+  do((function(.df){
+    .new_df <- random_selection_no_replacement(.df,N,N0)
+    return(.new_df)})
+    (.)) %>% 
+  collect() %>% 
+  ungroup()
+
+datatypes <- c("experimentaldata","allnoisesources","noprodnoise","nogrowthnoise","nodivisionnoise","onlyprodnoise","onlygrowthnoise","onlydivisionnoise","nonoise")
+
+full_noise_cv <- noise_contribution_data_sampled %>% 
+  filter(datatype=="allnoisesources") %>%
+  mutate(c=gfp_nb/length_um) %>% 
+  group_by(condition,sampling,datatype) %>% 
+  mutate(mean_c=mean(c)) %>%
+  mutate(sd_c=sd(c,na.rm=TRUE)) %>%
+  mutate(cv2_c=(sd_c/mean_c)**2) %>%
+  ungroup() %>% 
+  distinct(condition,sampling,datatype,.keep_all=TRUE) %>% 
+  group_by(condition,datatype) %>% 
+  mutate(mean_cv2_c=mean(cv2_c,na.rm=TRUE),
+         sd_cv2_c=sd(cv2_c,na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  distinct(condition,datatype,.keep_all=TRUE)
+
+toplot <- noise_contribution_data_sampled %>% 
+  filter(datatype %in% datatypes) %>% 
+  group_by(condition,sampling,datatype) %>% 
+  mutate(mean_c=mean(gfp_nb/length_um)) %>%
+  mutate(sd_c=sd(gfp_nb/length_um)) %>%
+  mutate(cv2_c=(sd_c/mean_c)**2) %>%
+  ungroup() %>% 
+  distinct(condition,sampling,datatype,.keep_all=TRUE) %>% 
+  group_by(condition,datatype) %>% 
+  mutate(mean_cv2_c=mean(cv2_c,na.rm=TRUE),
+         sd_cv2_c=sd(cv2_c,na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  distinct(condition,datatype,.keep_all=TRUE)
+
+toplot$datatype <- factor(toplot$datatype,levels=datatypes)
+toplot$condition <- factor(toplot$condition,levels=c("acetate005","acetate020","glycerol040","glucose020","glucoseaa020"))
+full_noise_cv$condition <- factor(full_noise_cv$condition,levels=c("acetate005","acetate020","glycerol040","glucose020","glucoseaa020"))
+
+toplot %>% 
+  arrange(condition) %>%
+  ggplot()+
+  geom_col(aes(datatype,mean_cv2_c,fill=condition))+
+  #geom_hline(aes(yintercept=exp_r),linetype="dashed",col="red") + 
+  geom_hline(data=full_noise_cv,aes(yintercept=mean_cv2_c),linetype="dashed")+
+  geom_errorbar(aes(x=datatype,ymax=mean_cv2_c+sd_cv2_c,ymin=mean_cv2_c-sd_cv2_c))+
+  facet_grid(condition~.)+
+  theme_cowplot()+
+  guides(fill=guide_legend("Condition"))+
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))+
+  theme(axis.title.x=element_blank())+
+  ylab(expression(~CV^2))+
+  coord_cartesian(ylim=c(0,0.20))
+
+ggsave("./figures/all_contributions_r0.pdf",width=8,height=11)
+```
+
+```{r}
+noise_contribution_data_sampled_rank0 <- noise_contribution_data_sampled
+```
+
+
+# Sample and plot the contributions of each process, rank 1 only
+
+In the following, we randomly sample observations from the dataset. And we repeat this 10 times to obtain error bars on CV computation.
+
+```{r}
+N <- 200
+N0 <- 10
+
+if(!exists("mycluster")){
+  mycluster <- min(30, parallel::detectCores()-1) %>%  # do not use more than 30 cores
+    default_cluster() %>% cluster_library( # load currently loaded packages on each core
+      names(sessionInfo()$otherPkgs))
+  
+  cluster_copy(mycluster,c("fit_exp_elongation_predict","fit_exp_elongation_slope","fit_exp_elongation_sd_slope","fit_exp_elongation_intercept","random_selection_no_replacement","N","N0"))
+}
+
+cluster_copy(mycluster,c("fit_exp_elongation_predict","fit_exp_elongation_slope","fit_exp_elongation_sd_slope","fit_exp_elongation_intercept","random_selection_no_replacement","N","N0"))
+
+noise_contribution_data_sampled <- noise_contribution_data %>% 
+  #semi_join(selected_conditions,by=c("promoter","mean_cell_rank","condition")) %>% 
+  filter(mean_cell_rank==1) %>% 
+  group_by(cell,datatype) %>% 
+  partition(cluster=mycluster) %>%
+  arrange(time_sec) %>% 
+  mutate(alpha=fit_exp_elongation_slope(time_sec,length_um)) %>% 
+  mutate(lambda_cell=mean(lambda*60/log(2),na.remove=TRUE)) %>% 
+  mutate(q_cell=mean(q,na.remove=TRUE)) %>% 
+  #mutate(q_full_cellcycle=(last(gfp_nb_m)-first(gfp_nb_m))/(last(length_um_m)-first(length_um_m))*alpha) %>% 
+  collect() %>% 
+  ungroup() %>% 
+  group_by(condition,promoter,datatype) %>% 
+  partition(cluster=mycluster) %>%
+  do((function(.df){
+    .new_df <- random_selection_no_replacement(.df,N,N0)
+    return(.new_df)})
+    (.)) %>% 
+  collect() %>% 
+  ungroup()
+
+datatypes <- c("experimentaldata","allnoisesources","noprodnoise","nogrowthnoise","nodivisionnoise","onlyprodnoise","onlygrowthnoise","onlydivisionnoise","nonoise")
+
+full_noise_cv <- noise_contribution_data_sampled %>% 
+  filter(datatype=="allnoisesources") %>%
+  mutate(c=gfp_nb/length_um) %>% 
+  group_by(condition,sampling,datatype) %>% 
+  mutate(mean_c=mean(c)) %>%
+  mutate(sd_c=sd(c,na.rm=TRUE)) %>%
+  mutate(cv2_c=(sd_c/mean_c)**2) %>%
+  ungroup() %>% 
+  distinct(condition,sampling,datatype,.keep_all=TRUE) %>% 
+  group_by(condition,datatype) %>% 
+  mutate(mean_cv2_c=mean(cv2_c,na.rm=TRUE),
+         sd_cv2_c=sd(cv2_c,na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  distinct(condition,datatype,.keep_all=TRUE)
+
+toplot <- noise_contribution_data_sampled %>% 
+  filter(datatype %in% datatypes) %>% 
+  group_by(condition,sampling,datatype) %>% 
+  mutate(mean_c=mean(gfp_nb/length_um)) %>%
+  mutate(sd_c=sd(gfp_nb/length_um)) %>%
+  mutate(cv2_c=(sd_c/mean_c)**2) %>%
+  ungroup() %>% 
+  distinct(condition,sampling,datatype,.keep_all=TRUE) %>% 
+  group_by(condition,datatype) %>% 
+  mutate(mean_cv2_c=mean(cv2_c,na.rm=TRUE),
+         sd_cv2_c=sd(cv2_c,na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  distinct(condition,datatype,.keep_all=TRUE)
+
+toplot$datatype <- factor(toplot$datatype,levels=datatypes)
+toplot$condition <- factor(toplot$condition,levels=c("acetate005","acetate020","glycerol040","glucose020","glucoseaa020"))
+full_noise_cv$condition <- factor(full_noise_cv$condition,levels=c("acetate005","acetate020","glycerol040","glucose020","glucoseaa020"))
+
+toplot %>% 
+  arrange(condition) %>%
+  ggplot()+
+  geom_col(aes(datatype,mean_cv2_c,fill=condition))+
+  #geom_hline(aes(yintercept=exp_r),linetype="dashed",col="red") + 
+  geom_hline(data=full_noise_cv,aes(yintercept=mean_cv2_c),linetype="dashed")+
+  geom_errorbar(aes(x=datatype,ymax=mean_cv2_c+sd_cv2_c,ymin=mean_cv2_c-sd_cv2_c))+
+  facet_grid(condition~.)+
+  theme_cowplot()+
+  guides(fill=guide_legend("Condition"))+
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))+
+  theme(axis.title.x=element_blank())+
+  ylab(expression(~CV^2))+
+  coord_cartesian(ylim=c(0,0.20))
+
+ggsave("./figures/all_contributions_r1.pdf",width=8,height=11)
+```
+
+```{r}
+noise_contribution_data_sampled_rank1 <- noise_contribution_data_sampled
+```
+
+
+# Noise contribution without past
+
+Using parameters from import denoised data, it is possible to simulation lineages, where cell concentration are all set to the steady state value initially.
+
+```{r}
+denoised_data_files_dir <- "/scicore/home/nimwegen/rocasu25/Documents/Projects/biozentrum/gfp_fluctuations_project/denoising_raw_data/denoising_20221215091650"
+
+gl_id_df <- lapply(experimental_data_folder,function(.l){
+  list.files(path=.l,pattern="denoised.csv$",recursive = TRUE,full.names=TRUE)}) %>% 
+  unlist() %>% 
+  lapply(function(.l) readr::read_csv(.l) %>% 
+           mutate(path=.l)) %>% 
+  do.call(rbind, .) %>% 
+  distinct(cell,gl_id,mean_cell_rank,parent) %>% 
+  rename(cell_id=cell)
+  
+parent_in_data_set <- gl_id_df %>% 
+  select(parent) %>% 
+  semi_join(gl_id_df %>% 
+              select(cell_id) %>% 
+              rename(parent=cell_id),by=c("parent")) %>% 
+  distinct(parent) %>% 
+  mutate(scale_start_gfp=FALSE) 
+  
+find_command <- sprintf("find %s -type f -name '*final.csv'",denoised_data_files_dir)
+
+myparameters <- system(find_command, intern=TRUE) %>% 
+  lapply(function(.l) readr::read_csv(.l,n_max=11) %>% 
+           mutate(denoised_data_path=.l)) %>% 
+  do.call(rbind,.) %>% 
+ extract(denoised_data_path,"promotercondition","/([a-z0-9A-Z]{1,}_[0-9a-zA-Z]{1,})_rawdata_[a-z0-9]{1,}_b_final.csv$",remove=FALSE,convert=FALSE) %>% 
+  separate(promotercondition,into=c("promoter","condition"),sep="_") %>% 
+  separate(condition,into=c("carbon_source","carbon_source_concentration"),sep="(?<=[A-Za-z])(?=[0-9])",remove=FALSE) %>% 
+  mutate(carbon_source_concentration=as.double(carbon_source_concentration)/100)
+
+myerrors <- system(find_command, intern=TRUE) %>% 
+  lapply(function(.l) readr::read_csv(.l,n_max=3,skip=14) %>% 
+           mutate(denoised_data_path=.l)) %>% 
+  do.call(rbind,.) %>% 
+ extract(denoised_data_path,"promotercondition","/([a-z0-9A-Z]{1,}_[0-9a-zA-Z]{1,})_rawdata_[a-z0-9]{1,}_b_final.csv$",remove=FALSE,convert=FALSE) %>% 
+  separate(promotercondition,into=c("promoter","condition"),sep="_") %>% 
+  separate(condition,into=c("carbon_source","carbon_source_concentration"),sep="(?<=[A-Za-z])(?=[0-9])",remove=FALSE) %>% 
+  mutate(carbon_source_concentration=as.double(carbon_source_concentration)/100)
+
+steady_state_concentrations <- myparameters %>% 
+  select(name,final,condition,promoter) %>% 
+  pivot_wider(names_from = name,values_from = final) %>% 
+  mutate(mean_concentration=mean_q/mean_lambda) %>% 
+  select(mean_concentration,condition,promoter)
+  
+
+find_command <- sprintf("find %s -type f -name '*prediction.csv'",denoised_data_files_dir)
+
+myframes_complete_denoised <- system(find_command, intern=TRUE) %>% 
+  lapply(function(.l) readr::read_csv(.l,skip=13) %>% 
+           mutate(denoised_data_path=.l)) %>% 
+  do.call(rbind,.) %>% 
+  extract(denoised_data_path,"promotercondition","/([a-z0-9A-Z]{1,}_[0-9a-zA-Z]{1,})_rawdata_[a-z0-9]{1,}_b_prediction.csv$",remove=FALSE,convert=FALSE) %>% 
+  separate(promotercondition,into=c("promoter","condition"),sep="_") %>% 
+  separate(condition,into=c("carbon_source","carbon_source_concentration"),sep="(?<=[A-Za-z])(?=[0-9])",remove=FALSE) %>% 
+  mutate(carbon_source_concentration=as.double(carbon_source_concentration)/100) %>% 
+  left_join(steady_state_concentrations,by=c("condition","promoter")) %>% 
+  mutate(mean_g_ini=mean_concentration*exp(mean_x)) %>% 
+  left_join(gl_id_df,by=c("cell_id")) %>% 
+  #group_by(condition,promoter,gl_id) %>% 
+  #mutate(min_time=min(time)) %>% 
+  #ungroup() %>% 
+  #mutate(mean_g=ifelse(time==min_time,mean_g_ini,mean_g))
+  left_join(parent_in_data_set,by=c("parent")) %>% 
+  mutate(scale_start_gfp=ifelse(is.na(scale_start_gfp),TRUE,scale_start_gfp)) %>% 
+  group_by(cell_id) %>% 
+  arrange(time) %>% 
+  mutate(scale_start_gfp=ifelse(row_number()!=1,FALSE,scale_start_gfp)) %>% 
+  mutate(mean_g=ifelse(scale_start_gfp,mean_g_ini,mean_g)) %>% 
+  ungroup() %>% 
+  arrange(cell_id,time)
+  
+promoter <- c("hi1")
+condition <- c("acetate005","acetate020","glycerol040","glucose020","glucoseaa020")
+
+for(.p in promoter){
+  for(.c in condition){
+    p_df <- myparameters %>% 
+      filter(condition==.c,promoter==.p) %>% 
+      select(no,name,type,init,step,lower_bound,upper_bound,final)
+    
+    d_df <- myframes_complete_denoised %>% 
+      filter(condition==.c,promoter==.p)
+      
+    e_df <- myerrors %>% 
+      filter(promoter==.p, condition==.c) %>% 
+      select(-c(condition,promoter,carbon_source,carbon_source_concentration,denoised_data_path))
+    
+    readr::write_csv(p_df,sprintf("./initial_concentration_at_ss_data/%s_%s_prediction.csv",.p,.c))
+    system(sprintf("sed -i 's/NA//g' ./initial_concentration_at_ss_data/%s_%s_prediction.csv",.p,.c))
+    cat("\n", file = sprintf("./initial_concentration_at_ss_data/%s_%s_prediction.csv",.p,.c), append = TRUE)
+    readr::write_csv(d_df,sprintf("./initial_concentration_at_ss_data/%s_%s_prediction.csv",.p,.c),append=TRUE,col_names=TRUE)
+    
+    readr::write_csv(p_df,sprintf("./initial_concentration_at_ss_data/%s_%s_final.csv",.p,.c))
+    system(sprintf("sed -i 's/NA//g' ./initial_concentration_at_ss_data/%s_%s_final.csv",.p,.c))
+    cat("\n", file = sprintf("./initial_concentration_at_ss_data/%s_%s_final.csv",.p,.c), append = TRUE)
+    cat("errors^2:\n", file = sprintf("./initial_concentration_at_ss_data/%s_%s_final.csv",.p,.c), append = TRUE)
+    readr::write_csv(e_df,sprintf("./initial_concentration_at_ss_data/%s_%s_final.csv",.p,.c),append=TRUE,col_names=TRUE)
+    
+  }
+}
+
+#system("sed 's/,NA/,/g' %s",sprintf("./initial_concentration_at_ss_data/hi1_acetate005_prediction.csv"),intern=TRUE,ignore.stdout = #TRUE,ignore.stderr = TRUE,wait=TRUE)
+```
+
+## Import simulation data
+
+```{r}
+source("./mother_machine_experiments_toolbox/load_functions_and_packages.R")
+data_folder <- "/scicore/home/nimwegen/rocasu25/Documents/Projects/biozentrum/gfp_fluctuations_project/initial_concentration_at_ss_data/integration/"
+experimental_data_folder <- "/scicore/home/nimwegen/rocasu25/Documents/Projects/biozentrum/gfp_fluctuations_project/denoised_data/"
+```
+
+```{r}
+noise_contribution_data <- lapply(data_folder,function(.l){
+  list.files(path=.l,pattern=".csv$",recursive = TRUE,full.names=TRUE)}) %>% 
+  unlist() %>% 
+  lapply(function(.l) readr::read_csv(.l) %>% 
+           mutate(path=.l)) %>% 
+  do.call(rbind, .) %>% 
+  tidyr::extract(path,"promoter","/([0-9a-zA-Z]{1,})_[0-9a-zA-Z]{1,}_[a-z]{1,}.csv$",remove=FALSE,convert=FALSE) %>% 
+  tidyr::extract(path,"condition","/[0-9a-zA-Z]{1,}_([0-9a-zA-Z]{1,})_[a-z]{1,}.csv$",remove=FALSE,convert=FALSE) %>%
+  tidyr::extract(condition,"carbon_source_concentration","^[a-z]{1,}0([0-9]{2})",remove=FALSE,convert=FALSE) %>% 
+  mutate(carbon_source_concentration=as.double(carbon_source_concentration)/100) %>% 
+  tidyr::extract(condition,"carbon_source","^([a-z]{1,})0[0-9]{2}",remove=FALSE,convert=FALSE) %>% 
+  tidyr::extract(path,"datatype","/[0-9a-z]{1,}_[0-9a-zA-Z]{1,}_([a-z]{1,}).csv$",remove=FALSE,convert=FALSE) %>% 
+  rename(cell=cell_id,parent=parent_id,gfp_nb=gfp,lambda=lt,q=qt) %>% 
+  mutate(time_sec=time_min*60,
+  length_um=exp(log_length)) %>%
+  select(-c("...1"))
+
+experimental_data <- lapply(experimental_data_folder,function(.l){
+  list.files(path=.l,pattern=".csv$",recursive = TRUE,full.names=TRUE)}) %>% 
+  unlist() %>% 
+  lapply(function(.l) readr::read_csv(.l) %>% 
+           mutate(path=.l)) %>% 
+  do.call(rbind, .) %>% 
+  mutate(datatype="experimentaldata") %>% 
+  mutate(time_sec=time_min*60) %>% 
+  mutate(log_length=log(length_um)) %>% 
+  select(c("cell","time_min","parent","log_length","gfp_nb","lambda","q","promoter","condition","carbon_source","carbon_source_concentration","time_sec","length_um","datatype","path","mean_cell_rank"))
+
+mean_cell_rank_df <- experimental_data %>% 
+  distinct(cell,mean_cell_rank)
+
+noise_contribution_data <- rbind(noise_contribution_data,
+                                 experimental_data %>% 
+                                   select(-mean_cell_rank)) %>% 
+  left_join(mean_cell_rank_df,by=c("cell"))
+```
+
+# Sample using the same sampling as for rank_all, rank 0 and rank 1
+
+```{r}
+sampling_all_rank <- noise_contribution_data_sampled_all_ranks %>% 
+  distinct(cell,time_sec)
+sampling_all_rank0 <- noise_contribution_data_sampled_rank0 %>% 
+  distinct(cell,time_sec)
+sampling_all_rank1 <- noise_contribution_data_sampled_rank1 %>% 
+  distinct(cell,time_sec)
+```
+
+# Sample and plot the contributions of each process, all ranks
+
+In the following, we randomly sample observations from the dataset. And we repeat this 10 times to obtain error bars on CV computation.
+
+
+
+```{r}
+N <- 200
+N0 <- 10
+
+if(!exists("mycluster")){
+  mycluster <- min(30, parallel::detectCores()-1) %>%  # do not use more than 30 cores
+    default_cluster() %>% cluster_library( # load currently loaded packages on each core
+      names(sessionInfo()$otherPkgs))
+  
+  cluster_copy(mycluster,c("fit_exp_elongation_predict","fit_exp_elongation_slope","fit_exp_elongation_sd_slope","fit_exp_elongation_intercept","random_selection_no_replacement","N","N0"))
+}
+
+cluster_copy(mycluster,c("fit_exp_elongation_predict","fit_exp_elongation_slope","fit_exp_elongation_sd_slope","fit_exp_elongation_intercept","random_selection_no_replacement","N","N0"))
+
+noise_contribution_data_sampled <- noise_contribution_data %>% 
+  #semi_join(selected_conditions,by=c("promoter","mean_cell_rank","condition")) %>% 
+  group_by(cell,datatype) %>% 
+  partition(cluster=mycluster) %>%
+  arrange(time_sec) %>% 
+  mutate(alpha=fit_exp_elongation_slope(time_sec,length_um)) %>% 
+  mutate(lambda_cell=mean(lambda*60/log(2),na.remove=TRUE)) %>% 
+  mutate(q_cell=mean(q,na.remove=TRUE)) %>% 
+  #mutate(q_full_cellcycle=(last(gfp_nb_m)-first(gfp_nb_m))/(last(length_um_m)-first(length_um_m))*alpha) %>% 
+  collect() %>% 
+  ungroup() %>% 
+  group_by(condition,promoter,datatype) %>% 
+  partition(cluster=mycluster) %>%
+  do((function(.df){
+    .new_df <- random_selection_no_replacement(.df,N,N0)
+    return(.new_df)})
+    (.)) %>% 
+  collect() %>% 
+  ungroup()
+
+datatypes <- c("experimentaldata","allnoisesources","noprodnoise","nogrowthnoise","nodivisionnoise","onlyprodnoise","onlygrowthnoise","onlydivisionnoise","nonoise")
+
+full_noise_cv <- noise_contribution_data_sampled %>% 
+  filter(datatype=="allnoisesources") %>%
+  mutate(c=gfp_nb/length_um) %>% 
+  group_by(condition,sampling,datatype) %>% 
+  mutate(mean_c=mean(c)) %>%
+  mutate(sd_c=sd(c,na.rm=TRUE)) %>%
+  mutate(cv2_c=(sd_c/mean_c)**2) %>%
+  ungroup() %>% 
+  distinct(condition,sampling,datatype,.keep_all=TRUE) %>% 
+  group_by(condition,datatype) %>% 
+  mutate(mean_cv2_c=mean(cv2_c,na.rm=TRUE),
+         sd_cv2_c=sd(cv2_c,na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  distinct(condition,datatype,.keep_all=TRUE)
+
+toplot <- noise_contribution_data_sampled %>% 
+  filter(datatype %in% datatypes) %>% 
+  group_by(condition,sampling,datatype) %>% 
+  mutate(mean_c=mean(gfp_nb/length_um)) %>%
+  mutate(sd_c=sd(gfp_nb/length_um)) %>%
+  mutate(cv2_c=(sd_c/mean_c)**2) %>%
+  ungroup() %>% 
+  distinct(condition,sampling,datatype,.keep_all=TRUE) %>% 
+  group_by(condition,datatype) %>% 
+  mutate(mean_cv2_c=mean(cv2_c,na.rm=TRUE),
+         sd_cv2_c=sd(cv2_c,na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  distinct(condition,datatype,.keep_all=TRUE)
+
+toplot$datatype <- factor(toplot$datatype,levels=datatypes)
+toplot$condition <- factor(toplot$condition,levels=c("acetate005","acetate020","glycerol040","glucose020","glucoseaa020"))
+full_noise_cv$condition <- factor(full_noise_cv$condition,levels=c("acetate005","acetate020","glycerol040","glucose020","glucoseaa020"))
+
+toplot %>% 
+  arrange(condition) %>%
+  ggplot()+
+  geom_col(aes(datatype,mean_cv2_c,fill=condition))+
+  #geom_hline(aes(yintercept=exp_r),linetype="dashed",col="red") + 
+  geom_hline(data=full_noise_cv,aes(yintercept=mean_cv2_c),linetype="dashed")+
+  geom_errorbar(aes(x=datatype,ymax=mean_cv2_c+sd_cv2_c,ymin=mean_cv2_c-sd_cv2_c))+
+  facet_grid(condition~.)+
+  theme_cowplot()+
+  guides(fill=guide_legend("Condition"))+
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))+
+  theme(axis.title.x=element_blank())+
+  ylab(expression(~CV^2))+
+  coord_cartesian(ylim=c(0,0.20))
+
+ggsave("./figures/all_contributions_all_ranks_initial_concentration_steady_state.pdf",width=8,height=11)
+```
+
+```{r}
+noise_contribution_data_sampled_all_ranks_ss <- noise_contribution_data_sampled
+```
+
+
+```{r}
+N <- 200
+N0 <- 10
+
+if(!exists("mycluster")){
+  mycluster <- min(30, parallel::detectCores()-1) %>%  # do not use more than 30 cores
+    default_cluster() %>% cluster_library( # load currently loaded packages on each core
+      names(sessionInfo()$otherPkgs))
+  
+  cluster_copy(mycluster,c("fit_exp_elongation_predict","fit_exp_elongation_slope","fit_exp_elongation_sd_slope","fit_exp_elongation_intercept","random_selection_no_replacement","N","N0"))
+}
+
+cluster_copy(mycluster,c("fit_exp_elongation_predict","fit_exp_elongation_slope","fit_exp_elongation_sd_slope","fit_exp_elongation_intercept","random_selection_no_replacement","N","N0"))
+
+noise_contribution_data_sampled <- noise_contribution_data %>% 
+  #semi_join(selected_conditions,by=c("promoter","mean_cell_rank","condition")) %>% 
+  filter(mean_cell_rank==0) %>% 
+  group_by(cell,datatype) %>% 
+  partition(cluster=mycluster) %>%
+  arrange(time_sec) %>% 
+  mutate(alpha=fit_exp_elongation_slope(time_sec,length_um)) %>% 
+  mutate(lambda_cell=mean(lambda*60/log(2),na.remove=TRUE)) %>% 
+  mutate(q_cell=mean(q,na.remove=TRUE)) %>% 
+  #mutate(q_full_cellcycle=(last(gfp_nb_m)-first(gfp_nb_m))/(last(length_um_m)-first(length_um_m))*alpha) %>% 
+  collect() %>% 
+  ungroup() %>% 
+  group_by(condition,promoter,datatype) %>% 
+  partition(cluster=mycluster) %>%
+  do((function(.df){
+    .new_df <- random_selection_no_replacement(.df,N,N0)
+    return(.new_df)})
+    (.)) %>% 
+  collect() %>% 
+  ungroup()
+
+datatypes <- c("experimentaldata","allnoisesources","noprodnoise","nogrowthnoise","nodivisionnoise","onlyprodnoise","onlygrowthnoise","onlydivisionnoise","nonoise")
+
+full_noise_cv <- noise_contribution_data_sampled %>% 
+  filter(datatype=="allnoisesources") %>%
+  mutate(c=gfp_nb/length_um) %>% 
+  group_by(condition,sampling,datatype) %>% 
+  mutate(mean_c=mean(c)) %>%
+  mutate(sd_c=sd(c,na.rm=TRUE)) %>%
+  mutate(cv2_c=(sd_c/mean_c)**2) %>%
+  ungroup() %>% 
+  distinct(condition,sampling,datatype,.keep_all=TRUE) %>% 
+  group_by(condition,datatype) %>% 
+  mutate(mean_cv2_c=mean(cv2_c,na.rm=TRUE),
+         sd_cv2_c=sd(cv2_c,na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  distinct(condition,datatype,.keep_all=TRUE)
+
+toplot <- noise_contribution_data_sampled %>% 
+  filter(datatype %in% datatypes) %>% 
+  group_by(condition,sampling,datatype) %>% 
+  mutate(mean_c=mean(gfp_nb/length_um)) %>%
+  mutate(sd_c=sd(gfp_nb/length_um)) %>%
+  mutate(cv2_c=(sd_c/mean_c)**2) %>%
+  ungroup() %>% 
+  distinct(condition,sampling,datatype,.keep_all=TRUE) %>% 
+  group_by(condition,datatype) %>% 
+  mutate(mean_cv2_c=mean(cv2_c,na.rm=TRUE),
+         sd_cv2_c=sd(cv2_c,na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  distinct(condition,datatype,.keep_all=TRUE)
+
+toplot$datatype <- factor(toplot$datatype,levels=datatypes)
+toplot$condition <- factor(toplot$condition,levels=c("acetate005","acetate020","glycerol040","glucose020","glucoseaa020"))
+full_noise_cv$condition <- factor(full_noise_cv$condition,levels=c("acetate005","acetate020","glycerol040","glucose020","glucoseaa020"))
+
+toplot %>% 
+  arrange(condition) %>%
+  ggplot()+
+  geom_col(aes(datatype,mean_cv2_c,fill=condition))+
+  #geom_hline(aes(yintercept=exp_r),linetype="dashed",col="red") + 
+  geom_hline(data=full_noise_cv,aes(yintercept=mean_cv2_c),linetype="dashed")+
+  geom_errorbar(aes(x=datatype,ymax=mean_cv2_c+sd_cv2_c,ymin=mean_cv2_c-sd_cv2_c))+
+  facet_grid(condition~.)+
+  theme_cowplot()+
+  guides(fill=guide_legend("Condition"))+
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))+
+  theme(axis.title.x=element_blank())+
+  ylab(expression(~CV^2))+
+  coord_cartesian(ylim=c(0,0.20))
+
+ggsave("./figures/all_contributions_r1.pdf",width=8,height=11)
+```
+
+```{r}
+noise_contribution_data_sampled_rank0_ss <- noise_contribution_data_sampled
+```
+
+```{r}
+N <- 200
+N0 <- 10
+
+if(!exists("mycluster")){
+  mycluster <- min(30, parallel::detectCores()-1) %>%  # do not use more than 30 cores
+    default_cluster() %>% cluster_library( # load currently loaded packages on each core
+      names(sessionInfo()$otherPkgs))
+  
+  cluster_copy(mycluster,c("fit_exp_elongation_predict","fit_exp_elongation_slope","fit_exp_elongation_sd_slope","fit_exp_elongation_intercept","random_selection_no_replacement","N","N0"))
+}
+
+cluster_copy(mycluster,c("fit_exp_elongation_predict","fit_exp_elongation_slope","fit_exp_elongation_sd_slope","fit_exp_elongation_intercept","random_selection_no_replacement","N","N0"))
+
+noise_contribution_data_sampled <- noise_contribution_data %>% 
+  #semi_join(selected_conditions,by=c("promoter","mean_cell_rank","condition")) %>% 
+  filter(mean_cell_rank==1) %>% 
+  group_by(cell,datatype) %>% 
+  partition(cluster=mycluster) %>%
+  arrange(time_sec) %>% 
+  mutate(alpha=fit_exp_elongation_slope(time_sec,length_um)) %>% 
+  mutate(lambda_cell=mean(lambda*60/log(2),na.remove=TRUE)) %>% 
+  mutate(q_cell=mean(q,na.remove=TRUE)) %>% 
+  #mutate(q_full_cellcycle=(last(gfp_nb_m)-first(gfp_nb_m))/(last(length_um_m)-first(length_um_m))*alpha) %>% 
+  collect() %>% 
+  ungroup() %>% 
+  group_by(condition,promoter,datatype) %>% 
+  partition(cluster=mycluster) %>%
+  do((function(.df){
+    .new_df <- random_selection_no_replacement(.df,N,N0)
+    return(.new_df)})
+    (.)) %>% 
+  collect() %>% 
+  ungroup()
+
+datatypes <- c("experimentaldata","allnoisesources","noprodnoise","nogrowthnoise","nodivisionnoise","onlyprodnoise","onlygrowthnoise","onlydivisionnoise","nonoise")
+
+full_noise_cv <- noise_contribution_data_sampled %>% 
+  filter(datatype=="allnoisesources") %>%
+  mutate(c=gfp_nb/length_um) %>% 
+  group_by(condition,sampling,datatype) %>% 
+  mutate(mean_c=mean(c)) %>%
+  mutate(sd_c=sd(c,na.rm=TRUE)) %>%
+  mutate(cv2_c=(sd_c/mean_c)**2) %>%
+  ungroup() %>% 
+  distinct(condition,sampling,datatype,.keep_all=TRUE) %>% 
+  group_by(condition,datatype) %>% 
+  mutate(mean_cv2_c=mean(cv2_c,na.rm=TRUE),
+         sd_cv2_c=sd(cv2_c,na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  distinct(condition,datatype,.keep_all=TRUE)
+
+toplot <- noise_contribution_data_sampled %>% 
+  filter(datatype %in% datatypes) %>% 
+  group_by(condition,sampling,datatype) %>% 
+  mutate(mean_c=mean(gfp_nb/length_um)) %>%
+  mutate(sd_c=sd(gfp_nb/length_um)) %>%
+  mutate(cv2_c=(sd_c/mean_c)**2) %>%
+  ungroup() %>% 
+  distinct(condition,sampling,datatype,.keep_all=TRUE) %>% 
+  group_by(condition,datatype) %>% 
+  mutate(mean_cv2_c=mean(cv2_c,na.rm=TRUE),
+         sd_cv2_c=sd(cv2_c,na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  distinct(condition,datatype,.keep_all=TRUE)
+
+toplot$datatype <- factor(toplot$datatype,levels=datatypes)
+toplot$condition <- factor(toplot$condition,levels=c("acetate005","acetate020","glycerol040","glucose020","glucoseaa020"))
+full_noise_cv$condition <- factor(full_noise_cv$condition,levels=c("acetate005","acetate020","glycerol040","glucose020","glucoseaa020"))
+
+toplot %>% 
+  arrange(condition) %>%
+  ggplot()+
+  geom_col(aes(datatype,mean_cv2_c,fill=condition))+
+  #geom_hline(aes(yintercept=exp_r),linetype="dashed",col="red") + 
+  geom_hline(data=full_noise_cv,aes(yintercept=mean_cv2_c),linetype="dashed")+
+  geom_errorbar(aes(x=datatype,ymax=mean_cv2_c+sd_cv2_c,ymin=mean_cv2_c-sd_cv2_c))+
+  facet_grid(condition~.)+
+  theme_cowplot()+
+  guides(fill=guide_legend("Condition"))+
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))+
+  theme(axis.title.x=element_blank())+
+  ylab(expression(~CV^2))+
+  coord_cartesian(ylim=c(0,0.20))
+
+ggsave("./figures/all_contributions_r0.pdf",width=8,height=11)
+```
+
+```{r}
+noise_contribution_data_sampled_rank1_ss <- noise_contribution_data_sampled
+```
+
+# Putting everything together all_ranks (version 1)
+
+```{r}
+xlabels <- c("experimental data","all noise sources","no inherited noise","no production noise","no growth noise","no division noise","no noise sources")
+ylabels <- c("acetate 0.05%","acetate 0.20%", "glycerol 0.40%","glucose 0.20%","glucose 0.20% + AA")
+```
+
+```{r}
+nonoise_df <- noise_contribution_data_sampled_all_ranks_ss %>%
+  mutate(datatype=ifelse(datatype=="allnoisesources","noinheritednoise",datatype)) %>% 
+  filter(datatype %in% c("nonoise","noinheritednoise"))
+
+other_sources_df <- noise_contribution_data_sampled_all_ranks %>% 
+  mutate(datatype=ifelse(datatype=="nonoise","inheritednoise",datatype))
+
+noise_contribution_data_sampled <- rbind(
+  nonoise_df,
+  other_sources_df)
+```
+
+```{r}
+datatypes <- c("experimentaldata","allnoisesources","noinheritednoise","noprodnoise","nogrowthnoise","nodivisionnoise","nonoise")
+
+full_noise_cv <- noise_contribution_data_sampled %>% 
+  filter(datatype=="allnoisesources") %>%
+  mutate(c=gfp_nb/length_um) %>% 
+  group_by(condition,sampling,datatype) %>% 
+  mutate(mean_c=mean(c)) %>%
+  mutate(sd_c=sd(c,na.rm=TRUE)) %>%
+  mutate(cv2_c=(sd_c/mean_c)**2) %>%
+  ungroup() %>% 
+  distinct(condition,sampling,datatype,.keep_all=TRUE) %>% 
+  group_by(condition,datatype) %>% 
+  mutate(mean_cv2_c=mean(cv2_c,na.rm=TRUE),
+         sd_cv2_c=sd(cv2_c,na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  distinct(condition,datatype,.keep_all=TRUE)
+
+toplot <- noise_contribution_data_sampled %>% 
+  filter(datatype %in% datatypes) %>% 
+  group_by(condition,sampling,datatype) %>% 
+  mutate(mean_c=mean(gfp_nb/length_um)) %>%
+  mutate(sd_c=sd(gfp_nb/length_um)) %>%
+  mutate(cv2_c=(sd_c/mean_c)**2) %>%
+  ungroup() %>% 
+  distinct(condition,sampling,datatype,.keep_all=TRUE) %>% 
+  group_by(condition,datatype) %>% 
+  mutate(mean_cv2_c=mean(cv2_c,na.rm=TRUE),
+         sd_cv2_c=sd(cv2_c,na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  distinct(condition,datatype,.keep_all=TRUE)
+
+toplot$datatype <- factor(toplot$datatype,levels=datatypes)
+toplot$condition <- factor(toplot$condition,levels=c("acetate005","acetate020","glycerol040","glucose020","glucoseaa020"))
+full_noise_cv$condition <- factor(full_noise_cv$condition,levels=c("acetate005","acetate020","glycerol040","glucose020","glucoseaa020"))
+
+condition_names <- list(
+  'acetate005'='acetate 0.05%',
+  'acetate020'='acetate 0.20%',
+  'glycerol040'='glycerol 0.40%',
+  'glucose020'='glucose 0.20%',
+  'glucoseaa020'='glucose 0.20% + AA')
+
+condition_labeller <- function(variable,value){
+  return(condition_names[value])
+}
+
+toplot %>% 
+  arrange(condition) %>%
+  ggplot()+
+  geom_col(aes(datatype,mean_cv2_c),alpha=0.5)+
+  #geom_hline(aes(yintercept=exp_r),linetype="dashed",col="red") + 
+  geom_hline(data=full_noise_cv,aes(yintercept=mean_cv2_c),linetype="dashed")+
+  geom_errorbar(aes(x=datatype,ymax=mean_cv2_c+sd_cv2_c,ymin=mean_cv2_c-sd_cv2_c))+
+  facet_grid(condition~.,labeller=condition_labeller,scale="free_y")+
+  theme_cowplot()+
+  #guides(fill=guide_legend("Condition"))+
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))+
+  theme(axis.title.x=element_blank())+
+  ylab(expression("Concentration"~CV^2))+
+  #coord_cartesian(ylim=c(0,0.20))+
+  scale_x_discrete(labels=xlabels)+
+  theme(strip.text.y = element_text(size = 6))
+
+ggsave("./figures/all_ranks_final.pdf",width=5,height=6)
+```
+
+## How does noise changes together with the growth rate
+
+```{r}
+# To compute mean growth rate, take 200 random observations from the data, compute the sd using the uncertainty on the posterior, and then, compute the weighted mean.
+# Then, compute the error bar on that many observations.
+# Use random_selection_no_replacement
+
+if(!exists("mycluster")){
+  mycluster <- min(30, parallel::detectCores()-1) %>%  # do not use more than 30 cores
+    default_cluster() %>% cluster_library( # load currently loaded packages on each core
+      names(sessionInfo()$otherPkgs))
+  
+  cluster_copy(mycluster,c("fit_exp_elongation_predict","fit_exp_elongation_slope","fit_exp_elongation_sd_slope","fit_exp_elongation_intercept","random_selection_no_replacement","N","N0"))
+}
+
+cluster_copy(mycluster,c("fit_exp_elongation_predict","fit_exp_elongation_slope","fit_exp_elongation_sd_slope","fit_exp_elongation_intercept","random_selection_no_replacement","N","N0"))
+
+
+N <- 2000
+#N0 <- 10
+
+experimental_data_folder <- "/scicore/home/nimwegen/rocasu25/Documents/Projects/biozentrum/gfp_fluctuations_project/denoised_data"
+
+experimental_data <- lapply(experimental_data_folder,function(.l){
+  list.files(path=.l,pattern="denoised.csv$",recursive = TRUE,full.names=TRUE)}) %>% 
+  unlist() %>% 
+  lapply(function(.l) readr::read_csv(.l) %>% 
+           mutate(path=.l)) %>% 
+  do.call(rbind, .)
+
+gr_df <- experimental_data %>% 
+  group_by(condition,promoter) %>% 
+  dplyr::sample_n(N,replace=FALSE) %>% 
+  #ungroup() %>% 
+  #group_by(sampling,condition,promoter) %>% 
+  mutate(var_gr=abs(mean(lambda^2+cov_ll)-mean(lambda)^2),na.rm=TRUE) %>%
+  mutate(wtot_gr=sum(1/var_gr)) %>%
+  mutate(w_gr=1/var_gr) %>% 
+  mutate(mean_gr=sum(lambda*w_gr)/wtot_gr,na.rm=TRUE) %>%
+  mutate(var_var_gr=sum(w_gr*(lambda-mean_gr)**2)/(wtot_gr)*N/(N-1)) %>% 
+  mutate(se_gr=sqrt(var_var_gr)/sqrt(N)) %>% 
+  ungroup() %>% 
+  distinct(condition,promoter,se_gr,mean_gr)
+
+toplot %>% 
+  select(condition,promoter,datatype,mean_cv2_c,sd_cv2_c) %>% 
+  filter(datatype %in% c("allnoisesources","experimentaldata")) %>% 
+  pivot_wider(names_from = c("datatype"),values_from = c("mean_cv2_c","sd_cv2_c")) %>% 
+  ggplot()+
+  geom_point(aes(mean_cv2_c_allnoisesources,mean_cv2_c_experimentaldata,col=condition),size=3)+
+  geom_errorbar(aes(x=mean_cv2_c_allnoisesources,ymin=mean_cv2_c_experimentaldata-sd_cv2_c_experimentaldata,ymax=mean_cv2_c_experimentaldata+sd_cv2_c_experimentaldata,col=condition),width=0)+
+  geom_errorbarh(aes(y=mean_cv2_c_experimentaldata,xmin=mean_cv2_c_allnoisesources-sd_cv2_c_allnoisesources,xmax=mean_cv2_c_allnoisesources+sd_cv2_c_allnoisesources,col=condition),width=0)+
+  geom_abline(aes(slope=1,intercept=0),col="red",linetype="dashed")+
+  theme_cowplot()+
+  xlab(expression("Simulations concentration"~CV^2))+
+  ylab(expression("Experiments concentration"~CV^2))+
+  scale_colour_discrete(labels=ylabels)+
+  labs(colour='Conditions')+
+  xlim(0,0.2)+
+  ylim(0,0.2)
+
+ggsave("./figures/cv_comparison_allrank.pdf",width=4,height=4)
+
+```
+
+
+
+
+# Putting everything together rank 0 (version 1)
+
+```{r}
+nonoise_df <- noise_contribution_data_sampled_rank0_ss %>%
+  mutate(datatype=ifelse(datatype=="allnoisesources","noinheritednoise",datatype)) %>% 
+  filter(datatype %in% c("nonoise","noinheritednoise"))
+
+other_sources_df <- noise_contribution_data_sampled_rank0 %>% 
+  mutate(datatype=ifelse(datatype=="nonoise","inheritednoise",datatype))
+
+noise_contribution_data_sampled <- rbind(
+  nonoise_df,
+  other_sources_df)
+```
+
+```{r}
+datatypes <- c("experimentaldata","allnoisesources","noinheritednoise","noprodnoise","nogrowthnoise","nodivisionnoise","nonoise")
+
+full_noise_cv <- noise_contribution_data_sampled %>% 
+  filter(datatype=="allnoisesources") %>%
+  mutate(c=gfp_nb/length_um) %>% 
+  group_by(condition,sampling,datatype) %>% 
+  mutate(mean_c=mean(c)) %>%
+  mutate(sd_c=sd(c,na.rm=TRUE)) %>%
+  mutate(cv2_c=(sd_c/mean_c)**2) %>%
+  ungroup() %>% 
+  distinct(condition,sampling,datatype,.keep_all=TRUE) %>% 
+  group_by(condition,datatype) %>% 
+  mutate(mean_cv2_c=mean(cv2_c,na.rm=TRUE),
+         sd_cv2_c=sd(cv2_c,na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  distinct(condition,datatype,.keep_all=TRUE)
+
+toplot <- noise_contribution_data_sampled %>% 
+  filter(datatype %in% datatypes) %>% 
+  group_by(condition,sampling,datatype) %>% 
+  mutate(mean_c=mean(gfp_nb/length_um)) %>%
+  mutate(sd_c=sd(gfp_nb/length_um)) %>%
+  mutate(cv2_c=(sd_c/mean_c)**2) %>%
+  ungroup() %>% 
+  distinct(condition,sampling,datatype,.keep_all=TRUE) %>% 
+  group_by(condition,datatype) %>% 
+  mutate(mean_cv2_c=mean(cv2_c,na.rm=TRUE),
+         sd_cv2_c=sd(cv2_c,na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  distinct(condition,datatype,.keep_all=TRUE)
+
+toplot$datatype <- factor(toplot$datatype,levels=datatypes)
+toplot$condition <- factor(toplot$condition,levels=c("acetate005","acetate020","glycerol040","glucose020","glucoseaa020"))
+full_noise_cv$condition <- factor(full_noise_cv$condition,levels=c("acetate005","acetate020","glycerol040","glucose020","glucoseaa020"))
+
+toplot %>% 
+  arrange(condition) %>%
+  ggplot()+
+  geom_col(aes(datatype,mean_cv2_c,fill=condition))+
+  #geom_hline(aes(yintercept=exp_r),linetype="dashed",col="red") + 
+  geom_hline(data=full_noise_cv,aes(yintercept=mean_cv2_c),linetype="dashed")+
+  geom_errorbar(aes(x=datatype,ymax=mean_cv2_c+sd_cv2_c,ymin=mean_cv2_c-sd_cv2_c))+
+  facet_grid(condition~.)+
+  theme_cowplot()+
+  guides(fill=guide_legend("Condition"))+
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))+
+  theme(axis.title.x=element_blank())+
+  ylab(expression(~CV^2))+
+  coord_cartesian(ylim=c(0,0.20))
+
+ggsave("./figures/r0_final.pdf",width=8,height=11)
+```
+
+
+## How does noise changes together with the growth rate
+
+```{r}
+# To compute mean growth rate, take 200 random observations from the data, compute the sd using the uncertainty on the posterior, and then, compute the weighted mean.
+# Then, compute the error bar on that many observations.
+# Use random_selection_no_replacement
+
+if(!exists("mycluster")){
+  mycluster <- min(30, parallel::detectCores()-1) %>%  # do not use more than 30 cores
+    default_cluster() %>% cluster_library( # load currently loaded packages on each core
+      names(sessionInfo()$otherPkgs))
+  
+  cluster_copy(mycluster,c("fit_exp_elongation_predict","fit_exp_elongation_slope","fit_exp_elongation_sd_slope","fit_exp_elongation_intercept","random_selection_no_replacement","N","N0"))
+}
+
+cluster_copy(mycluster,c("fit_exp_elongation_predict","fit_exp_elongation_slope","fit_exp_elongation_sd_slope","fit_exp_elongation_intercept","random_selection_no_replacement","N","N0"))
+
+
+N <- 2000
+#N0 <- 10
+
+experimental_data_folder <- "/scicore/home/nimwegen/rocasu25/Documents/Projects/biozentrum/gfp_fluctuations_project/denoised_data"
+
+experimental_data <- lapply(experimental_data_folder,function(.l){
+  list.files(path=.l,pattern="denoised.csv$",recursive = TRUE,full.names=TRUE)}) %>% 
+  unlist() %>% 
+  lapply(function(.l) readr::read_csv(.l) %>% 
+           mutate(path=.l)) %>% 
+  do.call(rbind, .)
+
+gr_df <- experimental_data %>% 
+  group_by(condition,promoter) %>% 
+  dplyr::sample_n(N,replace=FALSE) %>% 
+  #ungroup() %>% 
+  #group_by(sampling,condition,promoter) %>% 
+  mutate(var_gr=abs(mean(lambda^2+cov_ll)-mean(lambda)^2),na.rm=TRUE) %>%
+  mutate(wtot_gr=sum(1/var_gr)) %>%
+  mutate(w_gr=1/var_gr) %>% 
+  mutate(mean_gr=sum(lambda*w_gr)/wtot_gr,na.rm=TRUE) %>%
+  mutate(var_var_gr=sum(w_gr*(lambda-mean_gr)**2)/(wtot_gr)*N/(N-1)) %>% 
+  mutate(se_gr=sqrt(var_var_gr)/sqrt(N)) %>% 
+  ungroup() %>% 
+  distinct(condition,promoter,se_gr,mean_gr)
+
+toplot %>% 
+  select(condition,promoter,datatype,mean_cv2_c,sd_cv2_c) %>% 
+  filter(datatype %in% c("allnoisesources","experimentaldata")) %>% 
+  pivot_wider(names_from = c("datatype"),values_from = c("mean_cv2_c","sd_cv2_c")) %>% 
+  ggplot()+
+  geom_point(aes(mean_cv2_c_allnoisesources,mean_cv2_c_experimentaldata,col=condition),size=3)+
+  geom_errorbar(aes(x=mean_cv2_c_allnoisesources,ymin=mean_cv2_c_experimentaldata-sd_cv2_c_experimentaldata,ymax=mean_cv2_c_experimentaldata+sd_cv2_c_experimentaldata,col=condition),width=0)+
+  geom_errorbarh(aes(y=mean_cv2_c_experimentaldata,xmin=mean_cv2_c_allnoisesources-sd_cv2_c_allnoisesources,xmax=mean_cv2_c_allnoisesources+sd_cv2_c_allnoisesources,col=condition),width=0)+
+  geom_abline(aes(slope=1,intercept=0),col="red",linetype="dashed")+
+  theme_cowplot()+
+  xlab(expression("Simulations concentration"~CV^2))+
+  ylab(expression("Experiments concentration"~CV^2))+
+  scale_colour_discrete(labels=ylabels)+
+  labs(colour='Conditions')+
+  xlim(0,0.2)+
+  ylim(0,0.2)
+
+ggsave("./figures/cv_comparison_rank0.pdf",width=4,height=4)
+
+```
+
+# Putting everything together rank 1 (version 1)
+
+```{r}
+nonoise_df <- noise_contribution_data_sampled_rank1_ss %>%
+  mutate(datatype=ifelse(datatype=="allnoisesources","noinheritednoise",datatype)) %>% 
+  filter(datatype %in% c("nonoise","noinheritednoise"))
+
+other_sources_df <- noise_contribution_data_sampled_rank1 %>% 
+  mutate(datatype=ifelse(datatype=="nonoise","inheritednoise",datatype))
+
+noise_contribution_data_sampled <- rbind(
+  nonoise_df,
+  other_sources_df)
+```
+
+```{r}
+datatypes <- c("experimentaldata","allnoisesources","noinheritednoise","noprodnoise","nogrowthnoise","nodivisionnoise","nonoise")
+
+full_noise_cv <- noise_contribution_data_sampled %>% 
+  filter(datatype=="allnoisesources") %>%
+  mutate(c=gfp_nb/length_um) %>% 
+  group_by(condition,sampling,datatype) %>% 
+  mutate(mean_c=mean(c)) %>%
+  mutate(sd_c=sd(c,na.rm=TRUE)) %>%
+  mutate(cv2_c=(sd_c/mean_c)**2) %>%
+  ungroup() %>% 
+  distinct(condition,sampling,datatype,.keep_all=TRUE) %>% 
+  group_by(condition,datatype) %>% 
+  mutate(mean_cv2_c=mean(cv2_c,na.rm=TRUE),
+         sd_cv2_c=sd(cv2_c,na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  distinct(condition,datatype,.keep_all=TRUE)
+
+toplot <- noise_contribution_data_sampled %>% 
+  filter(datatype %in% datatypes) %>% 
+  group_by(condition,sampling,datatype) %>% 
+  mutate(mean_c=mean(gfp_nb/length_um)) %>%
+  mutate(sd_c=sd(gfp_nb/length_um)) %>%
+  mutate(cv2_c=(sd_c/mean_c)**2) %>%
+  ungroup() %>% 
+  distinct(condition,sampling,datatype,.keep_all=TRUE) %>% 
+  group_by(condition,datatype) %>% 
+  mutate(mean_cv2_c=mean(cv2_c,na.rm=TRUE),
+         sd_cv2_c=sd(cv2_c,na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  distinct(condition,datatype,.keep_all=TRUE)
+
+toplot$datatype <- factor(toplot$datatype,levels=datatypes)
+toplot$condition <- factor(toplot$condition,levels=c("acetate005","acetate020","glycerol040","glucose020","glucoseaa020"))
+full_noise_cv$condition <- factor(full_noise_cv$condition,levels=c("acetate005","acetate020","glycerol040","glucose020","glucoseaa020"))
+
+toplot %>% 
+  arrange(condition) %>%
+  ggplot()+
+  geom_col(aes(datatype,mean_cv2_c,fill=condition))+
+  #geom_hline(aes(yintercept=exp_r),linetype="dashed",col="red") + 
+  geom_hline(data=full_noise_cv,aes(yintercept=mean_cv2_c),linetype="dashed")+
+  geom_errorbar(aes(x=datatype,ymax=mean_cv2_c+sd_cv2_c,ymin=mean_cv2_c-sd_cv2_c))+
+  facet_grid(condition~.)+
+  theme_cowplot()+
+  guides(fill=guide_legend("Condition"))+
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))+
+  theme(axis.title.x=element_blank())+
+  ylab(expression(~CV^2))+
+  coord_cartesian(ylim=c(0,0.20))
+
+ggsave("./figures/r1_final.pdf",width=8,height=11)
+```
+
+## How does noise changes together with the growth rate
+
+```{r}
+# To compute mean growth rate, take 200 random observations from the data, compute the sd using the uncertainty on the posterior, and then, compute the weighted mean.
+# Then, compute the error bar on that many observations.
+# Use random_selection_no_replacement
+
+if(!exists("mycluster")){
+  mycluster <- min(30, parallel::detectCores()-1) %>%  # do not use more than 30 cores
+    default_cluster() %>% cluster_library( # load currently loaded packages on each core
+      names(sessionInfo()$otherPkgs))
+  
+  cluster_copy(mycluster,c("fit_exp_elongation_predict","fit_exp_elongation_slope","fit_exp_elongation_sd_slope","fit_exp_elongation_intercept","random_selection_no_replacement","N","N0"))
+}
+
+cluster_copy(mycluster,c("fit_exp_elongation_predict","fit_exp_elongation_slope","fit_exp_elongation_sd_slope","fit_exp_elongation_intercept","random_selection_no_replacement","N","N0"))
+
+
+N <- 2000
+#N0 <- 10
+
+experimental_data_folder <- "/scicore/home/nimwegen/rocasu25/Documents/Projects/biozentrum/gfp_fluctuations_project/denoised_data"
+
+experimental_data <- lapply(experimental_data_folder,function(.l){
+  list.files(path=.l,pattern="denoised.csv$",recursive = TRUE,full.names=TRUE)}) %>% 
+  unlist() %>% 
+  lapply(function(.l) readr::read_csv(.l) %>% 
+           mutate(path=.l)) %>% 
+  do.call(rbind, .)
+
+gr_df <- experimental_data %>% 
+  group_by(condition,promoter) %>% 
+  dplyr::sample_n(N,replace=FALSE) %>% 
+  #ungroup() %>% 
+  #group_by(sampling,condition,promoter) %>% 
+  mutate(var_gr=abs(mean(lambda^2+cov_ll)-mean(lambda)^2),na.rm=TRUE) %>%
+  mutate(wtot_gr=sum(1/var_gr)) %>%
+  mutate(w_gr=1/var_gr) %>% 
+  mutate(mean_gr=sum(lambda*w_gr)/wtot_gr,na.rm=TRUE) %>%
+  mutate(var_var_gr=sum(w_gr*(lambda-mean_gr)**2)/(wtot_gr)*N/(N-1)) %>% 
+  mutate(se_gr=sqrt(var_var_gr)/sqrt(N)) %>% 
+  ungroup() %>% 
+  distinct(condition,promoter,se_gr,mean_gr)
+
+toplot %>% 
+  select(condition,promoter,datatype,mean_cv2_c,sd_cv2_c) %>% 
+  filter(datatype %in% c("allnoisesources","experimentaldata")) %>% 
+  pivot_wider(names_from = c("datatype"),values_from = c("mean_cv2_c","sd_cv2_c")) %>% 
+  ggplot()+
+  geom_point(aes(mean_cv2_c_allnoisesources,mean_cv2_c_experimentaldata,col=condition),size=3)+
+  geom_errorbar(aes(x=mean_cv2_c_allnoisesources,ymin=mean_cv2_c_experimentaldata-sd_cv2_c_experimentaldata,ymax=mean_cv2_c_experimentaldata+sd_cv2_c_experimentaldata,col=condition),width=0)+
+  geom_errorbarh(aes(y=mean_cv2_c_experimentaldata,xmin=mean_cv2_c_allnoisesources-sd_cv2_c_allnoisesources,xmax=mean_cv2_c_allnoisesources+sd_cv2_c_allnoisesources,col=condition),width=0)+
+  geom_abline(aes(slope=1,intercept=0),col="red",linetype="dashed")+
+  theme_cowplot()+
+  xlab(expression("Simulations concentration"~CV^2))+
+  ylab(expression("Experiments concentration"~CV^2))+
+  scale_colour_discrete(labels=ylabels)+
+  labs(colour='Conditions')+
+  xlim(0,0.2)+
+  ylim(0,0.2)
+
+ggsave("./figures/cv_comparison_rank1.pdf",width=4,height=4)
+
+```

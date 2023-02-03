@@ -1,0 +1,58 @@
+---
+title: "cross_correlation_plots.Rmd"
+author: "Dany Chauvin"
+date: '2022-12-19'
+output: html_document
+---
+
+# Importing all denoised data
+
+```{r}
+source("./mother_machine_experiments_toolbox/load_functions_and_packages.R")
+experimental_data_folder <- "/scicore/home/nimwegen/rocasu25/Documents/Projects/biozentrum/gfp_fluctuations_project/denoised_data"
+```
+
+```{r}
+experimental_data <- lapply(experimental_data_folder,function(.l){
+  list.files(path=.l,pattern="denoised.csv$",recursive = TRUE,full.names=TRUE)}) %>% 
+  unlist() %>% 
+  lapply(function(.l) readr::read_csv(.l) %>% 
+           mutate(path=.l)) %>% 
+  do.call(rbind, .)
+```
+
+# Plotting cross-correlations
+
+```{r}
+experimental_data$condition <- factor(experimental_data$condition,levels=c("acetate005","acetate020","glycerol040","glucose020","glucoseaa020"))
+
+experimental_data %>% 
+  left_join(gr_df,by=c("condition","promoter")) %>% 
+  group_by(promoter,condition) %>% 
+  mutate(corlq=cor(lambda,q)) %>% 
+  #mutate(mean_gr=mean(alpha_oriented_bbox*3600/log(2))) %>%
+  #mutate(sd_gr=sd(alpha_oriented_bbox*3600/log(2))) %>% 
+  ungroup() %>% 
+  mutate(mean_gr=mean_gr*60/log(2),
+         se_gr=se_gr*60/log(2)) %>% 
+  distinct(promoter,condition,mean_gr,corlq,se_gr) %>% 
+  ggplot()+
+  geom_point(aes(mean_gr,corlq,col=condition),size=3)+
+  geom_errorbarh(aes(y=corlq,xmin=mean_gr-se_gr,xmax=mean_gr+se_gr,col=condition))+
+  theme_cowplot()+
+  #scale_x_continuous(trans="log10")+
+  ylab("Growth-rate Production Correlation")+
+  xlab("Mean Growth Rate ("~h^-1~")")+
+  scale_colour_discrete(labels=ylabels)+
+  labs(colour='Conditions')+
+  xlim(c(0,2.5))+
+  ylim(c(-0.2,0.6))
+
+ggsave("./figures/hi1_correlations_vs_mean_growth_rates.pdf", height=4, width=7)
+```
+
+
+
+
+
+TO BE REWRITTEN WITH BETTER SAMPLING !

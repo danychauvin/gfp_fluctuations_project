@@ -1,0 +1,46 @@
+vector,promoter,date,setup,condition,frames,time_step_min,master,duration_h,curation,moma_version,segmentation_model,gl_width,master_type,comment,gls,vertical offset,pruning,old_status,new_status
+ch,hi1,20200812,stacy,m9+ace 0.2,0-Inf,18.75,vng76,48,202008_deep_moma,unknown,unknown,0.8,mxDIMM2L,tilted,,,,old_curation,
+ch,hi1,20220824,momo,m9+ace 0.2,0-Inf,12,vng79,40,202208_deep_moma,0.4.0-6a6039e3,model_20210715_5b27d7aa,0.8,mxDIMM2L,all ok but cells are growing fast,35,100,no_need_to_be_fixed,ready,ready
+ch,hi1,20220831,momo,m9+ace 0.2,0-Inf,12,vng79,40,202208_deep_moma,0.4.0-6a6039e3,model_20210715_5b27d7aa,0.65,mxDIMM2L,,,,,gl_too_tight,
+ch,hi1,20190515,stacy,m9+gly 0.4,440-Inf,6,vng20,40,202208_deep_moma,0.6.0-beta9+086e15f6,model_20210715_5b27d7aa,0.8,mxDIMM,,,100,,ready,ready
+ch,hi1,20210712,stacy,m9+gly 0.4,,6,vng80,6,not_done,NA,,0.8,mxDIMM2L,,,,,not_curated,
+ch,hi1,20210715,stacy,m9+gly 0.4,,6,vng80,20,not_done,NA,,0.8,mxDIMM2L,,,,,not_curated,
+ch,hi1,20190515,stacy,m9+glu 0.2,0-440,3,vng20,20,202208_deep_moma_batch,0.6.0-beta9+086e15f6,model_20210715_5b27d7aa,0.8,mxDIMM,,,100,,ready,ready
+ch,hi1,20190916,stacy,m9+glu 0.2,,3,vng64,11,not_done,NA,,1.15,mxDIMM3Lf,,,,,not_curated,
+ch,hi1,20210423,stacy,m9+glu 0.2,,3,vng78,11,202008_deep_moma,unknown,unknown,0.9,mxDIMM2L,,,,,,
+ch,hi1,20210712,stacy,m9+glu 0.2,,1.5,vng80,6,not_done,NA,,0.8,mxDIMM2L,no_fluo,,,,not_curated,
+ch,hi1,20210715,stacy,m9+glu 0.2,,3,vng80,6,not_done,NA,,0.8,mxDIMM2L,,,,,not_curated,
+ch,hi1,20220707,momo,m9+glu 0.2,0-Inf,3,vng22,20,202208_deep_moma,0.4.0-6a6039e3,model_20210715_5b27d7aa,0.8,mxDIMM,,,100,,ready,
+ch,hi1,20200516,stacy,m9+glu 0.2+aa,,3,vng80,11,2020_legacy_moma,unknown,unknown,,mxDIMM2L,,,,,,
+ch,hi1,20200516,stacy,m9+glu 0.2+aa,,3,vng80,11,2020_legacy_moma,unknown,unknown,,mxDIMM2L,,,,,,
+ch,hi1,20210423,stacy,m9+glu 0.2+aa,,1.5,vng78,11,202208_deep_moma,unknown,unknown,,mxDIMM2L,,,,,,
+ch,hi1,20200417,stacy,m9+glu 0.2+ez_synthetic_medium,,1.5,vng80,20,2020_legacy_moma,,,,mxDIMM2L,,,,,,
+ch,hi1,20190906,stacy,m9+lac 0.2,,4.5,vng20,18,not_done,,,,mxDIMM,,,,,not_curated,
+ch,hi1,20220506,stacy,m9+glu_low_concentrations,,3,vng20,,,0.4.0-6a6039e3,model_20210715_5b27d7aa,,MxDIMM3Lf (0.7 um),,,,,,
+ch,hi1,20220921,momo,m9+glu 0.2+aa,0-Inf,1.5,vng80,22,202208_deep_moma_batch,0.6.0-beta9+086e15f6,model_20210715_5b27d7aa,0.8,mxDIMM2L,,,115,,ready,ready
+ch,med3,20220707,momo,m9+glu 0.2,0-Inf,3,vng22,20,202208_deep_moma,0.4.0-6a6039e3,model_20210715_5b27d7aa,0.8,mxDIMM,,12,100,,ready,
+ch,rplN,20220707,momo,m9+glu 0.2,0-Inf,3,vng22,20,202208_deep_moma,0.4.0-6a6039e3,model_20210715_5b27d7aa,0.8,mxDIMM,,11,100,,ready,
+ch,rrnB,20220707,momo,m9+glu 0.2,0-Inf,3,vng22,20,202208_deep_moma,0.4.0-6a6039e3,model_20210715_5b27d7aa,0.8,mxDIMM,,8,100,,ready,
+ch,med3,20190529,stacy,m9+glu 0.2,0-220,3,vng20,20,202208_deep_moma_batch,0.6.0-beta9+086e15f6,model_20210715_5b27d7aa,0.8,mxDIMM,,19,100,,ready,
+ch,rplN,20190529,stacy,m9+glu 0.2,0-220,3,vng20,20,202208_deep_moma_batch,0.6.0-beta9+086e15f6,model_20210715_5b27d7aa,0.8,mxDIMM,,14,100,,ready,
+ch,rrnB,20190730,stacy,m9+glu 0.2,0-241,3,vng20,20,202208_deep_moma_batch,0.6.0-beta9+086e15f6,model_20210715_5b27d7aa,0.8,mxDIMM,,15,100,,ready,
+ch,med3,20190529,stacy,m9+gly 0.2,220-240,3,vng20,20,202208_deep_moma_batch,0.6.0-beta9+086e15f6,model_20210715_5b27d7aa,0.8,mxDIMM,,19,100,,ready,
+ch,rplN,20190529,stacy,m9+gly 0.2,220-240,3,vng20,20,202208_deep_moma_batch,0.6.0-beta9+086e15f6,model_20210715_5b27d7aa,0.8,mxDIMM,,14,100,,ready,
+ch,rrnB,20190730,stacy,m9+gly 0.2,241-481,3,vng20,20,202208_deep_moma_batch,0.6.0-beta9+086e15f6,model_20210715_5b27d7aa,0.8,mxDIMM,,15,100,,ready,
+ch,hi3,20190529,stacy,m9+gly 0.2,220-240,3,vng20,20,202208_deep_moma_batch,0.6.0-beta9+086e15f6,model_20210715_5b27d7aa,0.8,mxDIMM,,23,100,,ready,
+ch,hi3,20190529,stacy,m9+glu 0.2,0-220,3,vng20,20,202208_deep_moma_batch,0.6.0-beta9+086e15f6,model_20210715_5b27d7aa,0.8,mxDIMM,,23,100,,ready,
+ch,med2,20190515,stacy,m9+glu 0.2,0-440,3,vng20,20,202208_deep_moma_batch,0.6.0-beta9+086e15f6,model_20210715_5b27d7aa,0.8,mxDIMM,,13,100,,ready,
+ch,med2,20190515,stacy,m9+gly 0.4,440-Inf,6,vng20,40,202208_deep_moma_batch,0.6.0-beta9+086e15f6,model_20210715_5b27d7aa,0.8,mxDIMM,,13,100,,ready,
+ch,rpmB,20190515,stacy,m9+glu 0.2,0-440,3,vng20,20,202208_deep_moma_batch,0.6.0-beta9+086e15f6,model_20210715_5b27d7aa,0.8,mxDIMM,,13,100,,ready,
+ch,rpmB,20190515,stacy,m9+gly 0.4,440-Inf,6,vng20,40,202208_deep_moma_batch,0.6.0-beta9+086e15f6,model_20210715_5b27d7aa,0.8,mxDIMM,,13,100,,ready,
+ch,med2,20220921,momo,m9+glu 0.2+aa,0-Inf,1.5,vng-87,22,202208_deep_moma_batch,0.6.0-beta9+086e15f6,model_20210715_5b27d7aa,0.8,mxDIMM2L,,,115,,ready,
+ch,rrnB,20220921,momo,m9+glu 0.2+aa,0-Inf,1.5,vng-87,22,202208_deep_moma_batch,0.6.0-beta9+086e15f6,model_20210715_5b27d7aa,0.8,mxDIMM2L,,,115,,ready,
+ch,hi3,20221111,momo,m9+glu 0.2+aa,0-Inf,1.5,vng-87,22,202208_deep_moma_batch,0.6.0-beta9+086e15f6,model_20210715_5b27d7aa,0.8,mxDIMM2L,,,95,,ready,
+ch,med3,20221111,momo,m9+glu 0.2+aa,0-Inf,1.5,vng-87,22,202208_deep_moma_batch,0.6.0-beta9+086e15f6,model_20210715_5b27d7aa,0.8,mxDIMM2L,,,95,,ready,
+ch,rpmB,20221111,momo,m9+glu 0.2+aa,0-Inf,1.5,vng-87,22,202208_deep_moma_batch,0.6.0-beta9+086e15f6,model_20210715_5b27d7aa,0.8,mxDIMM2L,,,95,,ready,
+ch,rplN,20221111,momo,m9+glu 0.2+aa,0-Inf,1.5,vng-87,22,202208_deep_moma_batch,0.6.0-beta9+086e15f6,model_20210715_5b27d7aa,0.8,mxDIMM2L,,,95,,ready,
+ch,hi1,20221121,momo,m9+ace 0.05,0-334,12,vng79,66.8,202301_deep_moma_batch,/scicore/home/nimwegen/GROUP/Moma/MM_Analysis/builds/unstable_2023011 2__moma_v0.6.0-beta14-02af6055/Modules,model_20210715_5b27d7aa,0.8,mxDIMM2L,,29,90,fixed,ready,ready
+ch,med3,20220824,momo,m9+ace 0.2,0-Inf,12,vng79,40,202208_deep_moma,0.4.0-6a6039e3,model_20210715_5b27d7aa,0.8,mxDIMM2L,all ok but cells are growing fast,9,100,no_need_to_be_fixed,ready,ready
+ch,rplN,20220824,momo,m9+ace 0.2,0-Inf,12,vng79,40,202208_deep_moma,0.4.0-6a6039e3,model_20210715_5b27d7aa,0.8,mxDIMM2L,all ok but cells are growing fast,12,100,no_need_to_be_fixed,ready,ready
+ch,6300,20220824,momo,m9+ace 0.2,0-Inf,12,vng79,40,202208_deep_moma,0.4.0-6a6039e3,model_20210715_5b27d7aa,0.8,mxDIMM2L,all ok but cells are growing fast,13,100,no_need_to_be_fixed,ready,ready
+ch,rrnB,20220824,momo,m9+ace 0.2,0-Inf,12,vng79,40,202208_deep_moma,0.4.0-6a6039e3,model_20210715_5b27d7aa,0.8,mxDIMM2L,all ok but cells are growing fast,13,100,no_need_to_be_fixed,ready,ready

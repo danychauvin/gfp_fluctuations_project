@@ -1,0 +1,138 @@
+---
+title: "simulations_hi1.Rmd"
+author: "Dany Chauvin"
+date: '2023-01-24'
+output: html_document
+---
+
+```{r}
+source("../mother_machine_experiments_toolbox/load_functions_and_packages.R")
+#data_folder <- "/scicore/home/nimwegen/rocasu25/Documents/Projects/biozentrum/gfp_fluctuations_project/hybrid_simulations_output/hybrid_simulations_20221219_10h"
+simulation_data_folder <- "/scicore/home/nimwegen/rocasu25/Documents/Projects/biozentrum/gfp_fluctuations_project/denoising_raw_data/denoising_20230201134400/integration"
+#experimental_data_folder <- "/scicore/home/nimwegen/rocasu25/Documents/Projects/biozentrum/gfp_fluctuations_project/denoised_data"
+experimental_data_folder <- "/scicore/home/nimwegen/rocasu25/Documents/Projects/biozentrum/gfp_fluctuations_project/denoised_data_complete_cycles"
+source("../mother_machine_experiments_toolbox/load_simulation_data.R")
+```
+
+# Sample and plot the contributions of each process, all ranks, only after 3 doubling time
+
+In the following, we randomly sample observations from the dataset. And we repeat this 10 times to obtain error bars on CV computation.
+
+```{r}
+N <- 200
+N0 <- 10
+
+if(!exists("mycluster")){
+  mycluster <- min(30, parallel::detectCores()-1) %>%  # do not use more than 30 cores
+    default_cluster() %>% cluster_library( # load currently loaded packages on each core
+      names(sessionInfo()$otherPkgs))
+  
+  cluster_copy(mycluster,c("fit_exp_elongation_predict","fit_exp_elongation_slope","fit_exp_elongation_sd_slope","fit_exp_elongation_intercept","random_selection_no_replacement","N","N0"))
+}
+
+cluster_copy(mycluster,c("fit_exp_elongation_predict","fit_exp_elongation_slope","fit_exp_elongation_sd_slope","fit_exp_elongation_intercept","random_selection_no_replacement","N","N0"))
+
+conditions <- c("acetate005","acetate020","glycerol040","glucose020","glucoseaa020")
+
+doubling_times_df <- experimental_data %>% 
+  filter(condition %in% conditions) %>% 
+  group_by(condition,promoter,cell) %>% 
+  sample_n(1) %>% 
+  ungroup %>% 
+  group_by(condition,promoter) %>% 
+  mutate(#w=sum(1/abs(cov_ll)),
+         #w_i=1/abs(cov_ll),
+         #mean_l=sum(lambda*w_i)*1/w,
+         mean_l=mean(lambda,.na.rm=TRUE),
+         mean_doubling_time=1/(mean_l*60/log(2))) %>% 
+  ungroup() %>% 
+  distinct(condition,mean_doubling_time) %>% 
+  mutate(time_interval=3*mean_doubling_time)
+
+noise_contribution_data_with_t_interval <- noise_contribution_data %>% 
+  filter(condition %in% conditions) %>% 
+  left_join(doubling_times_df,by=c("condition"))
+
+noise_contribution_data_sampled <- noise_contribution_data_with_t_interval %>% 
+  #semi_join(selected_conditions,by=c("promoter","mean_cell_rank","condition")) %>% 
+  group_by(condition) %>% 
+  mutate(time_h_rescaled=time_sec/3600-min(time_sec)/3600) %>% 
+  filter(time_h_rescaled>time_interval) %>% 
+  ungroup() %>% 
+  group_by(cell,datatype) %>% 
+  partition(cluster=mycluster) %>%
+  arrange(time_sec) %>% 
+  mutate(alpha=fit_exp_elongation_slope(time_sec,length_um)) %>% 
+  mutate(lambda_cell=mean(lambda*60/log(2),na.remove=TRUE)) %>% 
+  mutate(q_cell=mean(q,na.remove=TRUE)) %>% 
+  #mutate(q_full_cellcycle=(last(gfp_nb_m)-first(gfp_nb_m))/(last(length_um_m)-first(length_um_m))*alpha) %>% 
+  collect() %>% 
+  ungroup() %>% 
+  group_by(condition,promoter,datatype) %>% 
+  partition(cluster=mycluster) %>%
+  do((function(.df){
+    .new_df <- random_selection_no_replacement(.df,N,N0)
+    return(.new_df)})
+    (.)) %>% 
+  collect() %>% 
+  ungroup()
+
+datatypes <- c("experimentaldata","allnoisesources","noprodnoise","nogrowthnoise","nodivisionnoise","onlyprodnoise","onlygrowthnoise","onlydivisionnoise","nonoise")
+
+full_noise_cv <- noise_contribution_data_sampled %>% 
+  filter(datatype=="allnoisesources") %>%
+  mutate(c=gfp_nb/length_um) %>% 
+  group_by(condition,sampling,datatype) %>% 
+  mutate(mean_c=mean(c)) %>%
+  mutate(sd_c=sd(c,na.rm=TRUE)) %>%
+  mutate(cv2_c=(sd_c/mean_c)**2) %>%
+  mutate(cv_c=(sd_c/mean_c)) %>%
+  ungroup() %>% 
+  distinct(condition,sampling,datatype,.keep_all=TRUE) %>% 
+  group_by(condition,datatype) %>% 
+  mutate(mean_cv2_c=mean(cv2_c,na.rm=TRUE),
+         sd_cv2_c=sd(cv2_c,na.rm=TRUE)) %>% 
+  mutate(mean_cv_c=mean(cv_c,na.rm=TRUE),
+         sd_cv_c=sd(cv_c,na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  distinct(condition,datatype,.keep_all=TRUE)
+
+toplot <- noise_contribution_data_sampled %>% 
+  filter(datatype %in% datatypes) %>% 
+  group_by(condition,sampling,datatype) %>% 
+  mutate(mean_c=mean(gfp_nb/length_um)) %>%
+  mutate(sd_c=sd(gfp_nb/length_um)) %>%
+  mutate(cv2_c=(sd_c/mean_c)**2) %>% 
+  mutate(cv_c=(sd_c/mean_c)) %>%
+  ungroup() %>% 
+  distinct(condition,sampling,datatype,.keep_all=TRUE) %>% 
+  group_by(condition,datatype) %>% 
+  mutate(mean_cv2_c=mean(cv2_c,na.rm=TRUE),
+         sd_cv2_c=sd(cv2_c,na.rm=TRUE)) %>% 
+   mutate(mean_cv_c=mean(cv_c,na.rm=TRUE),
+         sd_cv_c=sd(cv_c,na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  distinct(condition,datatype,.keep_all=TRUE)
+
+toplot$datatype <- factor(toplot$datatype,levels=datatypes)
+toplot$condition <- factor(toplot$condition,levels=c("acetate005","acetate020","glycerol040","glucose020","glucoseaa020"))
+full_noise_cv$condition <- factor(full_noise_cv$condition,levels=c("acetate005","acetate020","glycerol040","glucose020","glucoseaa020"))
+
+toplot %>% 
+  filter(datatype %in% c(c("experimentaldata","allnoisesources","noprodnoise","nogrowthnoise","nodivisionnoise","nonoise"))) %>% 
+  arrange(condition) %>%
+  ggplot()+
+  geom_col(aes(datatype,mean_cv2_c))+#fill=condition))+
+  #geom_hline(aes(yintercept=exp_r),linetype="dashed",col="red") + 
+  geom_hline(data=full_noise_cv,aes(yintercept=mean_cv2_c),linetype="dashed")+
+  geom_errorbar(aes(x=datatype,ymax=mean_cv2_c+sd_cv2_c,ymin=mean_cv2_c-sd_cv2_c))+
+  facet_wrap(~condition)+
+  theme_cowplot()+
+  #guides(fill=guide_legend("Condition"))+
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))+
+  theme(axis.title.x=element_blank())+
+  ylab(expression(~CV^2))+
+  coord_cartesian(ylim=c(0,0.2))
+
+ggsave("./figures/all_contributions_all_ranks.pdf",width=10,height=10)
+```

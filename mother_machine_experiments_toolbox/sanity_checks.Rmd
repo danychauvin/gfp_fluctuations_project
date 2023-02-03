@@ -1,0 +1,98 @@
+---
+title: "sanity_checks"
+author: "Dany Chauvin"
+date: '2022-10-05'
+output: html_document
+---
+
+Some code to "post deep moma" check agreement between deep moma curation and imported data.
+
+## Number of full cell cycles per growth lane, per cell rank
+
+```{r}
+myframes_complete %>% 
+  #filter(condition=="glucoseaa") %>%
+  distinct(promoter,condition,date,pos,gl_number,cell,mean_cell_rank) %>% 
+  group_by(condition,promoter,date,pos,gl_number,mean_cell_rank) %>% 
+  arrange(pos) %>% 
+  #filter(mean_cell_rank>=2) %>% 
+  count()
+```
+
+## Number of cell cycles per growth lanes
+
+```{r}
+myframes_complete %>% 
+  #filter(condition=="glucoseaa") %>%
+  distinct(promoter,condition,date,pos,gl_number,cell,mean_cell_rank) %>% 
+  group_by(condition,promoter,date,pos,gl_number) %>% 
+  arrange(pos) %>% 
+  #filter(mean_cell_rank>=2) %>% 
+  count()
+```
+
+
+# Number of cells per condition, per mean cell rank
+
+```{r}
+myframes_complete %>% 
+  #filter(condition=="glucoseaa") %>%
+  distinct(promoter,condition,date,pos,gl_number,cell,mean_cell_rank) %>% 
+  group_by(condition,promoter,mean_cell_rank) %>% 
+  arrange(pos) %>% 
+  #filter(mean_cell_rank>=2) %>% 
+  count()
+```
+
+Example: Glucoseaa, Pos0, GL8, 2 cells with mean_cell_rank 2, ok, 1 cell with mean_cell_rank 4, problematic
+```{r}
+myframes_complete %>% 
+  filter(condition=="glucoseaa") %>%
+  group_by(cell) %>% 
+  mutate(mean_cell_rank=round(mean(cell_rank,na.rm=TRUE),0)) %>% 
+  ungroup() %>% 
+  #distinct(promoter,condition,date,pos,gl_number,cell,mean_cell_rank,.keep_all=TRUE) %>% 
+  filter(gl_number==8,pos==0,mean_cell_rank %in% c(2,4)) %>% 
+  select(cell,cell_rank,frame,mean_cell_rank,vertical_top,length_um) %>% 
+  group_by(cell) %>% 
+  arrange(frame) %>% 
+  mutate(dl=last(length_um)-first(length_um)) %>% 
+  ungroup() %>% 
+  mutate(true_frame=frame+1)
+```
+
+Example: Glucoseaa, Pos0, GL28: everything alright
+```{r}
+myframes_complete %>% 
+  filter(condition=="glucoseaa") %>%
+  group_by(cell) %>% 
+  mutate(mean_cell_rank=round(mean(cell_rank,na.rm=TRUE),0)) %>% 
+  ungroup() %>% 
+  #distinct(promoter,condition,date,pos,gl_number,cell,mean_cell_rank,.keep_all=TRUE) %>% 
+  filter(gl_number==28,pos==0,mean_cell_rank %in% c(2,3,4)) %>% 
+  select(cell,cell_rank,frame,mean_cell_rank,vertical_top,length_um) %>% 
+  group_by(cell) %>% 
+  arrange(frame) %>% 
+  mutate(dl=last(length_um)-first(length_um)) %>% 
+  ungroup() %>% 
+  mutate(true_frame=frame+1) %>% 
+  arrange(cell,frame)
+```
+
+Example: Glucoseaa, Pos0, GL40: everything alright
+```{r}
+myframes_complete %>% 
+  filter(condition=="glucoseaa") %>%
+  group_by(cell) %>% 
+  mutate(mean_cell_rank=round(mean(cell_rank,na.rm=TRUE),0)) %>% 
+  ungroup() %>% 
+  #distinct(promoter,condition,date,pos,gl_number,cell,mean_cell_rank,.keep_all=TRUE) %>% 
+  filter(gl_number==40,pos==0,mean_cell_rank %in% c(2,3,4)) %>% 
+  select(cell,cell_rank,frame,mean_cell_rank,vertical_top,length_um) %>% 
+  group_by(cell) %>% 
+  arrange(frame) %>% 
+  mutate(dl=last(length_um)-first(length_um)) %>% 
+  ungroup() %>% 
+  mutate(true_frame=frame+1) %>% 
+  arrange(cell,frame)
+```

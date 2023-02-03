@@ -1,0 +1,439 @@
+---
+title: "Fluorescence equivalence"
+author: "Dany Chauvin"
+date: '2022-10-10'
+output: html_document
+---
+
+```{r message=FALSE,warning=FALSE}
+source("./mother_machine_experiments_toolbox/loadFunctionsAndPackages.R")
+path_to_MM_data_summary <- "./dataList.csv"
+source("./mother_machine_experiments_toolbox/readMMData_20220131.R")
+source("./mother_machine_experiments_toolbox/transformMMData.R")
+source("./mother_machine_experiments_toolbox/inference_simulations_useful_functions.R")
+path_to_MM_data_denoised <- "./20220919_predicted_data.csv"
+path_to_inferred_parameters <- "./20220919_final_parameters.csv"
+source("./mother_machine_experiments_toolbox/import_denoised_data.R")
+```
+
+```{r}
+myframes %>% 
+  group_by(date,condition,promoter) %>% 
+  summarise(m_c=mean(gfp_nb/length_um_oriented_bbox,na.rm=TRUE))
+
+myframes %>% group_by(date,condition,promoter) %>% 
+  count()
+```
+
+# Establishing calibration curve between experimental setup 1 and 3 (respectively Stacy and Momo)
+
+```{r}
+data_to_plot <- myframes_complete %>% 
+  ungroup() %>% 
+  filter(condition %in% c("glucose")) %>% 
+  filter(promoter %in% c("hi1","rrnB","rplN","med3")) %>% 
+  group_by(cell) %>% 
+  mutate(mean_concentration=mean(gfp_nb/length_um,na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  distinct(cell,.keep_all=TRUE) %>% 
+  group_by(condition,promoter,experimental_setup) %>% 
+  mutate(mean_mean_concentration=mean(mean_concentration,na.rm=TRUE),
+         sd_mean_concentration=sd(mean_concentration,na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  distinct(condition,promoter,mean_mean_concentration,sd_mean_concentration,experimental_setup)
+```
+
+```{r}
+#Calibration in log space
+
+data_to_plot %>% 
+  pivot_wider(values_from = c("mean_mean_concentration","sd_mean_concentration"),names_from = c("experimental_setup")) %>% 
+  mutate(s=compute_slope_errxy_robust(log(mean_mean_concentration_3),log(mean_mean_concentration_1)),
+         i=compute_intercept_errxy_robust(log(mean_mean_concentration_3),log(mean_mean_concentration_1)),
+         sd=compute_sdslope_errxy_robust(log(mean_mean_concentration_3),log(mean_mean_concentration_1))) %>% 
+  ggplot()+
+  geom_point(aes(log(mean_mean_concentration_3),log(mean_mean_concentration_1),col=promoter))+
+  geom_errorbar(aes(x=log(mean_mean_concentration_3),ymin=log(mean_mean_concentration_1-sd_mean_concentration_1),ymax=log(mean_mean_concentration_1+sd_mean_concentration_1),col=promoter),width=0)+
+  geom_errorbarh(aes(y=log(mean_mean_concentration_1),xmin=log(mean_mean_concentration_3-sd_mean_concentration_3),xmax=log(mean_mean_concentration_3+sd_mean_concentration_3),col=promoter),height=0)+
+  geom_line(aes(log(mean_mean_concentration_3),log(mean_mean_concentration_3)*s+i),linetype="dashed")
+
+data_to_plot %>% 
+  pivot_wider(values_from = c("mean_mean_concentration","sd_mean_concentration"),names_from = c("experimental_setup")) %>% 
+  mutate(s=compute_slope_errxy_robust(log(mean_mean_concentration_3),log(mean_mean_concentration_1)),
+         i=compute_intercept_errxy_robust(log(mean_mean_concentration_3),log(mean_mean_concentration_1)),
+         sd=compute_sdslope_errxy_robust(log(mean_mean_concentration_3),log(mean_mean_concentration_1)))
+```
+
+So according to this, the best conversion factor is exp(-0.389127)=0.678. Let's see how this is scaling. Because I also have to take into consideration, the fact that the cells did not grew at the exact same speed.
+
+# Looking at growth rates
+
+```{r}
+data_to_plot <- myframes_complete %>% 
+  ungroup() %>% 
+  filter(condition %in% c("glucose")) %>% 
+  filter(promoter %in% c("hi1","rrnB","rplN","med3")) %>% 
+  distinct(cell,.keep_all=TRUE) %>% 
+  group_by(condition,promoter,experimental_setup) %>% 
+  mutate(mean_gr=mean(alpha_oriented_bbox*3600/log(2),na.rm=TRUE),
+         sd_gr=sd(alpha_oriented_bbox*3600/log(2),na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  distinct(condition,promoter,mean_gr,sd_gr,experimental_setup)
+```
+
+```{r}
+#Calibration in log space
+data_to_plot %>% 
+  pivot_wider(values_from = c("mean_gr","sd_gr"),names_from = c("experimental_setup")) %>% 
+  mutate(s=compute_slope_errxy_robust(mean_gr_3,mean_gr_1),
+         i=compute_intercept_errxy_robust(mean_gr_3,mean_gr_1),
+         sd=compute_sdslope_errxy_robust(mean_gr_3,mean_gr_1)) %>% 
+  ggplot()+
+  geom_point(aes(mean_gr_3,mean_gr_1,col=promoter))+
+  geom_errorbar(aes(x=mean_gr_3,ymin=mean_gr_1-sd_gr_1,ymax=mean_gr_1+sd_gr_1,col=promoter),width=0)+
+  geom_errorbarh(aes(y=mean_gr_1,xmin=mean_gr_3-sd_gr_3,xmax=mean_gr_3+sd_gr_3,col=promoter),height=0)+
+  geom_abline(aes(slope=1,intercept=0))+
+  coord_cartesian(xlim=c(0.5,1.5),ylim=c(0.5,1.5))
+  #geom_line(aes(mean_gr_3,mean_gr_3*s+i),linetype="dashed")+
+
+data_to_plot %>% 
+  pivot_wider(values_from = c("mean_gr","sd_gr"),names_from = c("experimental_setup")) %>% 
+  mutate(s=compute_slope_errxy_robust(mean_gr_3,mean_gr_1),
+         i=compute_intercept_errxy_robust(mean_gr_3,mean_gr_1),
+         sd=compute_sdslope_errxy_robust(mean_gr_3,mean_gr_1))
+```
+
+Growth-rate are similar in the two experiments: however, it seems that that cells a bit faster in the older experiments compared to the newest. This could explain the higher fluorescence that is witness.
+
+```{r}
+data_to_plot <- myframes_complete %>% 
+  ungroup() %>% 
+  filter(condition %in% c("glucose")) %>% 
+  filter(promoter %in% c("hi1","rrnB","rplN","med3")) %>% 
+  group_by(cell) %>% 
+  mutate(mean_concentration=mean(gfp_nb/length_um,na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  distinct(cell,.keep_all=TRUE) %>% 
+  group_by(condition,promoter,experimental_setup) %>% 
+  mutate(mean_gr=mean(alpha_oriented_bbox*3600/log(2),na.rm=TRUE),
+         sd_gr=sd(alpha_oriented_bbox*3600/log(2),na.rm=TRUE)) %>% 
+  mutate(mean_mean_concentration=mean(mean_concentration,na.rm=TRUE),
+         sd_mean_concentration=sd(mean_concentration,na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  distinct(condition,promoter,mean_mean_concentration,sd_mean_concentration,experimental_setup) %>% 
+  pivot_wider(values_from = c("mean_mean_concentration","sd_mean_concentration"),names_from = c("experimental_setup")) %>% 
+  mutate(ratio=mean_mean_concentration_3/mean_mean_concentration_1)
+
+data_to_plot
+```
+
+Hi1/med3/rplN/rrnB glucose experimental setup 3 are from one date: 20220707.
+The same promoters in glucose for experimental setup 1 are from: 20190515 (hi1), 20190529 (med3 and rplN), 20190730 (rrnB).
+The differences of ratio reflects that the variation of accuracy in our gfp measurements between experimental setup 1 and 3, are of the same order of the actual variations we see between between experiments on the same setup.
+This can be confirmed, further down the line, with other experiments.
+
+
+```{r}
+data_to_plot <- myframes_complete %>% 
+  ungroup() %>% 
+  filter(condition %in% c("glucose")) %>% 
+  filter(promoter %in% c("hi1","rrnB","rplN","med3")) %>% 
+  group_by(cell) %>% 
+  mutate(mean_concentration=mean(gfp_nb/length_um,na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  distinct(cell,.keep_all=TRUE) %>% 
+  group_by(condition,promoter,experimental_setup) %>% 
+  mutate(mean_gr=mean(alpha_oriented_bbox*3600/log(2),na.rm=TRUE),
+         sd_gr=sd(alpha_oriented_bbox*3600/log(2),na.rm=TRUE)) %>% 
+  mutate(mean_mean_concentration=mean(mean_concentration,na.rm=TRUE),
+         sd_mean_concentration=sd(mean_concentration,na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  distinct(condition,promoter,mean_mean_concentration,sd_mean_concentration,experimental_setup,mean_gr,sd_gr)
+  #pivot_wider(values_from = c("mean_mean_concentration","sd_mean_concentration"),names_from = c("experimental_setup")) %>% 
+  #mutate(ratio=mean_mean_concentration_3/mean_mean_concentration_1)
+
+data_to_plot %>% 
+  ggplot()+
+  geom_point(aes(mean_gr,mean_mean_concentration,col=promoter,shape=experimental_setup))+
+  geom_errorbar(aes(x=mean_gr,ymin=mean_mean_concentration-sd_mean_concentration,ymax=mean_mean_concentration+sd_mean_concentration,col=promoter))+
+  scale_y_continuous(trans="log10")+
+  ylab("Mean concentration (#GFP/um)")+
+  xlab("Mean Growth rate (1/h)")
+  #facet_wrap("promoter",scale="free")
+```
+
+```{r}
+data_to_plot <- myframes_complete %>% 
+  ungroup() %>% 
+  filter(condition %in% c("glucose")) %>% 
+  filter(promoter %in% c("hi1","rrnB","rplN","med3")) %>% 
+  group_by(cell) %>% 
+  dplyr::sample_n(1) %>% 
+  mutate(mean_concentration=gfp_nb/length_um) %>% 
+  ungroup() %>% 
+  group_by(promoter,experimental_setup) %>% 
+  dplyr::sample_n(285) %>% 
+  ungroup() %>% 
+  group_by(condition,promoter,experimental_setup) %>% 
+  mutate(mean_gr=mean(alpha_oriented_bbox*3600/log(2),na.rm=TRUE),
+         sd_gr=sd(alpha_oriented_bbox*3600/log(2),na.rm=TRUE),
+         cv_gr=sd_gr/mean_gr) %>% 
+  mutate(mean_mean_concentration=mean(mean_concentration,na.rm=TRUE),
+         sd_mean_concentration=sd(mean_concentration,na.rm=TRUE),
+         cv_mean_concentration=sd_mean_concentration/mean_mean_concentration) %>% 
+  ungroup() %>% 
+  distinct(condition,promoter,experimental_setup,cv_mean_concentration) %>% 
+  pivot_wider(values_from = c("cv_mean_concentration"),names_from = c("experimental_setup"))
+  #mutate(ratio=mean_mean_concentration_3/mean_mean_concentration_1)
+
+data_to_plot %>% 
+  rename("setup_3"="3") %>% 
+  rename("setup_1"="1") %>% 
+  ggplot()+
+  geom_point(aes(setup_3,setup_1,col=promoter))+
+  geom_abline(aes(slope=1,intercept=0),alpha=0.5)+
+  ylab("CV concentration setup 1")+
+  xlab("CV concentration setup 3")+
+  coord_cartesian(xlim=c(0,0.75),ylim=c(0,0.75))
+  #facet_wrap("promoter",scale="free")
+```
+
+
+```{r}
+data_to_plot <- myframes_complete %>% 
+  ungroup() %>% 
+  filter(condition %in% c("glucose")) %>% 
+  filter(promoter %in% c("hi1","rrnB","rplN","med3")) %>% 
+  group_by(cell) %>% 
+  mutate(mean_concentration=mean(gfp_nb/length_um,na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  distinct(cell,.keep_all=TRUE) %>% 
+  group_by(condition,promoter,experimental_setup) %>% 
+  mutate(mean_gr=mean(alpha_oriented_bbox*3600/log(2),na.rm=TRUE),
+         sd_gr=sd(alpha_oriented_bbox*3600/log(2),na.rm=TRUE)) %>% 
+  mutate(mean_mean_concentration=mean(mean_concentration,na.rm=TRUE),
+         sd_mean_concentration=sd(mean_concentration,na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  distinct(condition,promoter,mean_mean_concentration,sd_mean_concentration,experimental_setup,mean_gr,sd_gr)
+  #pivot_wider(values_from = c("mean_mean_concentration","sd_mean_concentration"),names_from = c("experimental_setup")) %>% 
+  #mutate(ratio=mean_mean_concentration_3/mean_mean_concentration_1)
+
+data_to_plot %>% 
+  ggplot()+
+  geom_point(aes())+
+```
+  
+
+
+Data acquired on Momo, must be downscaled by a factor 11697/13021=0.68
+(to be confirmed and improved with other fluorescence data).
+
+```{r}
+conversion_factor <- 0.8983042
+myframes_complete_corrected <- myframes_complete %>% 
+  mutate(date=as.double(as.character(date))) %>% 
+  mutate(gfp_nb=ifelse(date>20220701,gfp_nb*conversion_factor,gfp_nb))
+
+myframes_complete_corrected %>% 
+  filter(promoter=="hi1") %>% 
+  group_by(date,condition,promoter) %>% 
+  mutate(c=gfp_nb/length_um_oriented_bbox) %>% 
+  mutate(m_c=mean(c,na.rm=TRUE)) %>%
+  mutate(sd_c=sd(c,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  distinct(cell,.keep_all = TRUE) %>% 
+  group_by(date,condition,promoter) %>% 
+  mutate(m_alpha=mean(alpha_oriented_bbox*3600/log(2),na.rm=TRUE)) %>% 
+  mutate(sd_alpha=sd(alpha_oriented_bbox*3600/log(2),na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  distinct(date,condition,promoter,m_c,sd_c,m_alpha,sd_alpha)
+```
+
+```{r}
+myframes_complete_corrected %>% 
+  filter(promoter=="hi1") %>% 
+  group_by(date,condition,promoter) %>% 
+  mutate(c=gfp_nb/length_um_oriented_bbox) %>% 
+  mutate(m_c=mean(c,na.rm=TRUE)) %>%
+  mutate(sd_c=sd(c,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  distinct(cell,.keep_all = TRUE) %>% 
+  group_by(date,condition,promoter) %>% 
+  mutate(m_alpha=mean(alpha_oriented_bbox*3600/log(2),na.rm=TRUE)) %>% 
+  mutate(sd_alpha=sd(alpha_oriented_bbox*3600/log(2),na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  distinct(date,condition,promoter,m_c,sd_c,m_alpha,sd_alpha) %>% 
+  ggplot()+
+  geom_point(aes(m_alpha,m_c,col=interaction(date,condition)))+
+  geom_errorbar(aes(x=m_alpha,ymin=m_c-sd_c,ymax=m_c+sd_c),width=0)+
+  theme_cowplot()
+
+myframes_complete_corrected %>% 
+  filter(promoter=="hi1") %>% 
+  group_by(date,condition,promoter) %>% 
+  mutate(c=gfp_nb/length_um_oriented_bbox) %>% 
+  mutate(m_c=mean(c,na.rm=TRUE)) %>%
+  mutate(sd_c=sd(c,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  distinct(cell,.keep_all = TRUE) %>% 
+  group_by(date,condition,promoter) %>% 
+  mutate(m_alpha=mean(alpha_oriented_bbox*3600/log(2),na.rm=TRUE)) %>% 
+  mutate(sd_alpha=sd(alpha_oriented_bbox*3600/log(2),na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  distinct(date,condition,promoter,m_c,sd_c,m_alpha,sd_alpha) %>% 
+  ggplot()+
+  geom_point(aes(m_alpha,m_c,col=interaction(date,condition)))+
+  geom_errorbar(aes(x=m_alpha,ymin=m_c-sd_c,ymax=m_c+sd_c),width=0)+
+  scale_x_continuous(trans="log10")+
+  theme_cowplot()
+
+myframes_complete_corrected %>% 
+  filter(promoter=="hi1") %>% 
+  group_by(date,condition,promoter) %>% 
+  mutate(c=gfp_nb/length_um_oriented_bbox) %>% 
+  mutate(m_c=mean(c,na.rm=TRUE)) %>%
+  mutate(sd_c=sd(c,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  distinct(cell,.keep_all = TRUE) %>% 
+  group_by(date,condition,promoter) %>% 
+  mutate(m_alpha=mean(alpha_oriented_bbox*3600/log(2),na.rm=TRUE)) %>% 
+  mutate(sd_alpha=sd(alpha_oriented_bbox*3600/log(2),na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  distinct(date,condition,promoter,m_c,sd_c,m_alpha,sd_alpha) %>% 
+  ggplot()+
+  geom_point(aes(m_alpha,m_c,col=interaction(date,condition)))+
+  geom_errorbar(aes(x=m_alpha,ymin=m_c-sd_c,ymax=m_c+sd_c),width=0)+
+  scale_y_continuous(trans="log10")+
+  theme_cowplot()
+
+myframes_complete_corrected %>% 
+  filter(promoter=="hi1") %>% 
+  group_by(date,condition,promoter) %>% 
+  mutate(c=gfp_nb/length_um_oriented_bbox) %>% 
+  mutate(m_c=mean(c,na.rm=TRUE)) %>%
+  mutate(sd_c=sd(c,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  distinct(cell,.keep_all = TRUE) %>% 
+  group_by(date,condition,promoter) %>% 
+  mutate(m_alpha=mean(alpha_oriented_bbox*3600/log(2),na.rm=TRUE)) %>% 
+  mutate(sd_alpha=sd(alpha_oriented_bbox*3600/log(2),na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  distinct(date,condition,promoter,m_c,sd_c,m_alpha,sd_alpha) %>% 
+  ggplot()+
+  geom_point(aes(m_alpha,m_c,col=interaction(date,condition)))+
+  geom_errorbar(aes(x=m_alpha,ymin=m_c-sd_c,ymax=m_c+sd_c),width=0)+
+  scale_y_continuous(trans="log10")+
+  scale_x_continuous(trans="log10")+
+  theme_cowplot()
+```
+
+```{r}
+myframes_complete %>% 
+  mutate(date=as.double(as.character(date))) %>% 
+  filter(date>20220701) %>% 
+  filter(promoter=="hi1") %>% 
+  group_by(date,condition,promoter) %>% 
+  mutate(c=gfp_nb/length_um_oriented_bbox) %>% 
+  mutate(m_c=mean(c,na.rm=TRUE)) %>%
+  mutate(sd_c=sd(c,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  distinct(cell,.keep_all = TRUE) %>% 
+  group_by(date,condition,promoter) %>% 
+  mutate(m_alpha=mean(alpha_oriented_bbox*3600/log(2),na.rm=TRUE)) %>% 
+  mutate(sd_alpha=sd(alpha_oriented_bbox*3600/log(2),na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  distinct(date,condition,promoter,m_c,sd_c,m_alpha,sd_alpha) %>% 
+  ggplot()+
+  geom_point(aes(m_alpha,m_c,col=interaction(date,condition)))+
+  geom_errorbar(aes(x=m_alpha,ymin=m_c-sd_c,ymax=m_c+sd_c),width=0)+
+  theme_cowplot()
+
+myframes_complete %>% 
+  mutate(date=as.double(as.character(date))) %>% 
+  filter(date>20220701) %>% 
+  filter(promoter=="hi1") %>% 
+  group_by(date,condition,promoter) %>% 
+  mutate(c=gfp_nb/length_um_oriented_bbox) %>% 
+  mutate(m_c=mean(c,na.rm=TRUE)) %>%
+  mutate(sd_c=sd(c,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  distinct(cell,.keep_all = TRUE) %>% 
+  group_by(date,condition,promoter) %>% 
+  mutate(m_alpha=mean(alpha_oriented_bbox*3600/log(2),na.rm=TRUE)) %>% 
+  mutate(sd_alpha=sd(alpha_oriented_bbox*3600/log(2),na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  distinct(date,condition,promoter,m_c,sd_c,m_alpha,sd_alpha) %>% 
+  ggplot()+
+  geom_point(aes(m_alpha,m_c,col=interaction(date,condition)))+
+  geom_errorbar(aes(x=m_alpha,ymin=m_c-sd_c,ymax=m_c+sd_c),width=0)+
+  scale_x_continuous(trans="log10")+
+  theme_cowplot()
+
+myframes_complete %>% 
+  mutate(date=as.double(as.character(date))) %>% 
+  filter(date>20220701) %>% 
+  filter(promoter=="hi1") %>% 
+  group_by(date,condition,promoter) %>% 
+  mutate(c=gfp_nb/length_um_oriented_bbox) %>% 
+  mutate(m_c=mean(c,na.rm=TRUE)) %>%
+  mutate(sd_c=sd(c,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  distinct(cell,.keep_all = TRUE) %>% 
+  group_by(date,condition,promoter) %>% 
+  mutate(m_alpha=mean(alpha_oriented_bbox*3600/log(2),na.rm=TRUE)) %>% 
+  mutate(sd_alpha=sd(alpha_oriented_bbox*3600/log(2),na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  distinct(date,condition,promoter,m_c,sd_c,m_alpha,sd_alpha) %>% 
+  ggplot()+
+  geom_point(aes(m_alpha,m_c,col=interaction(date,condition)))+
+  geom_errorbar(aes(x=m_alpha,ymin=m_c-sd_c,ymax=m_c+sd_c),width=0)+
+  scale_y_continuous(trans="log10")+
+  theme_cowplot()
+
+myframes_complete %>% 
+  mutate(date=as.double(as.character(date))) %>% 
+  filter(date>20220701) %>% 
+  filter(promoter=="hi1") %>% 
+  group_by(date,condition,promoter) %>% 
+  mutate(c=gfp_nb/length_um_oriented_bbox) %>% 
+  mutate(m_c=mean(c,na.rm=TRUE)) %>%
+  mutate(sd_c=sd(c,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  distinct(cell,.keep_all = TRUE) %>% 
+  group_by(date,condition,promoter) %>% 
+  mutate(m_alpha=mean(alpha_oriented_bbox*3600/log(2),na.rm=TRUE)) %>% 
+  mutate(sd_alpha=sd(alpha_oriented_bbox*3600/log(2),na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  distinct(date,condition,promoter,m_c,sd_c,m_alpha,sd_alpha) %>% 
+  ggplot()+
+  geom_point(aes(m_alpha,m_c,col=interaction(date,condition)))+
+  geom_errorbar(aes(x=m_alpha,ymin=m_c-sd_c,ymax=m_c+sd_c),width=0)+
+  scale_y_continuous(trans="log10")+
+  scale_x_continuous(trans="log10")+
+  theme_cowplot()
+```
+# Write data for Bjoern
+
+```{r}
+myframes_towrite <- myframes_complete %>% 
+  filter(promoter=="hi1") %>% 
+  filter(date %in% c(20190515,20220824,20220921)) %>% 
+  select(c("date","length_um_oriented_bbox","gfp_nb","cell","parent","time_sec","condition")) %>% 
+  rename(length_um=length_um_oriented_bbox) %>% 
+  group_by(cell) %>% 
+  #mutate(not_complete=any_vars(is.na(.))) %>% 
+  mutate(not_complete=(if_any(everything(), ~ is.na(.)))) %>% 
+  mutate(missing=sum(not_complete)) %>% 
+  filter(missing==0) %>% 
+  ungroup() %>% 
+  arrange(condition,cell,time_sec)
+  #mutate(cell=paste(cell,".1.0",sep="")) %>% 
+  #mutate(parent=paste(parent,".1.0",sep=""))
+```
+
+```{r}
+readr::write_csv(myframes_towrite %>% filter(condition=="acetate"),"./raw_data_20221011/acetate_hi1.csv")
+readr::write_csv(myframes_towrite %>% filter(condition=="glucose"),"./raw_data_20221011/glucose_hi1.csv")
+readr::write_csv(myframes_towrite %>% filter(condition=="glucoseaa"),"./raw_data_20221011/glucoseaa_hi1.csv")
+readr::write_csv(myframes_towrite %>% filter(condition=="glycerol"),"./raw_data_20221011/glycerol_hi1.csv")
+```

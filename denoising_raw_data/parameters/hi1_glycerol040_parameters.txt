@@ -1,0 +1,11 @@
+mean_lambda =  0.0052, 0.00052 
+gamma_lambda = 0.0073, 0.00073
+var_lambda = 1.9e-08, 1.9e-09
+mean_q = 78, 7.8
+gamma_q = 0.037, 0.0037
+var_q = 31, 3.1
+var_x = 5e-04, 5e-05
+var_g = 5, 0.5
+beta = 0
+var_dx = 0.017, 0.0017
+var_dg = 1, 0.1

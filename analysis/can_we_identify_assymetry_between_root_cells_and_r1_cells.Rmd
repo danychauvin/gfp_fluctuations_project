@@ -1,0 +1,307 @@
+---
+title: "Check concentration distributions"
+author: "Dany Chauvin"
+date: '2022-10-13'
+output: html_document
+---
+
+# Importing data
+We assume here, denoised data were already saved in ./denoised_data
+
+```{r message=FALSE,warning=FALSE}
+source("../mother_machine_experiments_toolbox/load_functions_and_packages.R")
+source("../mother_machine_experiments_toolbox/inference_simulations_useful_functions.R")
+source("../mother_machine_experiments_toolbox/load_denoised_data.R")
+```
+
+# Summary of all data sets
+```{r}
+myframes %>% group_by(date,condition,promoter) %>% 
+  count()
+```
+
+# Focus on traces in glucose amino-acid data, where assymetry is supposedly, the largest
+
+```{r}
+myframes %>% 
+  filter(date=="20220921") %>% 
+  filter(mean_cell_rank %in% c(0,1)) %>% 
+  mutate(mean_cell_rank=as.character(mean_cell_rank)) %>% 
+  mutate(c=gfp_nb/length_um) %>% 
+  ggplot()+
+  geom_line(aes(time_sec,c,group=cell,col=mean_cell_rank))+
+  facet_wrap(~paste(pos,gl),ncol=1)
+
+ggsave("./c_versus_time.pdf",width=15,height=60,limitsize = FALSE)
+```
+The root cell always gets less than the r1 cell.
+But how much less on average?
+Make the following table with the data:
+
+|mother cell|r0_daughter_cell|r1_daughter_cell|r0_gfp|r1_gfp|r0_length_um|r1_length_um|
+
+
+```{r}
+cell_rank_df <- tibble(mean_cell_rank_proper=c("r0","r1"),mean_cell_rank=c("0","1"))
+
+myframes_division <- myframes %>% 
+  filter(mean_cell_rank %in% c(0,1)) %>% 
+  mutate(mean_cell_rank=as.character(mean_cell_rank)) %>%
+  left_join(cell_rank_df,by=c("mean_cell_rank")) %>% 
+  mutate(concentration=gfp_nb/length_um) %>% 
+  group_by(cell) %>% 
+  arrange(time_sec) %>% 
+  filter(row_number()==1) %>% 
+  ungroup() %>% 
+  select(parent,condition,promoter,pos,gl,time_sec,frame,cell,length_um,gfp_nb,mean_cell_rank_proper,concentration) %>% 
+  pivot_wider(names_from = c("mean_cell_rank_proper"),values_from = c("cell","length_um","gfp_nb","concentration")) %>% 
+  na.omit() %>% 
+  mutate(ratio_concentration=concentration_r0/concentration_r1) %>% 
+  mutate(ratio_gfp_nb=gfp_nb_r0/gfp_nb_r1) %>% 
+  mutate(ratio_length_um=length_um_r0/length_um_r1) %>% 
+  mutate(alpha_gfp_nb=gfp_nb_r0/(gfp_nb_r0+gfp_nb_r1)) %>% 
+  mutate(alpha_length_um=length_um_r0/(length_um_r0+length_um_r1))
+
+
+conditions <- c("acetate005","acetate020","glycerol040","glucose020","glucoseaa020")
+myframes_division$condition <- factor(myframes_division$condition,levels=conditions)
+
+a <- myframes_division %>% 
+  ggplot()+
+  stat_ecdf(aes(ratio_concentration,col=condition))+
+  geom_vline(aes(xintercept=1),col="red",linetype="dashed",alpha=0.5)+
+  theme_cowplot()+
+  xlab("Concentration ratio")+
+  ylab("CDF")+
+  xlim(0.6,1.1)
+  #facet_wrap(~condition)
+
+b <- myframes_division %>% 
+  ggplot()+
+  stat_ecdf(aes(ratio_gfp_nb,col=condition))+
+  geom_vline(aes(xintercept=1),col="red",linetype="dashed",alpha=0.5)+
+  theme_cowplot()+
+  xlab("GFP ratio")+
+  ylab("CDF")+
+  xlim(0.5,1.5)
+
+c <- myframes_division %>% 
+  ggplot()+
+  stat_ecdf(aes(ratio_length_um,col=condition))+
+  geom_vline(aes(xintercept=1),col="red",linetype="dashed",alpha=0.5)+
+  theme_cowplot()+
+  xlab("Length ratio")+
+  ylab("CDF")+
+  xlim(0.5,1.6)
+
+p <- cowplot::plot_grid(a,b,c,labels=c("A","B","C"))
+p
+
+ggsave("./all_ratio.pdf",width=2*6,height=2*3)
+
+```
+
+Concentration:
+- In all conditions, root cells are less concentrated than r1 cells.
+- This is less strong in acetate005
+
+GFP:
+- In glycerol040: r1 cells have less GFP than r0 cells.
+- In acetate and glucose: r0 and r1 are getting as many.
+- In glucoseaa020: slight bias in favor of the r1 cells which are getting slighlty more.
+
+Length:
+- In all conditions, the root cell is larger than the r1 cell. This effect is larger in glycerol > glucose020 = acetate020 > glucoseaa020 > acetate005.
+
+```{r}
+a <- myframes_division %>% 
+  ggplot()+
+  stat_ecdf(aes(alpha_gfp_nb,col=condition))+
+  geom_vline(aes(xintercept=0.5),col="red",linetype="dashed",alpha=0.5)+
+  theme_cowplot()+
+  xlab("GFP alpha")+
+  ylab("CDF")+
+  xlim(0.4,0.6)
+
+b <- myframes_division %>% 
+  ggplot()+
+  stat_ecdf(aes(alpha_length_um,col=condition))+
+  geom_vline(aes(xintercept=0.5),col="red",linetype="dashed",alpha=0.5)+
+  theme_cowplot()+
+  xlab("Length alpha")+
+  ylab("CDF")+
+  xlim(0.4,0.65)
+
+p <- cowplot::plot_grid(a,b,labels=c("A","B"))
+p
+
+ggsave("./all_alpha.pdf",width=2*6,height=3)
+```
+
+In first approximation (except for glycerol which is really behaving weirdly, and I start to believe that this is due to the fact that these experiments were conducted AFTER glucose), r0 cells get more of the total volume than r1 cells, but r0 and r1 do get the same amount of gfp. This results in the r1 cells being characterized by a higher concentration (on average 10%).
+
+Is that true?
+
+- We do not know for sure, what is the exact time of the division. So the two daughter cells are also growing during that time. And we know that r1 cells are going to grow faster than r0 cells (exponential growth rate). So the ratio of their size should change during that time. Which means that between birth and the snapshot we take, the ratio of size should change in favor of r1 cells. But still, we see that it is in favor of r0 cells, systematically.
+
+- It could be that we are systematically overestimating the size of the mother cell. But this overestimation should be independent of the age of the root cell.
+
+```{r}
+myframes_division %>% 
+  filter(alpha_length_um>0.45) %>% 
+  ggplot()+
+  geom_point(aes(time_sec/60,alpha_length_um),alpha=0.2)+
+  ggpubr::stat_cor(aes(time_sec/60,alpha_length_um),method="pearson") +
+  facet_wrap(~condition,scale="free")+
+  ylab(TeX(r'($\frac{l_0}{l_1+l_0}$)')) +  
+  xlab("time (min)")
+
+ggsave("./length_per_condition_ratio.pdf",width=2*5,height=1*5)
+```
+
+```{r}
+myframes_division %>% 
+  filter(alpha_gfp_nb>0.45) %>% 
+  ggplot()+
+  geom_point(aes(time_sec/60,alpha_gfp_nb),alpha=0.2)+
+  ggpubr::stat_cor(aes(time_sec/60,alpha_gfp_nb),method="pearson") +
+  facet_wrap(~condition,scale="free")+
+  ylab(TeX(r'($\frac{g_0}{g_1+g_0}$)')) +  
+  xlab("time (min)")
+
+ggsave("./gfp_per_condition_ratio.pdf",width=2*5,height=1*5)
+```
+
+
+```{r}
+myframes_division %>% 
+  filter(alpha_length_um>0.45) %>% 
+  ggplot()+
+  geom_point(aes(time_sec/60,ratio_concentration),alpha=0.2)+
+  ggpubr::stat_cor(aes(time_sec/60,ratio_concentration),method="pearson") +
+  facet_wrap(~condition,scale="free")+
+  ylab(TeX(r'($\frac{c_0}{c_1}$)')) +  
+  xlab("time (min)")
+
+ggsave("./concentration_per_condition_ratio.pdf",width=2*5,height=1*5)
+```
+
+```{r}
+myframes_division %>% 
+  filter(alpha_length_um>0.45) %>% 
+  ggplot()+
+  geom_point(aes(time_sec/60,alpha_length_um),alpha=0.2)+
+  ggpubr::stat_cor(aes(time_sec/60,alpha_length_um),method="pearson") +
+  facet_wrap(~paste(condition,pos,gl),scale="free")+
+  ylab(TeX(r'($\frac{l_0}{l_1+l_0}$)')) +  
+  xlab("time (min)")
+
+ggsave("./length_alpha_per_gl_pos.pdf",width=30,height=25)
+```
+
+```{r}
+myframes_division %>% 
+  filter(alpha_length_um>0.45) %>% 
+  group_by(condition,pos,gl) %>% 
+  mutate(corr=cor(time_sec/60,alpha_length_um)) %>% 
+  ungroup() %>% 
+  distinct(condition,pos,gl,corr) %>% 
+  ggplot(aes(x=corr,y=1-..y..))+
+  stat_ecdf(aes(col=condition))+
+  ylab("Reverse CDF")+
+  xlab("R (Pearson)")
+  #theme_cowplot()
+```
+
+```{r}
+myframes_division %>% 
+  #filter(alpha_length_um>0.45) %>% 
+  ggplot()+
+  geom_point(aes(time_sec/60,ratio_concentration),alpha=0.2)+
+  ggpubr::stat_cor(aes(time_sec/60,ratio_concentration),method="pearson") +
+  facet_wrap(~paste(condition,pos,gl),scale="free")+
+  ylab(TeX(r'($\frac{c_0}{c_1}$)')) +  
+  xlab("time (min)")
+
+ggsave("./concentration_ratio_alpha_per_gl_pos.pdf",width=30,height=25)
+```
+
+```{r}
+myframes_division %>% 
+  #filter(alpha_length_um>0.45) %>% 
+  group_by(condition,pos,gl) %>% 
+  mutate(corr=cor(time_sec/60,ratio_concentration)) %>% 
+  ungroup() %>% 
+  distinct(condition,pos,gl,corr) %>% 
+  ggplot(aes(x=corr,y=1-..y..))+
+  stat_ecdf(aes(col=condition))+
+  ylab("Reverse CDF")+
+  xlab("R (Pearson)")
+  #theme_cowplot()
+```
+
+There is nothing clear happening over time in our experiments. Now, can we see something, by looking at the actual pictures?
+
+# Selecting growth lanes where this effect is the largest
+
+```{r}
+myframes_division %>% 
+  group_by(condition,pos,gl) %>% 
+  filter(n()>5) %>% 
+  mutate(mean_ratio=mean(ratio_concentration)) %>% 
+  ungroup() %>% 
+  distinct(condition,pos,gl,mean_ratio) %>% 
+  arrange(mean_ratio)
+```
+
+Now I need a way to track back these growth lanes, using imageJ/micro-manager, and to look at their profile in fluorescence, along their main axis...
+1) Associate the path to each cell mask tiff file and each row in the former table.
+2) Open each one of these files, and select the cell mask of the mother cell.
+3) Sum pixel intensity horizontally, plot the mean normalized profile (normalize to the average pixel fluorescence).
+4) Fit these traces, and determine an "exclusion length".
+5) See to what extent this "exclusion length", correlates with the size difference we witness between two daughter cells.
+6) Is this exclusion length, changing over time?
+
+
+# Getting birth frame for selected gl
+
+```{r}
+myframes_division %>% 
+  filter(gl==17,pos==0,condition=="glycerol040") %>% 
+  .$frame
+```
+
+# Output a list of all cells to look at rank 1
+```{r}
+cell_to_find <- myframes %>% 
+  filter(pos==0,gl==17,condition=="glycerol040") %>% 
+  select(frame,cell,cell_rank) %>% 
+  #mutate(true_frame=frame-1) %>% 
+  #select(-frame) %>% 
+  separate(cell,into=c("date","pos","gl","cell_id")) %>% 
+  select(cell_id,cell_rank,frame) %>% 
+  filter(cell_rank==1) %>% 
+  select(-cell_rank)
+cell_to_find
+readr::write_csv(cell_to_find,"../mother_machine_experiments_toolbox/cell_to_find_r1_pos0_gl17.csv")
+
+cell_to_find <- myframes %>% 
+  filter(pos==1,gl==6,condition=="glycerol040") %>% 
+  select(frame,cell,cell_rank) %>% 
+  #mutate(true_frame=frame-1) %>% 
+  #select(-frame) %>% 
+  separate(cell,into=c("date","pos","gl","cell_id")) %>% 
+  select(cell_id,cell_rank,frame) %>% 
+  filter(cell_rank==0) %>% 
+  select(-cell_rank)
+cell_to_find
+readr::write_csv(cell_to_find,"../mother_machine_experiments_toolbox/cell_to_find_r0_pos1_gl6.csv")
+
+
+```
+
+
+
+
+
+

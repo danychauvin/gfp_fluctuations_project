@@ -1,0 +1,803 @@
+---
+title: "growth_production_heatmap.Rmd"
+author: "Dany Chauvin"
+date: '2023-01-30'
+output: html_document
+---
+
+We want to plot, a heat-map of actual growth-rate versus production (mean).
+For each condition for hi1.
+
+# Importing data
+We assume here, denoised data were already saved in ./denoised_data
+
+```{r message=FALSE,warning=FALSE}
+source("../mother_machine_experiments_toolbox/load_functions_and_packages.R")
+source("../mother_machine_experiments_toolbox/inference_simulations_useful_functions.R")
+#load myframes uncomplete and complete cell cycles.
+source("../mother_machine_experiments_toolbox/load_denoised_data.R")
+#load only full cell cycles
+#source("../mother_machine_experiments_toolbox/load_denoised_data_complete_cell_cycles.R")
+```
+
+# Studying weird cells in the glycerol distribution
+
+```{r}
+plot_histogram <- function(.cond,breakVec=seq(4000,43000,500),plot=FALSE){
+  
+  exp_density <- density(myframes %>% filter(condition==.cond) %>% mutate(ll=length_um) %>%  .$ll)
+  #sim_density <- density(myframes %>% filter(condition==.cond) %>% mutate(ll=log(gfp_nb)) %>%  .$ll)
+  exp <- myframes %>% filter(condition==.cond) %>% mutate(ll=length_um) %>% .$ll
+  #sim <- myframes %>% filter(condition==.cond,datatype=="allnoisesources") %>% mutate(ll=log(gfp_nb)) %>% .$ll
+  exp_density
+  #sim_density
+  print(exp_density)
+  #print(sim_density)
+  h_exp <- hist(exp, breaks = breakVec,plot=FALSE)
+  #h_sim <- hist(sim, breaks = breakVec,plot=FALSE)
+  if(plot){
+  print(
+  ggplot()+
+    geom_col(aes(x=h_exp$mids,y=h_exp$counts),fill="blue",alpha=0.5)+
+    #geom_col(aes(x=h_sim$mids,y=h_sim$counts),fill="red",alpha=0.5))+
+      scale_y_continuous(trans = "log10")+
+      #scale_x_continuous(trans = "log10")+
+      ylab("Counts")+
+      xlab("Cell-size"))}
+}
+
+breakVec=seq(0.8,8,0.01)
+plot_histogram("glycerol040",breakVec,TRUE)
+```
+
+```{r}
+plot_histogram <- function(.cond,breakVec=seq(4000,43000,500),plot=FALSE){
+  
+  exp_density <- density(myframes %>% filter(condition==.cond) %>% mutate(ll=gfp_nb) %>%  .$ll)
+  #sim_density <- density(myframes %>% filter(condition==.cond) %>% mutate(ll=log(gfp_nb)) %>%  .$ll)
+  exp <- myframes %>% filter(condition==.cond) %>% mutate(ll=gfp_nb) %>% .$ll
+  #sim <- myframes %>% filter(condition==.cond,datatype=="allnoisesources") %>% mutate(ll=log(gfp_nb)) %>% .$ll
+  exp_density
+  #sim_density
+  print(exp_density)
+  #print(sim_density)
+  h_exp <- hist(exp, breaks = breakVec,plot=FALSE)
+  #h_sim <- hist(sim, breaks = breakVec,plot=FALSE)
+  if(plot){
+  print(
+  ggplot()+
+    geom_col(aes(x=h_exp$mids,y=h_exp$counts),fill="blue",alpha=0.5)+
+    geom_vline(aes(xintercept=10000),col="red")+
+    #geom_col(aes(x=h_sim$mids,y=h_sim$counts),fill="red",alpha=0.5))+
+      scale_y_continuous(trans = "log10")+
+      #scale_x_continuous(trans = "log10")+
+      ylab("Counts")+
+      xlab("Cell-size"))}
+}
+
+breakVec=seq(-1300,250000,300)
+plot_histogram("glycerol040",breakVec,TRUE)
+```
+```{r}
+bad_cells_points <- myframes %>% 
+  filter(condition=="glycerol040") %>% 
+  filter(gfp_nb<10000) %>% 
+  distinct(cell,time_sec)
+
+bad_cells <- bad_cells_points %>% 
+  distinct(cell)
+
+myframes %>% 
+  semi_join(bad_cells,by=c("cell")) %>% 
+  ggplot()+
+  geom_point(aes(time_sec/3600,length_um,group="cell"))+
+  facet_wrap(~cell)
+```
+
+The root cell is already lysed at the beginning of the experiment, and becomes gently smaller and smaller. I can discard it.
+
+# acetate005
+
+```{r}
+conditions <- factor(myframes$condition,levels=c("acetate005","acetate020","glycerol040","glucose020","glucoseaa020"))
+
+plot_heatscatter <- function(cond,prom){
+
+ x <- myframes %>%
+  filter(cell!="20190515.3.9.79") %>% 
+  filter(condition==cond,promoter==prom) %>% 
+  .$lambda
+  
+  y <- myframes %>%
+  filter(cell!="20190515.3.9.79") %>% 
+  filter(condition==cond,promoter==prom) %>% 
+  .$q
+  
+df <- data.frame(x,y)
+
+## Use densCols() output to get density at each point
+x <- densCols(x,y, colramp=colorRampPalette(c("black", "white")))
+df$dens <- col2rgb(x)[1,] + 1L
+
+## Map densities to colors
+cols <-  colorRampPalette(c("#000099", "#00FEFF", "#45FE4F", 
+                            "#FCFF00", "#FF9400", "#FF3100"))(256)
+df$col <- cols[df$dens]
+
+## Plot it, reordering rows so that densest points are plotted on top
+
+  plot(y~x, data=df[order(df$dens),], pch=20, col=col, cex=2,xlab="Lambda (/min)",ylab="Q (GFP/min)")
+  abline(h=c(-15,15),v=c(-0.0005,0.0005))
+  }
+```
+
+```{r}
+plot_heatscatter("acetate005","hi1")
+plot_heatscatter("acetate020","hi1")
+plot_heatscatter("glycerol040","hi1")
+plot_heatscatter("glucose020","hi1")
+plot_heatscatter("glucoseaa020","hi1")
+```
+
+Actually, the question is: are the vast majority of these cells, casher or not?
+
+```{r}
+conditions <- factor(myframes$condition,levels=c("acetate005","acetate020","glycerol040","glucose020","glucoseaa020"))
+
+plot_heatscatter <- function(cond,prom,qmin,qmax,grmin,grmax){
+
+ x <- myframes %>%
+  filter(cell!="20190515.3.9.79") %>% 
+  filter(condition==cond,promoter==prom) %>% 
+  .$lambda
+  
+  y <- myframes %>%
+  filter(cell!="20190515.3.9.79") %>% 
+  filter(condition==cond,promoter==prom) %>% 
+  .$q
+  
+df <- data.frame(x,y)
+
+## Use densCols() output to get density at each point
+x <- densCols(x,y, colramp=colorRampPalette(c("black", "white")))
+df$dens <- col2rgb(x)[1,] + 1L
+
+## Map densities to colors
+cols <-  colorRampPalette(c("#000099", "#00FEFF", "#45FE4F", 
+                            "#FCFF00", "#FF9400", "#FF3100"))(256)
+df$col <- cols[df$dens]
+
+## Plot it, reordering rows so that densest points are plotted on top
+
+  plot(y~x, data=df[order(df$dens),], pch=20, col=col, cex=2,xlab="Lambda (/min)",ylab="Q (GFP/min)")
+  abline(h=c(qmin,qmax),v=c(grmin,grmax))
+  }
+
+plot_heatscatter("acetate005","hi1",-50,5,-0.001,0.0005)
+```
+```{r}
+bad_cells_point <- myframes %>% 
+  filter(condition=="acetate005") %>% 
+  filter(between(q,-50,5),between(lambda,-0.001,0005)) %>% 
+  distinct(cell,time_sec,frame,cell_rank)
+
+bad_cells <- bad_cells_point %>% 
+  distinct(cell)
+
+bad_cells_full <- myframes %>% 
+  semi_join(bad_cells,by=c("cell"))
+
+myframes %>% 
+  semi_join(bad_cells,by=c("cell")) %>% 
+  ggplot()+
+  geom_point(aes(time_sec/3600,log(length_um_raw),group="cell"),col="green")+
+  geom_point(aes(time_sec/3600,log(length_um),group="cell"),alpha=0.5)+
+  geom_point(data=myframes %>% semi_join(bad_cells_point,by=c("cell","time_sec")),aes(time_sec/3600,log(length_um),group="cell"),col="red")+
+  facet_wrap(~cell)
+
+myframes %>% 
+  semi_join(bad_cells,by=c("cell")) %>% 
+  ggplot()+
+  geom_point(aes(time_sec/3600,gfp_nb_raw,group="cell"),col="green")+
+  geom_point(aes(time_sec/3600,gfp_nb,group="cell"),alpha=0.5)+
+  geom_point(data=myframes %>% semi_join(bad_cells_point,by=c("cell","time_sec")),aes(time_sec/3600,gfp_nb,group="cell"),col="red")+
+  facet_wrap(~cell)
+
+ggsave("./bad_cells_gfp_acetate005.pdf",width=30,height=30,limitsize = FALSE)
+```
+
+
+```{r}
+bad_cells_full %>% 
+  arrange(cell,frame) %>% 
+  select(cell,frame,cell_rank)
+```
+
+**Problematic cells**:
+- 20221121.2.28.2: badly segmented, to discard (root)
+- 20221121.2.8.2: it does not grow, but normal (higher cell rank)
+- 20221121.2.18.2: it does not grow, but normal (root)
+- 20221121.1.21.9: it does not grow, but normal (root)
+- 20221121.0.20.1: badly segmented, to discard (root)
+- 20221121.0.28.7: badly segmented
+
+Except 2.28.2 which is badly segmented in one frame (but still seems to grow), there is nothing really wrong with these cells, from the length point of view.
+Not what's happening, from Q point of view
+
+```{r}
+bad_cells_point <- myframes %>% 
+  filter(condition=="acetate005") %>% 
+  filter(between(q,-50,-25)) %>% 
+  distinct(cell,time_sec,frame,cell_rank)
+
+bad_cells <- bad_cells_point %>% 
+  distinct(cell)
+
+bad_cells_full <- myframes %>% 
+  semi_join(bad_cells,by=c("cell"))
+
+myframes %>% 
+  semi_join(bad_cells,by=c("cell")) %>% 
+  ggplot()+
+  geom_point(aes(frame,gfp_nb_raw,group="cell"),col="green")+
+  geom_point(aes(frame,gfp_nb,group="cell"),alpha=0.5)+
+  geom_point(data=myframes %>% semi_join(bad_cells_point,by=c("cell","time_sec")),aes(frame,gfp_nb,group="cell"),col="red")+
+  facet_wrap(~cell)
+
+ggsave("./bad_cells_q_acetate005.pdf",width=30,height=30,limitsize = FALSE)
+```
+
+Actually, when it comes to this, I should only look at the raw data...
+
+
+# acetate020
+
+Actually, the question is: are the vast majority of these cells, casher or not?
+
+```{r}
+conditions <- factor(myframes$condition,levels=c("acetate005","acetate020","glycerol040","glucose020","glucoseaa020"))
+
+plot_heatscatter <- function(cond,prom,qmin,qmax,grmin,grmax){
+
+ x <- myframes %>%
+  filter(cell!="20190515.3.9.79") %>% 
+  filter(condition==cond,promoter==prom) %>% 
+  .$lambda
+  
+  y <- myframes %>%
+  filter(cell!="20190515.3.9.79") %>% 
+  filter(condition==cond,promoter==prom) %>% 
+  .$q
+  
+df <- data.frame(x,y)
+
+## Use densCols() output to get density at each point
+x <- densCols(x,y, colramp=colorRampPalette(c("black", "white")))
+df$dens <- col2rgb(x)[1,] + 1L
+
+## Map densities to colors
+cols <-  colorRampPalette(c("#000099", "#00FEFF", "#45FE4F", 
+                            "#FCFF00", "#FF9400", "#FF3100"))(256)
+df$col <- cols[df$dens]
+
+## Plot it, reordering rows so that densest points are plotted on top
+
+  plot(y~x, data=df[order(df$dens),], pch=20, col=col, cex=2,xlab="Lambda (/min)",ylab="Q (GFP/min)")
+  abline(h=c(qmin,qmax),v=c(grmin,grmax))
+  }
+
+plot_heatscatter("acetate020","hi1",-100,12,-0.002,0.0007)
+```
+
+```{r}
+bad_cells_point <- myframes %>% 
+  filter(condition=="acetate020") %>% 
+  filter(between(q,-100,12),between(lambda,-0.002,0007)) %>% 
+  distinct(cell,time_sec,frame,cell_rank)
+
+bad_cells <- bad_cells_point %>% 
+  distinct(cell)
+
+bad_cells_full <- myframes %>% 
+  semi_join(bad_cells,by=c("cell"))
+
+myframes %>% 
+  semi_join(bad_cells,by=c("cell")) %>% 
+  ggplot()+
+  geom_point(aes(time_sec/3600,log(length_um_raw),group="cell"),col="green")+
+  geom_point(aes(time_sec/3600,log(length_um),group="cell"),alpha=0.5)+
+  geom_point(data=myframes %>% semi_join(bad_cells_point,by=c("cell","time_sec")),aes(time_sec/3600,log(length_um),group="cell"),col="red")+
+  facet_wrap(~cell)
+
+ggsave("./bad_cells_log_length_acetate020.pdf",width=50,height=50,limitsize = FALSE)
+
+
+myframes %>% 
+  semi_join(bad_cells,by=c("cell")) %>% 
+  ggplot()+
+  geom_point(aes(time_sec/3600,gfp_nb_raw,group="cell"),col="green")+
+  geom_point(aes(time_sec/3600,gfp_nb,group="cell"),alpha=0.5)+
+  geom_point(data=myframes %>% semi_join(bad_cells_point,by=c("cell","time_sec")),aes(time_sec/3600,gfp_nb,group="cell"),col="red")+
+  facet_wrap(~cell)
+
+ggsave("./bad_cells_gfp_acetate020.pdf",width=50,height=50,limitsize = FALSE)
+```
+
+
+```{r}
+bad_cells_full %>% 
+  arrange(cell,frame) %>% 
+  select(cell,frame,cell_rank)
+```
+
+**Problematic cells**:
+- None, just checking what does "20220824.5.48.65"
+
+```{r}
+myframes %>% 
+  filter(cell=="20220824.5.48.65") %>% 
+  select(cell_rank,frame) %>% 
+  arrange(frame)
+```
+
+```{r}
+myframes %>% 
+  filter(cell=="20220824.5.48.82") %>% 
+  select(cell_rank,frame) %>% 
+  arrange(frame)
+```
+Ok
+
+```{r}
+myframes %>% 
+  filter(cell=="20220824.5.50.82") %>% 
+  select(cell_rank,frame) %>% 
+  arrange(frame)
+```
+Ok
+
+# glycerol040
+
+Actually, the question is: are the vast majority of these cells, casher or not?
+
+```{r}
+conditions <- factor(myframes$condition,levels=c("acetate005","acetate020","glycerol040","glucose020","glucoseaa020"))
+
+plot_heatscatter <- function(cond,prom,qmin,qmax,grmin,grmax){
+
+ x <- myframes %>%
+  filter(cell!="20190515.3.9.79") %>% 
+  filter(condition==cond,promoter==prom) %>% 
+  .$lambda
+  
+  y <- myframes %>%
+  filter(cell!="20190515.3.9.79") %>% 
+  filter(condition==cond,promoter==prom) %>% 
+  .$q
+  
+df <- data.frame(x,y)
+
+## Use densCols() output to get density at each point
+x <- densCols(x,y, colramp=colorRampPalette(c("black", "white")))
+df$dens <- col2rgb(x)[1,] + 1L
+
+## Map densities to colors
+cols <-  colorRampPalette(c("#000099", "#00FEFF", "#45FE4F", 
+                            "#FCFF00", "#FF9400", "#FF3100"))(256)
+df$col <- cols[df$dens]
+
+## Plot it, reordering rows so that densest points are plotted on top
+
+  plot(y~x, data=df[order(df$dens),], pch=20, col=col, cex=2,xlab="Lambda (/min)",ylab="Q (GFP/min)")
+  abline(h=c(qmin,qmax),v=c(grmin,grmax))
+  }
+
+plot_heatscatter("glycerol040","hi1",-120,16,-0.0035,0.0008)
+```
+
+```{r}
+bad_cells_point <- myframes %>% 
+  filter(condition=="glycerol040") %>% 
+  filter(cell!="20190515.3.9.79") %>% 
+  filter(between(q,-100,16),between(lambda,-0.0035,0.0008)) %>% 
+  distinct(cell,time_sec,frame,cell_rank)
+
+bad_cells <- bad_cells_point %>% 
+  distinct(cell)
+
+bad_cells_full <- myframes %>% 
+  semi_join(bad_cells,by=c("cell"))
+
+myframes %>% 
+  semi_join(bad_cells,by=c("cell")) %>% 
+  ggplot()+
+  geom_point(aes(time_sec/3600,log(length_um_raw),group="cell"),col="green")+
+  geom_point(aes(time_sec/3600,log(length_um),group="cell"),alpha=0.5)+
+  geom_point(data=myframes %>% semi_join(bad_cells_point,by=c("cell","time_sec")),aes(time_sec/3600,log(length_um),group="cell"),col="red")+
+  facet_wrap(~cell)
+
+ggsave("./bad_cells_log_length_glycerol040.pdf",width=50,height=50,limitsize = FALSE)
+
+
+myframes %>% 
+  semi_join(bad_cells,by=c("cell")) %>% 
+  ggplot()+
+  geom_point(aes(time_sec/3600,gfp_nb_raw,group="cell"),col="green")+
+  geom_point(aes(time_sec/3600,gfp_nb,group="cell"),alpha=0.5)+
+  geom_point(data=myframes %>% semi_join(bad_cells_point,by=c("cell","time_sec")),aes(time_sec/3600,gfp_nb,group="cell"),col="red")+
+  facet_wrap(~cell)
+
+ggsave("./bad_cells_gfp_glycerol040.pdf",width=50,height=50,limitsize = FALSE)
+```
+
+Checking cells:
+- Cells that go down in gfp over time
+
+```{r}
+cell_to_check=c("20190515.0.12.266","20190515.1.2.256","20190515.1.2.256","20190515.1.9.283","20190515.4.8.265","20190515.5.5.255","20190515.5.4.255","20190515.5.3.270","20190515.0.12.251")
+
+bad_cells <- myframes %>% 
+  filter(cell %in% cell_to_check) %>% 
+  #semi_join(cell_to_check,by=c("cell")) %>% 
+  select(cell,frame,cell_rank) %>% View()
+```
+
+- 20190515.5.6.255: cell is going through "plasmolysis" (rank 0, from frame 762), to be discarded.
+- 20190515.5.4.255: cell certainly start some kind of plasmolysis. But we only see the beginning, so hard to discard it.
+- 20190515.4.8.265: cell is going through "plasmolysis" (rank 0, from frame 762), to be discarded.
+- 20190515.0.12.251: this is ok, but about too.
+- Look at the production traces: filter based on how fast these cells do decay/or for how many times points in a row. I can simply measure the mean production during the cell cycle. If this is significantly small, I discard the cells. Look at these distributions. Applying to all conditions.
+- Same for mean growth rate.
+- See if this a better way to get rid of them.
+
+# glucose020
+
+Actually, the question is: are the vast majority of these cells, casher or not?
+
+```{r}
+conditions <- factor(myframes$condition,levels=c("acetate005","acetate020","glycerol040","glucose020","glucoseaa020"))
+
+plot_heatscatter <- function(cond,prom,qmin,qmax,grmin,grmax){
+
+ x <- myframes %>%
+  filter(cell!="20190515.3.9.79") %>% 
+  filter(condition==cond,promoter==prom) %>% 
+  .$lambda
+  
+  y <- myframes %>%
+  filter(cell!="20190515.3.9.79") %>% 
+  filter(condition==cond,promoter==prom) %>% 
+  .$q
+  
+df <- data.frame(x,y)
+
+## Use densCols() output to get density at each point
+x <- densCols(x,y, colramp=colorRampPalette(c("black", "white")))
+df$dens <- col2rgb(x)[1,] + 1L
+
+## Map densities to colors
+cols <-  colorRampPalette(c("#000099", "#00FEFF", "#45FE4F", 
+                            "#FCFF00", "#FF9400", "#FF3100"))(256)
+df$col <- cols[df$dens]
+
+## Plot it, reordering rows so that densest points are plotted on top
+
+  plot(y~x, data=df[order(df$dens),], pch=20, col=col, cex=2,xlab="Lambda (/min)",ylab="Q (GFP/min)")
+  abline(h=c(qmin,qmax),v=c(grmin,grmax))
+  }
+
+plot_heatscatter("glucose020","hi1",-150,16,-0.01,0.0008)
+```
+
+```{r}
+bad_cells_point <- myframes %>% 
+  filter(condition=="glucose020") %>% 
+  #filter(cell!="20190515.3.9.79") %>% 
+  filter(between(q,-150,16),between(lambda,-0.01,0.0008)) %>% 
+  distinct(cell,time_sec,frame,cell_rank)
+
+bad_cells <- bad_cells_point %>% 
+  distinct(cell)
+
+bad_cells_full <- myframes %>% 
+  semi_join(bad_cells,by=c("cell"))
+
+myframes %>% 
+  semi_join(bad_cells,by=c("cell")) %>% 
+  ggplot()+
+  geom_point(aes(time_sec/3600,log(length_um_raw),group="cell"),col="green")+
+  geom_point(aes(time_sec/3600,log(length_um),group="cell"),alpha=0.5)+
+  geom_point(data=myframes %>% semi_join(bad_cells_point,by=c("cell","time_sec")),aes(time_sec/3600,log(length_um),group="cell"),col="red")+
+  facet_wrap(~cell)
+
+ggsave("./bad_cells_log_length_glucose020.pdf",width=50,height=50,limitsize = FALSE)
+
+
+myframes %>% 
+  semi_join(bad_cells,by=c("cell")) %>% 
+  ggplot()+
+  geom_point(aes(time_sec/3600,gfp_nb_raw,group="cell"),col="green")+
+  geom_point(aes(time_sec/3600,gfp_nb,group="cell"),alpha=0.5)+
+  geom_point(data=myframes %>% semi_join(bad_cells_point,by=c("cell","time_sec")),aes(time_sec/3600,gfp_nb,group="cell"),col="red")+
+  facet_wrap(~cell)
+
+ggsave("./bad_cells_gfp_glucose020.pdf",width=50,height=50,limitsize = FALSE)
+```
+
+Checking cells.
+
+# glucoseaa020
+
+Actually, the question is: are the vast majority of these cells, casher or not?
+
+```{r}
+conditions <- factor(myframes$condition,levels=c("acetate005","acetate020","glycerol040","glucose020","glucoseaa020"))
+
+plot_heatscatter <- function(cond,prom,qmin,qmax,grmin,grmax){
+
+ x <- myframes %>%
+  filter(cell!="20190515.3.9.79") %>% 
+  filter(condition==cond,promoter==prom) %>% 
+  .$lambda
+  
+  y <- myframes %>%
+  filter(cell!="20190515.3.9.79") %>% 
+  filter(condition==cond,promoter==prom) %>% 
+  .$q
+  
+df <- data.frame(x,y)
+
+## Use densCols() output to get density at each point
+x <- densCols(x,y, colramp=colorRampPalette(c("black", "white")))
+df$dens <- col2rgb(x)[1,] + 1L
+
+## Map densities to colors
+cols <-  colorRampPalette(c("#000099", "#00FEFF", "#45FE4F", 
+                            "#FCFF00", "#FF9400", "#FF3100"))(256)
+df$col <- cols[df$dens]
+
+## Plot it, reordering rows so that densest points are plotted on top
+
+  plot(y~x, data=df[order(df$dens),], pch=20, col=col, cex=2,xlab="Lambda (/min)",ylab="Q (GFP/min)")
+  abline(h=c(qmin,qmax),v=c(grmin,grmax))
+  }
+
+plot_heatscatter("glucoseaa020","hi1",-230,30,-0.02,0.006)
+```
+
+```{r}
+bad_cells_point <- myframes %>% 
+  filter(condition=="glucoseaa020") %>% 
+  #filter(cell!="20190515.3.9.79") %>% 
+  filter(between(q,-230,30),between(lambda,-0.02,0.006)) %>% 
+  distinct(cell,time_sec,frame,cell_rank)
+
+bad_cells <- bad_cells_point %>% 
+  distinct(cell)
+
+bad_cells_full <- myframes %>% 
+  semi_join(bad_cells,by=c("cell"))
+
+myframes %>% 
+  semi_join(bad_cells,by=c("cell")) %>% 
+  ggplot()+
+  geom_point(aes(time_sec/3600,log(length_um_raw),group="cell"),col="green")+
+  geom_point(aes(time_sec/3600,log(length_um),group="cell"),alpha=0.5)+
+  geom_point(data=myframes %>% semi_join(bad_cells_point,by=c("cell","time_sec")),aes(time_sec/3600,log(length_um),group="cell"),col="red")+
+  facet_wrap(~cell)
+
+ggsave("./bad_cells_log_length_glucoseaa020.pdf",width=50,height=50,limitsize = FALSE)
+
+
+myframes %>% 
+  semi_join(bad_cells,by=c("cell")) %>% 
+  ggplot()+
+  geom_point(aes(time_sec/3600,gfp_nb_raw,group="cell"),col="green")+
+  geom_point(aes(time_sec/3600,gfp_nb,group="cell"),alpha=0.5)+
+  geom_point(data=myframes %>% semi_join(bad_cells_point,by=c("cell","time_sec")),aes(time_sec/3600,gfp_nb,group="cell"),col="red")+
+  facet_wrap(~cell)
+
+ggsave("./bad_cells_gfp_glucoseaa020.pdf",width=50,height=50,limitsize = FALSE)
+```
+
+Discarding
+- 20220821.1.48.121
+- 20220921.1.48.127
+
+# Looking at mean distributions, can we easily discard shitty cells?
+
+```{r}
+conditions <- factor(myframes$condition,levels=c("acetate005","acetate020","glycerol040","glucose020","glucoseaa020"))
+
+plot_heatscatter <- function(cond,prom){
+
+ x <- myframes %>%
+  filter(condition==cond,promoter==prom) %>% 
+  group_by(cell) %>% 
+  mutate(m_lambda=mean(lambda,na.rm=TRUE)) %>% 
+  ungroup() %>%
+  distinct(cell,.keep_all = TRUE) %>% 
+  .$m_lambda
+  
+  y <- myframes %>%
+  filter(condition==cond,promoter==prom) %>% 
+  group_by(cell) %>% 
+  mutate(m_q=mean(q,na.rm=TRUE)) %>% 
+  ungroup() %>%
+  distinct(cell,.keep_all = TRUE) %>%
+  .$m_q
+  
+df <- data.frame(x,y)
+
+## Use densCols() output to get density at each point
+x <- densCols(x,y, colramp=colorRampPalette(c("black", "white")))
+df$dens <- col2rgb(x)[1,] + 1L
+
+## Map densities to colors
+cols <-  colorRampPalette(c("#000099", "#00FEFF", "#45FE4F", 
+                            "#FCFF00", "#FF9400", "#FF3100"))(256)
+df$col <- cols[df$dens]
+
+## Plot it, reordering rows so that densest points are plotted on top
+print(plot(y~x, data=df[order(df$dens),], pch=20, col=col, cex=2,
+           xlab="Mean Lambda (/min)",ylab="Mean Q (GFP/min)"))}
+```
+
+```{r}
+plot_heatscatter("acetate005","hi1")
+plot_heatscatter("acetate020","hi1")
+plot_heatscatter("glycerol040","hi1")
+plot_heatscatter("glucose020","hi1")
+plot_heatscatter("glucoseaa020","hi1")
+```
+
+# Now, filtering out the cells by their mean, see what are distributions looking like.
+
+```{r}
+myframes_filtered <- myframes %>% 
+  group_by(cell) %>% 
+  mutate(m_lambda=mean(lambda,na.rm=TRUE)) %>% 
+  mutate(m_q=mean(q,na.rm=TRUE)) %>% 
+  filter(m_lambda>0) %>%
+  filter(m_q>0) %>% 
+  ungroup()
+```
+
+```{r}
+conditions <- factor(myframes_filtered$condition,levels=c("acetate005","acetate020","glycerol040","glucose020","glucoseaa020"))
+
+plot_heatscatter <- function(cond,prom){
+
+ x <- myframes_filtered %>%
+  filter(condition==cond,promoter==prom) %>% 
+  group_by(cell) %>% 
+  mutate(m_lambda=mean(lambda,na.rm=TRUE)) %>% 
+  ungroup() %>%
+  distinct(cell,.keep_all = TRUE) %>% 
+  .$m_lambda
+  
+  y <- myframes_filtered %>%
+  filter(condition==cond,promoter==prom) %>% 
+  group_by(cell) %>% 
+  mutate(m_q=mean(q,na.rm=TRUE)) %>% 
+  ungroup() %>%
+  distinct(cell,.keep_all = TRUE) %>%
+  .$m_q
+  
+df <- data.frame(x,y)
+
+## Use densCols() output to get density at each point
+x <- densCols(x,y, colramp=colorRampPalette(c("black", "white")))
+df$dens <- col2rgb(x)[1,] + 1L
+
+## Map densities to colors
+cols <-  colorRampPalette(c("#000099", "#00FEFF", "#45FE4F", 
+                            "#FCFF00", "#FF9400", "#FF3100"))(256)
+df$col <- cols[df$dens]
+
+## Plot it, reordering rows so that densest points are plotted on top
+print(plot(y~x, data=df[order(df$dens),], pch=20, col=col, cex=2,
+           xlab="Mean Lambda (/min)",ylab="Mean Q (GFP/min)"))}
+```
+
+```{r}
+plot_heatscatter("acetate005","hi1")
+plot_heatscatter("acetate020","hi1")
+plot_heatscatter("glycerol040","hi1")
+plot_heatscatter("glucose020","hi1")
+plot_heatscatter("glucoseaa020","hi1")
+```
+
+# Now, filtering out cells not displaying a full cell cycle (division)
+
+Does it look the same?
+
+```{r}
+myframes_filtered <- myframes %>% 
+  filter(end_type=="div")
+```
+
+## Mean plot
+
+```{r}
+conditions <- factor(myframes_filtered$condition,levels=c("acetate005","acetate020","glycerol040","glucose020","glucoseaa020"))
+
+plot_heatscatter <- function(cond,prom){
+
+ x <- myframes_filtered %>%
+  filter(condition==cond,promoter==prom) %>% 
+  group_by(cell) %>% 
+  mutate(m_lambda=mean(lambda,na.rm=TRUE)) %>% 
+  ungroup() %>%
+  distinct(cell,.keep_all = TRUE) %>% 
+  .$m_lambda
+  
+  y <- myframes_filtered %>%
+  filter(condition==cond,promoter==prom) %>% 
+  group_by(cell) %>% 
+  mutate(m_q=mean(q,na.rm=TRUE)) %>% 
+  ungroup() %>%
+  distinct(cell,.keep_all = TRUE) %>%
+  .$m_q
+  
+df <- data.frame(x,y)
+
+## Use densCols() output to get density at each point
+x <- densCols(x,y, colramp=colorRampPalette(c("black", "white")))
+df$dens <- col2rgb(x)[1,] + 1L
+
+## Map densities to colors
+cols <-  colorRampPalette(c("#000099", "#00FEFF", "#45FE4F", 
+                            "#FCFF00", "#FF9400", "#FF3100"))(256)
+df$col <- cols[df$dens]
+
+## Plot it, reordering rows so that densest points are plotted on top
+print(plot(y~x, data=df[order(df$dens),], pch=20, col=col, cex=2,
+           xlab="Mean Lambda (/min)",ylab="Mean Q (GFP/min)"))}
+```
+
+```{r}
+plot_heatscatter("acetate005","hi1")
+plot_heatscatter("acetate020","hi1")
+plot_heatscatter("glycerol040","hi1")
+plot_heatscatter("glucose020","hi1")
+plot_heatscatter("glucoseaa020","hi1")
+```
+## Instantaneous plot
+
+```{r}
+conditions <- factor(myframes_filtered$condition,levels=c("acetate005","acetate020","glycerol040","glucose020","glucoseaa020"))
+
+plot_heatscatter <- function(cond,prom){
+
+ x <- myframes_filtered %>%
+  filter(condition==cond,promoter==prom) %>% 
+  .$lambda
+  
+  y <- myframes_filtered %>%
+  filter(condition==cond,promoter==prom) %>% 
+  .$q
+  
+df <- data.frame(x,y)
+
+## Use densCols() output to get density at each point
+x <- densCols(x,y, colramp=colorRampPalette(c("black", "white")))
+df$dens <- col2rgb(x)[1,] + 1L
+
+## Map densities to colors
+cols <-  colorRampPalette(c("#000099", "#00FEFF", "#45FE4F", 
+                            "#FCFF00", "#FF9400", "#FF3100"))(256)
+df$col <- cols[df$dens]
+
+## Plot it, reordering rows so that densest points are plotted on top
+print(plot(y~x, data=df[order(df$dens),], pch=20, col=col, cex=2,
+           xlab="Mean Lambda (/min)",ylab="Mean Q (GFP/min)"))}
+```
+
+```{r}
+plot_heatscatter("acetate005","hi1")
+plot_heatscatter("acetate020","hi1")
+plot_heatscatter("glycerol040","hi1")
+plot_heatscatter("glucose020","hi1")
+plot_heatscatter("glucoseaa020","hi1")
+```

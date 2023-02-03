@@ -1,0 +1,47 @@
+---
+title: "compare_parameters.Rmd"
+author: "Dany Chauvin"
+date: '2022-12-08'
+output: html_document
+---
+
+
+
+```{r}
+denoised_data_files_dirs <- c("/scicore/home/nimwegen/rocasu25/Documents/Projects/biozentrum/gfp_fluctuations_project/inference_on_experimental_data/inference_20221202114805","/scicore/home/nimwegen/rocasu25/Documents/Projects/biozentrum/gfp_fluctuations_project/inference_on_experimental_data/inference_20221208095821","/scicore/home/nimwegen/rocasu25/Documents/Projects/biozentrum/gfp_fluctuations_project/inference_on_experimental_data/inference_20221208100156")
+
+rank_df <- tibble(rank=c("all","0","1"),timestamp=c("20221202114805","20221208095821","20221208100156"))
+
+all_parameters <- denoised_data_files_dirs %>% 
+  lapply(function(.l) list.files(path=.l,pattern="final.csv$",recursive = TRUE,full.names=TRUE)) %>% 
+  unlist() %>% 
+  lapply(function(.l) readr::read_csv(.l,n_max=11) %>% 
+           mutate(denoised_data_path=.l)) %>% 
+  do.call(rbind,.) %>% 
+   extract(denoised_data_path,"condition","/([a-z0-9]{1,})_[0-9a-zA-Z]{1,}_[0-9]{8}_[a-z0-9]{1,}_b_final.csv$",remove=FALSE,convert=FALSE) %>% 
+  separate(condition,into=c("carbon_source","carbon_source_concentration"),sep="(?<=[A-Za-z])(?=[0-9])",remove=FALSE) %>% 
+  mutate(carbon_source_concentration=as.double(carbon_source_concentration)/100) %>% 
+  extract(denoised_data_path,"promoter","/[a-z0-9]{1,}_([0-9a-zA-Z]{1,})_[0-9]{8}_[a-z0-9]{1,}_b_final.csv$",remove=FALSE,convert=FALSE) %>% 
+  extract(denoised_data_path,"date","/[a-z0-9]{1,}_[0-9a-zA-Z]{1,}_([0-9]{8})_[a-z0-9]{1,}_b_final.csv$",remove=FALSE,convert=FALSE) %>% 
+  extract(denoised_data_path,"timestamp","/inference_on_experimental_data/inference_([0-9]{14})/",remove=FALSE,convert=FALSE) %>% 
+  left_join(rank_df,by=c("timestamp"))
+
+```
+
+
+```{r}
+comparison <- all_parameters %>% 
+  select(name,final,rank,condition) %>% 
+  pivot_wider(names_from = c("rank"),values_from = "final") %>% 
+  rename(r0="0") %>% 
+  rename(r1="1") %>% 
+  mutate(ratio_r0=r0/all,
+         ratio_r1=r1/all,
+         test=all/all)
+comparison %>% View()
+
+comparison %>% 
+  ggplot()+
+  geom_col(aes(name,test))
+```
+

@@ -1,0 +1,26 @@
+{
+  "description": "",
+  "gl_regions": [
+    {
+      "first_gl_position_from_top":58 ,
+      "gl_spacing_vertical":106.345 ,
+      "horizontal_range": [
+       28,287
+         
+      ],
+    "gl_exit_orientation": "right"
+    },
+    {
+      "first_gl_position_from_top":58 ,
+      "gl_spacing_vertical":106.345 ,
+      "horizontal_range": [
+       550,963
+         
+      ],
+    "gl_exit_orientation": "left"
+    }
+  ],
+  "name": "",
+  "pixel_size_micron": 1.0,
+  "template_image_path": ""
+}

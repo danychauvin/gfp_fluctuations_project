@@ -1,0 +1,20 @@
+---
+title: "checking_parameters.Rmd"
+author: "Dany Chauvin"
+date: '2022-12-05'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+towrite <- myparameters %>% 
+  arrange(carbon_source,carbon_source_concentration) %>% 
+  #filter(epsilon==0.05) %>% 
+  select(name,final,carbon_source,carbon_source_concentration)
+readr::write_csv(towrite,"./parameter_table.csv")
+
+towrite <- myerrors %>% 
+  arrange(carbon_source,carbon_source_concentration) %>% 
+  filter(epsilon==0.05) %>% 
+  select(-c(denoised_data_path,promoter))
+readr::write_csv(towrite,"./error_table.csv")
+```

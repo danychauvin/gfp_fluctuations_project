@@ -1,0 +1,88 @@
+---
+title: "Check concentration distributions"
+author: "Dany Chauvin"
+date: '2022-10-13'
+output: html_document
+---
+
+# Importing data
+We assume here, denoised data were already saved in ./denoised_data
+
+```{r message=FALSE,warning=FALSE}
+source("../mother_machine_experiments_toolbox/load_functions_and_packages.R")
+source("../mother_machine_experiments_toolbox/inference_simulations_useful_functions.R")
+#source("../mother_machine_experiments_toolbox/load_denoised_data.R")
+source("../mother_machine_experiments_toolbox/load_denoised_data_complete_cycles.R")
+```
+
+# Summary of all data sets
+```{r}
+myframes %>% group_by(date,condition,promoter) %>% 
+  count()
+```
+
+# Concentration distributions, stratified per growth lanes, per experiment, on raw data
+```{r}
+plot_concentration_distribution <- function(.date,.gl_min,.gl_max){
+
+.n <- nrow(myframes %>% 
+  ungroup() %>% 
+  filter(date==.date) %>% 
+  distinct(condition,promoter,pos))
+
+p <- myframes %>% 
+  filter(date==.date) %>% 
+  mutate(concentration=gfp_nb/length_um) %>% 
+  group_by(cell) %>% 
+  mutate(mean_concentration=mean(concentration,na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  distinct(cell,.keep_all=TRUE) %>% 
+  ggplot()+
+  geom_boxplot(aes(gl_number,mean_concentration,group=gl_id))+
+  facet_wrap(~paste(condition,promoter,pos,sep=" "),ncol=1,scales="free_y")+
+  coord_cartesian(xlim=c(.gl_min,.gl_max))
+
+ggsave(sprintf("./concentration_distributions_%s.pdf",.date),device="pdf",width=15,height=.n*3,limitsize=FALSE,plot=p)
+#ggsave("./concentration_distributions.pdf",device="pdf",width=15,height=.n*3,limitsize=FALSE,plot=p)
+#ggsave(sprintf("./concentration_distributions_%s.pdf",.date),device="pdf",width=15,height=.h,limitsize=FALSE,plot=p)
+
+print(p)
+
+}
+```
+
+## 20190515 experiment
+
+```{r}
+.date <-20190515
+.gl_min <- 0 
+.gl_max <- 30
+plot_concentration_distribution(.date,.gl_min,.gl_max)
+```
+
+## 20220824 experiment
+
+```{r}
+.date <-20220824
+.gl_min <- 0
+.gl_max <- 40
+plot_concentration_distribution(.date,.gl_min,.gl_max)
+```
+
+## 20220921 experiment
+
+```{r}
+.date <-20220921
+.gl_min <- 0
+.gl_max <- 60
+plot_concentration_distribution(.date,.gl_min,.gl_max)
+```
+
+## 20221121 experiment
+
+```{r}
+.date <-20221121
+.gl_min <- 1
+.gl_max <- 40
+plot_concentration_distribution(.date,.gl_min,.gl_max)
+```

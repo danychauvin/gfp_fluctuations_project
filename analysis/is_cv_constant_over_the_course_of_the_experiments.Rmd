@@ -1,0 +1,192 @@
+---
+title: "Check concentration distributions"
+author: "Dany Chauvin"
+date: '2022-10-13'
+output: html_document
+---
+
+# Importing data
+We assume here, denoised data were already saved in ./denoised_data
+
+```{r message=FALSE,warning=FALSE}
+source("../mother_machine_experiments_toolbox/load_functions_and_packages.R")
+source("../mother_machine_experiments_toolbox/inference_simulations_useful_functions.R")
+#load myframes uncomplete and complete cell cycles.
+#source("../mother_machine_experiments_toolbox/load_denoised_data.R")
+#load only full cell cycles
+source("../mother_machine_experiments_toolbox/load_denoised_data_complete_cycles.R")
+```
+
+# Summary of all data sets
+```{r}
+myframes %>% group_by(date,condition,promoter) %>% 
+  count()
+```
+# Compute CV for each condition, over time
+
+- Considering all cells.
+- Each time point, we compute the CV from all possible growth lane we have in the data set, taking one observation by growth lane, by time point.
+
+```{r}
+myframes$condition <- factor(myframes$condition,levels=c("acetate005","acetate020","glycerol040","glucose020","glucoseaa020"))
+
+myframes %>% 
+  group_by(date,condition,promoter) %>% 
+  mutate(time_h_rescaled=time_sec/3600-min(time_sec)/3600) %>% 
+  ungroup() %>% 
+  group_by(date,condition,promoter,time_sec,gl_id) %>% 
+  #filter(n()>2) %>% 
+  sample_n(1) %>% 
+  ungroup() %>% 
+  group_by(date,condition,promoter,time_sec) %>% 
+  mutate(nb_gls=n()) %>% 
+  mutate(cv_c=sd(gfp_nb/length_um,na.rm=TRUE)/mean(gfp_nb/length_um,na.rm=TRUE)) %>% 
+  sample_n(1) %>% 
+  ungroup() %>% 
+  #distinct(date,condition,promoter,time_sec,.keep_all=TRUE) %>% 
+  group_by(date,condition,promoter) %>% 
+  filter(nb_gls>max(nb_gls)-5) %>% 
+  ungroup() %>% 
+  ggplot()+
+  geom_point(aes(time_h_rescaled,cv_c),alpha=0.5)+
+  theme_cowplot()+
+  ylim(c(0,0.6))+
+  facet_wrap(~condition,nrow=2,scale="free")+
+  ylim(0,0.6)+
+  ylab("Concentration CV")+
+  xlab("Time (h)")
+
+ggsave("./cv_c_versus_time.pdf",width=10,height=5,limitsize = FALSE)
+```
+Data points are not so scattered, except for glucose. We see that they are highly correlated. But for any time they can really jump all over the place.
+- Do this 10 times: are the variations that significant for any two time points?
+- Are some growth lanes contributing more than others?
+
+## Computing the CV every 3 cell cycles or so
+
+- Objective here is to determine if the CV changes over time in our data.
+- The truth is, that it is a bit hard to tell. If one picks one data point per time point, and compute a CV, we find that the CV can double between 2 data points, because we do not have a lot of growth lanes per condition.
+- Also, the value are strongly correlated. And in some cases, I have very few cells per growth lanes. In a nutshell, I am always picking the same one.
+- So what I propose insead, is to compute for each condition, the mean doubling time.
+- Then to divide the overall time scale of each experiments per 3 doubling times, which is the typical time it takes for concentration fluctuations to disappear.
+- Then, I would compute the CV (one data point per growth lane).
+
+```{r}
+doubling_times_df <- myframes %>% 
+  group_by(date,condition,promoter,cell) %>% 
+  sample_n(1) %>% 
+  ungroup %>% 
+  group_by(date,condition,promoter) %>% 
+  mutate(w=sum(1/abs(cov_ll)),
+         w_i=1/abs(cov_ll),
+         mean_l=sum(lambda*w_i)*1/w,
+         mean_doubling_time=1/(mean_l*60/log(2))) %>% 
+  ungroup() %>% 
+  distinct(condition,mean_doubling_time) %>% 
+  mutate(time_interval=3*mean_doubling_time)
+
+N0 <- 20
+
+random_selection_per_time_bin <- function(.d,.N0){
+    .df <- .d %>% 
+    ungroup() %>% 
+    mutate(data_group=1) %>% 
+    #already grouped by condition, promoter, date,time_bin
+    group_by(gl_id) %>%
+    sample_n(1) %>% 
+    ungroup()
+    
+  for(i in 2:.N0){
+    .df_new <- .d %>% 
+      ungroup() %>% 
+      mutate(data_group=i) %>% 
+      #group_by(cell) %>%  #already grouped by condition, promoter, type, simulationid
+      group_by(gl_id) %>% 
+      sample_n(1) %>% 
+      ungroup()
+    .df <- rbind(.df,.df_new)}
+  return(.df)}
+
+if(!exists("mycluster")){
+  mycluster <- min(30, parallel::detectCores()-1) %>%  # do not use more than 30 cores
+    default_cluster() %>% cluster_library( # load currently loaded packages on each core
+      names(sessionInfo()$otherPkgs))
+  
+  cluster_copy(mycluster,c("fit_exp_elongation_predict","fit_exp_elongation_slope","fit_exp_elongation_sd_slope","fit_exp_elongation_intercept","random_selection_per_time_bin","N0"))
+}
+
+cluster_copy(mycluster,c("fit_exp_elongation_predict","fit_exp_elongation_slope","fit_exp_elongation_sd_slope","fit_exp_elongation_intercept","random_selection_per_time_bin","N0"))
+
+
+myframes_analysis <- myframes %>% 
+  group_by(date,promoter,condition) %>% 
+  mutate(time_h_rescaled=time_sec/3600-min(time_sec)/3600) %>% 
+  ungroup() %>% 
+  left_join(doubling_times_df,by=c("condition")) %>%
+  group_by(condition) %>% 
+  mutate(time_h_normalized=time_h_rescaled/time_interval) %>% 
+  ungroup() %>% 
+  mutate(time_bin=cut(time_h_normalized,breaks=c(0:15),include.lowest=TRUE)) %>% 
+  group_by(date,condition,promoter,time_bin) %>% 
+  partition(cluster=mycluster) %>%
+  do((function(.df){
+    .new_df <- random_selection_per_time_bin(.df,N0)
+    return(.new_df)})
+    (.)) %>% 
+  collect() %>% 
+  ungroup() %>% 
+  group_by(date,condition,promoter,time_bin,data_group) %>% 
+  mutate(nb_gls=n()) %>% 
+  filter(nb_gls>18) %>% 
+  mutate(cv_c=sd(gfp_nb/length_um,na.rm=TRUE)/mean(gfp_nb/length_um,na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  distinct(date,condition,promoter,time_bin,data_group,.keep_all=TRUE) %>% 
+  group_by(date,condition,promoter,time_bin) %>% 
+  mutate(mean_cv_c=mean(cv_c,na.rm=TRUE)) %>% 
+  mutate(sd_cv_c=sd(cv_c,na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  distinct(date,condition,promoter,time_bin,mean_cv_c,sd_cv_c)
+
+generate_label_df <- function(.cond){
+  ace005_interval <- round(unique(doubling_times_df %>% filter(condition==.cond) %>% .$time_interval),1)
+  acetate005 <- tibble(condition=c(.cond),time_bin=unique(sort(myframes_analysis$time_bin)),partI=c(0:(length(unique(myframes_analysis$time_bin))-1))*ace005_interval,partII=c(1:(length(unique(myframes_analysis$time_bin))))*ace005_interval)
+  return(acetate005)}
+
+interval1 <- generate_label_df("acetate005")
+interval2 <- generate_label_df("acetate020")
+interval3 <- generate_label_df("glycerol040")
+interval4 <- generate_label_df("glucose020")
+interval5 <- generate_label_df("glucoseaa020")
+
+all_labels <- rbind(interval1,
+                    interval2,
+                    interval3,
+                    interval4,
+                    interval5) %>% 
+  mutate(label_x=paste(partI,partII,sep="-"))
+
+
+all_labels <- all_labels %>% 
+  arrange(partI)
+
+all_labels$label_x <- factor(all_labels$label_x,levels=unique(all_labels$label_x))
+
+myframes_analysis$condition <- factor(myframes_analysis$condition,levels=c("acetate005","acetate020","glycerol040","glucose020","glucoseaa020"))
+
+myframes_analysis %>%
+  left_join(all_labels,by=c("condition","time_bin")) %>% 
+  ggplot()+
+  geom_point(aes(label_x,mean_cv_c),alpha=0.5)+
+  #geom_point(aes(label,mean_cv_c),alpha=0.5)+
+  geom_errorbar(aes(x=label_x,ymax=mean_cv_c+sd_cv_c,ymin=mean_cv_c-sd_cv_c),width=0)+
+  theme_cowplot()+
+  ylim(c(0,0.6))+
+  #facet_wrap(~condition,nrow=2,scale="free_x")+
+  facet_wrap(~factor(condition, levels=c("acetate005","acetate020","glycerol040","glucose020","glucoseaa020")),scale="free_x")+
+  ylim(0,0.6)+
+  ylab("Concentration CV")+
+  xlab("Time (h)")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+ggsave("./cv_c_versus_time_normalized_3.pdf",width=7,height=5,limitsize = FALSE)
+```

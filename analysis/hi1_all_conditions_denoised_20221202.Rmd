@@ -1,0 +1,2253 @@
+---
+title: "hi1_all_conditions_denoised_20221202.Rmd"
+author: "Dany Chauvin"
+date: '2022-12-02'
+output: html_document
+---
+
+# Import packages and functions as well as data
+
+```{r}
+source("./mother_machine_experiments_toolbox/load_functions_and_packages.R")
+myframes_final <- readr::read_csv("./denoised_data_hi1_all_conditions_20221202/hi1_allconditions_final.csv")
+
+if(!exists("mycluster")){
+mycluster <- min(30, parallel::detectCores()-1) %>%  # do not use more than 30 cores
+  default_cluster() %>% cluster_library( # load currently loaded packages on each core
+    names(sessionInfo()$otherPkgs))
+  
+cluster_copy(mycluster,c("fit_exp_elongation_predict","fit_exp_elongation_slope","fit_exp_elongation_sd_slope","fit_exp_elongation_intercept"))
+}
+
+#cluster_copy(mycluster,c("fit_exp_elongation_predict","fit_exp_elongation_slope","fit_exp_elongation_sd_slope","fit_exp_elongation_intercept","N0","random_selection","N"))
+
+myframes_final <- myframes_final %>% 
+  group_by(row_number()) %>% 
+  partition(mycluster) %>% 
+  #rowwise() %>% 
+  mutate(lambda_m=ifelse(is.na(cov_ll)==FALSE,rnorm(1,mean=lambda,sd=sqrt(abs(cov_ll))),lambda),
+  q_m=ifelse(is.na(cov_qq)==FALSE,rnorm(1,mean=q,sd=sqrt(abs(cov_qq))),q),
+  gfp_nb_m=ifelse(is.na(cov_gg)==FALSE,rnorm(1,mean=gfp_nb,sd=sqrt(abs(cov_gg))),gfp_nb),
+  length_um_m=ifelse(is.na(cov_xx)==FALSE,exp(rnorm(1,mean=log(length_um),sd=sqrt(abs(cov_xx)))),length_um)) %>% 
+  mutate(c_m=gfp_nb_m/length_um_m) %>% 
+  ungroup() %>% 
+  collect() %>% 
+  ungroup()
+```
+
+
+# Check denoising of the data, looking at predicted values
+
+Randomly select 10 cells per condition, and check the goodness of the fit.
+
+```{r}
+selected_cells <- myframes_final %>% 
+  filter(date=="20220824") %>% 
+  distinct(cell,condition) %>% 
+  group_by(condition) %>% 
+  sample_n(10) %>% 
+  ungroup()
+
+toplot <- myframes_final %>% 
+  semi_join(selected_cells,by=c("cell","condition"))
+
+toplot %>% 
+  ggplot()+
+  geom_point(aes(time_sec,lambda))+
+  geom_point(aes(time_sec,lambda_m),col="blue")+
+  geom_line(aes(time_sec,lambda),col="red")+
+  facet_wrap(~paste(condition,cell),scale="free")
+```
+
+```{r}
+selected_cells <- myframes_final %>% 
+  filter(date=="20220824") %>% 
+  distinct(cell,condition) %>% 
+  group_by(condition) %>% 
+  sample_n(10) %>% 
+  ungroup()
+
+toplot <- myframes_final %>% 
+  semi_join(selected_cells,by=c("cell","condition"))
+
+toplot %>% 
+  ggplot()+
+  geom_point(aes(time_sec,q))+
+  geom_point(aes(time_sec,q_m),col="blue")+
+  geom_line(aes(time_sec,q),col="red")+
+  facet_wrap(~paste(condition,cell),scale="free")
+```
+
+```{r}
+selected_cells <- myframes_final %>% 
+  filter(condition=="acetate020") %>% 
+  distinct(cell,condition) %>% 
+  group_by(condition) %>% 
+  sample_n(10) %>% 
+  ungroup()
+
+toplot <- myframes_final %>% 
+  semi_join(selected_cells,by=c("cell","condition"))
+
+toplot %>% 
+  ggplot()+
+  geom_point(aes(time_sec,gfp_nb_raw))+
+  geom_point(aes(time_sec,gfp_nb_m),col="blue")+
+  geom_line(aes(time_sec,gfp_nb),col="red")+
+  facet_wrap(~paste(condition,cell),scale="free")
+```
+
+```{r}
+selected_cells <- myframes_final %>% 
+  filter(condition=="acetate020") %>% 
+  distinct(cell,condition) %>% 
+  group_by(condition) %>% 
+  sample_n(10) %>% 
+  ungroup()
+
+toplot <- myframes_final %>% 
+  semi_join(selected_cells,by=c("cell","condition"))
+
+toplot %>% 
+  ggplot()+
+  geom_point(aes(time_sec,length_um_raw))+
+  geom_point(aes(time_sec,length_um_m),col="blue")+
+  geom_line(aes(time_sec,length_um),col="red")+
+  facet_wrap(~paste(condition,cell),scale="free")
+```
+
+# How many cells per condition per rank are there?
+
+```{r}
+myframes_final %>% 
+  distinct(cell,.keep_all=TRUE) %>% 
+  group_by(condition,mean_cell_rank) %>% 
+  summarise(n=n())
+
+myframes_final$condition <- factor(myframes_final$condition,levels=c("acetate005","acetate020","glycerol040","glucose020","glucoseaa020"))
+
+myframes_final %>% 
+  distinct(cell,.keep_all=TRUE) %>% 
+  group_by(condition,mean_cell_rank) %>% 
+  summarise(n=n()) %>% 
+  ggplot()+
+  geom_col(aes(mean_cell_rank,n))+
+  facet_grid(.~condition)+
+  xlab("Mean cell rank")+
+  ylab("# of cells")+
+  theme_cowplot()
+```
+
+# Compute mean growth rate over cell cycles, stratified by mean_cell_rank
+
+```{r}
+myframes_final$mean_cell_rank <- factor(myframes_final$mean_cell_rank,levels = c(0:10))
+myframes_final$condition <- factor(myframes_final$condition,levels = c("acetate005","acetate020","glycerol040","glucose020","glucoseaa020"))
+
+myframes_final %>% 
+  group_by(cell) %>% 
+  mutate(lambda_cell=mean(lambda*60/log(2),na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  group_by(condition,mean_cell_rank) %>% 
+  mutate(mean_lambda_cell=mean(lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_lambda_cell=sd(lambda_cell,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  distinct(mean_cell_rank,condition,.keep_all=TRUE) %>% 
+  ggplot()+
+  geom_point(aes(mean_cell_rank,mean_lambda_cell,col=condition))+
+  geom_errorbar(aes(x=mean_cell_rank,ymin=mean_lambda_cell-sd_lambda_cell,ymax=mean_lambda_cell+sd_lambda_cell,col=condition))+
+  theme_cowplot()+
+  scale_y_continuous(trans='log',breaks=c(0.125,0.25,0.5,1,2,4))+
+  xlab("Mean cell rank")+
+  ylab("Mean Growth Rate")
+```
+
+```{r}
+myframes_final$mean_cell_rank <- factor(myframes_final$mean_cell_rank,levels = c(0:10))
+myframes_final$condition <- factor(myframes_final$condition,levels = c("acetate005","acetate020","glycerol040","glucose020","glucoseaa020"))
+
+myframes_final %>% 
+  group_by(cell) %>% 
+  mutate(lambda_cell=mean(lambda*60/log(2),na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  distinct(cell,.keep_all=TRUE) %>% 
+  ggplot()+
+  stat_ecdf(aes(lambda_cell,col=mean_cell_rank),size=0.25)+
+  #geom_point(aes(mean_cell_rank,mean_lambda_cell,col=condition))+
+  #geom_errorbar(aes(x=mean_cell_rank,ymin=mean_lambda_cell-sd_lambda_cell,ymax=mean_lambda_cell+sd_lambda_cell,col=condition))+
+  theme_cowplot()+
+  facet_grid(condition~.)+
+  scale_x_continuous(trans='log',breaks=c(0.0625,0.125,0.25,0.5,1,2,4))+
+  scale_y_continuous(breaks=c(0,0.5,1))+
+  guides(col=guide_legend(title="Cell rank"))+
+  theme(strip.text.y = element_text(size = 4),
+        axis.text.y = element_text(size=5),
+        axis.text.x = element_text(size=5),
+        axis.title.x = element_text(size=10),
+        axis.title.y = element_text(size=10),
+        legend.title = element_text(size=5),
+        legend.text =  element_text(size=5)
+        )+
+  xlab("Growth rate (h-1)")+
+  ylab("CDF")
+
+ggsave("./20221208_presentation/GR_all_conditions.pdf",width=3,height=3)
+```
+
+```{r}
+myframes_final$condition <- factor(myframes_final$condition,levels = c("acetate005","acetate020","glycerol040","glucose020","glucoseaa020"))
+
+myframes_final %>% 
+  group_by(condition,mean_cell_rank) %>% 
+  mutate(mean_gr=mean(alpha_oriented_bbox*3600/log(2))) %>% 
+  mutate(sd_gr=sd(alpha_oriented_bbox*3600/log(2))) %>% 
+  mutate(cv_gr=sd_gr/mean_gr) %>% 
+  ungroup() %>% 
+  distinct(condition,mean_cell_rank,mean_gr,sd_gr,cv_gr) %>% 
+  group_by(condition) %>% 
+  mutate(rank_0_gr=dplyr::first(mean_gr),
+         gr_ratio=mean_gr/rank_0_gr) %>% 
+  select(-rank_0_gr) %>% 
+  ungroup() %>% 
+  ggplot()+
+  geom_col(aes(mean_cell_rank,mean_gr,fill=condition))+
+  geom_errorbar(aes(x=mean_cell_rank,ymin=mean_gr-sd_gr,ymax=mean_gr+sd_gr,ymax=0))+
+  facet_grid(.~condition)+
+  theme_cowplot()+
+  xlab("Cell rank")+
+  ylab("Mean growth rate (h-1)")
+```
+
+# Sampling cells
+
+Sample ten times and plot CV together with error bars. Also compare with overall CV, without stratifying by cell-rank.
+
+```{r}
+N <- 50
+N0 <- 10
+
+random_selection <- function(.d,.N,.N0){
+  #.d: input dataframe
+  #.N: Number of cells to pick per group
+  #.N0 number of 'bags'
+  
+  .df <- .d %>% 
+        group_by(cell) %>%  #already grouped by condition, promoter, type, simulationid
+        sample_n(1) %>% 
+        #mutate(lambda_cell=mean(lambda*60/log(2),na.rm=TRUE)) %>% 
+        ungroup() %>% 
+        #distinct(cell,.keep_all = TRUE) %>% 
+        sample_n(.N) %>% 
+        mutate(sampling=1)
+  
+  for(i in 2:.N0){
+    .df_new <- .d %>% 
+        group_by(cell) %>%  #already grouped by condition, promoter, type, simulationid
+        sample_n(1) %>% 
+        #mutate(lambda_cell=mean(lambda*60/log(2),na.rm=TRUE)) %>% 
+        ungroup() %>% 
+        #distinct(cell,.keep_all = TRUE) %>% 
+        sample_n(.N) %>% 
+        mutate(sampling=i)
+    .df <- rbind(.df,.df_new)}
+  
+  return(.df)}
+
+if(!exists("mycluster")){
+mycluster <- min(30, parallel::detectCores()-1) %>%  # do not use more than 30 cores
+  default_cluster() %>% cluster_library( # load currently loaded packages on each core
+    names(sessionInfo()$otherPkgs))
+  
+cluster_copy(mycluster,c("fit_exp_elongation_predict","fit_exp_elongation_slope","fit_exp_elongation_sd_slope","fit_exp_elongation_intercept"))
+}
+
+cluster_copy(mycluster,c("fit_exp_elongation_predict","fit_exp_elongation_slope","fit_exp_elongation_sd_slope","fit_exp_elongation_intercept","N0","random_selection","N"))
+
+selected_conditions <- myframes_final %>% 
+  distinct(cell,.keep_all = TRUE) %>% 
+  group_by(promoter,mean_cell_rank,condition) %>% 
+  filter(n()>50) %>% 
+  ungroup() %>% 
+  distinct(promoter,mean_cell_rank,condition)
+
+myframes_sampled <- myframes_final %>% 
+  semi_join(selected_conditions,by=c("promoter","mean_cell_rank","condition")) %>% 
+  group_by(cell) %>% 
+  partition(cluster=mycluster) %>%
+  arrange(frame) %>% 
+  mutate(alpha=fit_exp_elongation_slope(time_sec,length_um_m)) %>% 
+  mutate(lambda_cell=mean(lambda_m*60/log(2),na.remove=TRUE)) %>% 
+  mutate(q_cell=mean(q_m,na.remove=TRUE)) %>% 
+  mutate(q_full_cellcycle=(last(gfp_nb_m)-first(gfp_nb_m))/(last(length_um_m)-first(length_um_m))*alpha) %>% 
+  collect() %>% 
+  ungroup() %>% 
+  group_by(condition,promoter,mean_cell_rank) %>% 
+  partition(cluster=mycluster) %>%
+  do((function(.df){
+    .new_df <- random_selection(.df,N,N0)
+    return(.new_df)})
+    (.)) %>% 
+  collect() %>% 
+  ungroup()
+```
+# Mean growth rate CV, stratfying and not stratifying by cell rank
+
+```{r}
+conditions_df <- tibble(condition=c("acetate005","acetate020","glycerol040","glucose020","glucoseaa020"),condition_explicit=c("acetate 0.05%","acetate 0.2%","glycerol 0.4%","glucose 0.2%","glucose 0.2% + aa"))
+```
+
+```{r}
+toplot <- myframes_sampled %>% 
+  group_by(condition,sampling) %>% 
+  mutate(mean_lambda_cell=mean(lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_lambda_cell=sd(lambda_cell,na.rm=TRUE)) %>%
+  mutate(cv_lambda_cell=sd_lambda_cell/mean_lambda_cell) %>%
+  ungroup() %>% 
+  distinct(condition,sampling,.keep_all=TRUE) %>% 
+  group_by(condition) %>% 
+  mutate(mean_mean_lambda_cell=mean(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_mean_lambda_cell=sd(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(mean_cv_lambda_cell=mean(cv_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_cv_lambda_cell=sd(cv_lambda_cell,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  distinct(condition,.keep_all=TRUE) %>% 
+  left_join(conditions_df,by=c("condition"))
+  #mutate(mean_cell_rank_integer=as.integer(mean_cell_rank)) %>% 
+  
+
+conditions_df <- tibble(condition=c("acetate005","acetate020","glycerol040","glucose020","glucoseaa020"),condition_explicit=c("acetate 0.05%","acetate 0.2%","glycerol 0.4%","glucose 0.2%","glucose 0.2% + aa"))
+
+
+myframes_sampled %>%
+  group_by(condition,mean_cell_rank,sampling) %>% 
+  mutate(mean_lambda_cell=mean(lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_lambda_cell=sd(lambda_cell,na.rm=TRUE)) %>%
+  mutate(cv_lambda_cell=sd_lambda_cell/mean_lambda_cell) %>%
+  ungroup() %>% 
+  distinct(condition,mean_cell_rank,sampling,.keep_all=TRUE) %>% 
+  group_by(condition,mean_cell_rank) %>% 
+  mutate(mean_mean_lambda_cell=mean(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_mean_lambda_cell=sd(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(mean_cv_lambda_cell=mean(cv_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_cv_lambda_cell=sd(cv_lambda_cell,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  distinct(condition,mean_cell_rank,.keep_all=TRUE) %>% 
+  mutate(mean_cell_rank_integer=as.integer(mean_cell_rank)) %>% 
+  left_join(conditions_df,by=c("condition")) %>% 
+  mutate(condition_explicit=factor(condition_explicit,levels=c("acetate 0.05%","acetate 0.2%","glycerol 0.4%","glucose 0.2%","glucose 0.2% + aa"))) %>% 
+  ggplot()+
+  geom_point(aes(mean_mean_lambda_cell,mean_cv_lambda_cell,col=condition_explicit,shape=mean_cell_rank))+
+  geom_errorbar(aes(x=mean_mean_lambda_cell,ymin=mean_cv_lambda_cell-sd_cv_lambda_cell,ymax=mean_cv_lambda_cell+sd_cv_lambda_cell,col=condition_explicit))+
+  #geom_point(aes(mean_cell_rank_integer,mean_cv_lambda_cell,col=mean_cell_rank))+
+  geom_errorbar(aes(y=mean_cv_lambda_cell,xmin=mean_mean_lambda_cell-sd_mean_lambda_cell,xmax=mean_mean_lambda_cell+sd_mean_lambda_cell,col=condition_explicit))+
+  
+  geom_point(data=toplot,aes(mean_mean_lambda_cell,mean_cv_lambda_cell,col=condition_explicit),alpha=0.2)+
+  geom_errorbar(data=toplot,aes(x=mean_mean_lambda_cell,ymin=mean_cv_lambda_cell-sd_cv_lambda_cell,ymax=mean_cv_lambda_cell+sd_cv_lambda_cell,col=condition_explicit),alpha=0.2)+
+  #geom_point(aes(mean_cell_rank_integer,mean_cv_lambda_cell,col=mean_cell_rank))+
+  geom_errorbar(data=toplot,aes(y=mean_cv_lambda_cell,xmin=mean_mean_lambda_cell-sd_mean_lambda_cell,xmax=mean_mean_lambda_cell+sd_mean_lambda_cell,col=condition_explicit),alpha=0.2)+
+  theme_cowplot()+
+  ylim(0,0.5)+
+  xlim(0,3)+
+  scale_x_continuous(trans='log',breaks=c(0.0625,0.125,0.25,0.5,1,2))+
+  xlab("Mean growth rate (h-1)")+
+  ylab("Growth rate CV")+
+  guides(col=guide_legend(title="Conditions"))+
+  guides(shape=guide_legend(title="Cell rank"))
+
+ggsave("./20221208_presentation/cv_gr_mean_gr.pdf",width=6,height=4)
+```
+
+```{r}
+toplot <- myframes_sampled %>% 
+  mutate(lambda_cell=lambda*60/log(2)) %>% 
+  group_by(condition,sampling) %>% 
+  mutate(mean_lambda_cell=mean(lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_lambda_cell=sqrt(mean(lambda_cell**2+cov_ll)-mean_lambda_cell**2)) %>%
+  mutate(cv_lambda_cell=sd_lambda_cell/mean_lambda_cell) %>%
+  ungroup() %>% 
+  distinct(condition,sampling,.keep_all=TRUE) %>% 
+  group_by(condition) %>% 
+  mutate(mean_mean_lambda_cell=mean(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_mean_lambda_cell=sd(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(mean_cv_lambda_cell=mean(cv_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_cv_lambda_cell=sd(cv_lambda_cell,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  distinct(condition,.keep_all=TRUE) %>% 
+  left_join(conditions_df,by=c("condition"))
+  #mutate(mean_cell_rank_integer=as.integer(mean_cell_rank)) %>% 
+  
+
+conditions_df <- tibble(condition=c("acetate005","acetate020","glycerol040","glucose020","glucoseaa020"),condition_explicit=c("acetate 0.05%","acetate 0.2%","glycerol 0.4%","glucose 0.2%","glucose 0.2% + aa"))
+
+
+myframes_sampled %>%
+  mutate(lambda_cell=lambda*60/log(2)) %>% 
+  group_by(condition,mean_cell_rank,sampling) %>% 
+  mutate(mean_lambda_cell=mean(lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_lambda_cell=sqrt(mean(lambda_cell**2+cov_ll)-mean_lambda_cell**2)) %>%
+  #mutate(sd_lambda_cell=sd(lambda_cell,na.rm=TRUE)) %>%
+  mutate(cv_lambda_cell=sd_lambda_cell/mean_lambda_cell) %>%
+  ungroup() %>% 
+  distinct(condition,mean_cell_rank,sampling,.keep_all=TRUE) %>% 
+  group_by(condition,mean_cell_rank) %>% 
+  mutate(mean_mean_lambda_cell=mean(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_mean_lambda_cell=sd(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(mean_cv_lambda_cell=mean(cv_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_cv_lambda_cell=sd(cv_lambda_cell,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  distinct(condition,mean_cell_rank,.keep_all=TRUE) %>% 
+  mutate(mean_cell_rank_integer=as.integer(mean_cell_rank)) %>% 
+  left_join(conditions_df,by=c("condition")) %>% 
+  mutate(condition_explicit=factor(condition_explicit,levels=c("acetate 0.05%","acetate 0.2%","glycerol 0.4%","glucose 0.2%","glucose 0.2% + aa"))) %>% 
+  ggplot()+
+  geom_point(aes(mean_mean_lambda_cell,mean_cv_lambda_cell,col=condition_explicit,shape=mean_cell_rank))+
+  geom_errorbar(aes(x=mean_mean_lambda_cell,ymin=mean_cv_lambda_cell-sd_cv_lambda_cell,ymax=mean_cv_lambda_cell+sd_cv_lambda_cell,col=condition_explicit))+
+  #geom_point(aes(mean_cell_rank_integer,mean_cv_lambda_cell,col=mean_cell_rank))+
+  geom_errorbar(aes(y=mean_cv_lambda_cell,xmin=mean_mean_lambda_cell-sd_mean_lambda_cell,xmax=mean_mean_lambda_cell+sd_mean_lambda_cell,col=condition_explicit))+
+  
+  geom_point(data=toplot,aes(mean_mean_lambda_cell,mean_cv_lambda_cell,col=condition_explicit),alpha=0.2)+
+  geom_errorbar(data=toplot,aes(x=mean_mean_lambda_cell,ymin=mean_cv_lambda_cell-sd_cv_lambda_cell,ymax=mean_cv_lambda_cell+sd_cv_lambda_cell,col=condition_explicit),alpha=0.2)+
+  #geom_point(aes(mean_cell_rank_integer,mean_cv_lambda_cell,col=mean_cell_rank))+
+  geom_errorbar(data=toplot,aes(y=mean_cv_lambda_cell,xmin=mean_mean_lambda_cell-sd_mean_lambda_cell,xmax=mean_mean_lambda_cell+sd_mean_lambda_cell,col=condition_explicit),alpha=0.2)+
+  theme_cowplot()+
+  ylim(0,0.5)+
+  xlim(0,3)+
+  scale_x_continuous(trans='log',breaks=c(0.0625,0.125,0.25,0.5,1,2))+
+  xlab("Mean growth rate (h-1)")+
+  ylab("Growth rate CV")+
+  guides(col=guide_legend(title="Conditions"))+
+  guides(shape=guide_legend(title="Cell rank"))
+
+ggsave("./20221208_presentation/cv_gr_mean_gr_using_error.pdf",width=6,height=4)
+```
+
+
+# Mean growth rate CV, stratfying and not stratifying by cell rank, instantaneous values
+
+```{r}
+conditions_df <- tibble(condition=c("acetate005","acetate020","glycerol040","glucose020","glucoseaa020"),condition_explicit=c("acetate 0.05%","acetate 0.2%","glycerol 0.4%","glucose 0.2%","glucose 0.2% + aa"))
+```
+
+```{r}
+toplot <- myframes_sampled %>% 
+  mutate(lambda_cell=lambda_m*60/log(2)) %>% 
+  group_by(condition,sampling) %>% 
+  mutate(mean_lambda_cell=mean(lambda_cell,na.rm=TRUE)) %>%
+  #mutate(mean_lambda_cell=lambda_m*60/log(2)) %>%
+  mutate(sd_lambda_cell=sd(lambda_cell,na.rm=TRUE)) %>%
+  mutate(cv_lambda_cell=sd_lambda_cell/mean_lambda_cell) %>%
+  ungroup() %>% 
+  distinct(condition,sampling,.keep_all=TRUE) %>% 
+  group_by(condition) %>% 
+  mutate(mean_mean_lambda_cell=mean(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_mean_lambda_cell=sd(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(mean_cv_lambda_cell=mean(cv_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_cv_lambda_cell=sd(cv_lambda_cell,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  distinct(condition,.keep_all=TRUE) %>% 
+  left_join(conditions_df,by=c("condition"))
+  #mutate(mean_cell_rank_integer=as.integer(mean_cell_rank)) %>% 
+  
+
+conditions_df <- tibble(condition=c("acetate005","acetate020","glycerol040","glucose020","glucoseaa020"),condition_explicit=c("acetate 0.05%","acetate 0.2%","glycerol 0.4%","glucose 0.2%","glucose 0.2% + aa"))
+
+
+myframes_sampled %>%
+  mutate(lambda_cell=lambda_m*60/log(2)) %>% 
+  group_by(condition,mean_cell_rank,sampling) %>% 
+  mutate(mean_lambda_cell=mean(lambda_cell,na.rm=TRUE)) %>%
+  #mutate(mean_lambda_cell=lambda_m*60/log(2)) %>%
+  mutate(sd_lambda_cell=sd(lambda_cell,na.rm=TRUE)) %>%
+  mutate(cv_lambda_cell=sd_lambda_cell/mean_lambda_cell) %>%
+  ungroup() %>% 
+  distinct(condition,mean_cell_rank,sampling,.keep_all=TRUE) %>% 
+  group_by(condition,mean_cell_rank) %>% 
+  mutate(mean_mean_lambda_cell=mean(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_mean_lambda_cell=sd(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(mean_cv_lambda_cell=mean(cv_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_cv_lambda_cell=sd(cv_lambda_cell,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  distinct(condition,mean_cell_rank,.keep_all=TRUE) %>% 
+  mutate(mean_cell_rank_integer=as.integer(mean_cell_rank)) %>% 
+  left_join(conditions_df,by=c("condition")) %>% 
+  mutate(condition_explicit=factor(condition_explicit,levels=c("acetate 0.05%","acetate 0.2%","glycerol 0.4%","glucose 0.2%","glucose 0.2% + aa"))) %>% 
+  
+  ggplot()+
+  geom_point(aes(mean_mean_lambda_cell,mean_cv_lambda_cell,col=condition_explicit,shape=mean_cell_rank),size=2)+
+  geom_errorbar(aes(x=mean_mean_lambda_cell,ymin=mean_cv_lambda_cell-sd_cv_lambda_cell,ymax=mean_cv_lambda_cell+sd_cv_lambda_cell,col=condition_explicit))+
+  #geom_point(aes(mean_cell_rank_integer,mean_cv_lambda_cell,col=mean_cell_rank))+
+  geom_errorbar(aes(y=mean_cv_lambda_cell,xmin=mean_mean_lambda_cell-sd_mean_lambda_cell,xmax=mean_mean_lambda_cell+sd_mean_lambda_cell,col=condition_explicit))+
+  
+  geom_point(data=toplot,aes(mean_mean_lambda_cell,mean_cv_lambda_cell,col=condition_explicit),alpha=0.2,size=2)+
+  geom_errorbar(data=toplot,aes(x=mean_mean_lambda_cell,ymin=mean_cv_lambda_cell-sd_cv_lambda_cell,ymax=mean_cv_lambda_cell+sd_cv_lambda_cell,col=condition_explicit),alpha=0.2)+
+  #geom_point(aes(mean_cell_rank_integer,mean_cv_lambda_cell,col=mean_cell_rank))+
+  geom_errorbar(data=toplot,aes(y=mean_cv_lambda_cell,xmin=mean_mean_lambda_cell-sd_mean_lambda_cell,xmax=mean_mean_lambda_cell+sd_mean_lambda_cell,col=condition_explicit),alpha=0.2)+
+  theme_cowplot()+
+  ylim(0,0.5)+
+  xlim(0,3)+
+  scale_x_continuous(trans='log',breaks=c(0.125,0.25,0.5,1,2))+
+  xlab("Mean growth rate (h-1)")+
+  ylab("Growth rate CV")+
+  guides(col=guide_legend(title="Conditions"))+
+  guides(shape=guide_legend(title="Cell rank"))
+
+ggsave("./20221208_presentation/gr_cv_vs_mean_gr.pdf",width=8,height=4)
+```
+
+
+
+# Mean production versus mean growth rate
+
+```{r}
+toplot <- myframes_sampled %>% 
+  mutate(q_cell=q_m) %>% 
+  group_by(condition,sampling) %>% 
+  mutate(mean_q_cell=mean(q_cell,na.rm=TRUE)) %>%
+  mutate(sd_q_cell=sd(q_cell,na.rm=TRUE)) %>%
+  mutate(cv_q_cell=sd_q_cell/mean_q_cell) %>%
+  mutate(mean_lambda_cell=mean(lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_lambda_cell=sd(lambda_cell,na.rm=TRUE)) %>%
+  mutate(cv_lambda_cell=sd_lambda_cell/mean_lambda_cell) %>%
+  ungroup() %>% 
+  distinct(condition,sampling,.keep_all=TRUE) %>% 
+  group_by(condition) %>% 
+  mutate(mean_mean_q_cell=mean(mean_q_cell,na.rm=TRUE)) %>%
+  mutate(sd_mean_q_cell=sd(mean_q_cell,na.rm=TRUE)) %>%
+  mutate(mean_cv_q_cell=mean(cv_q_cell,na.rm=TRUE)) %>%
+  mutate(sd_cv_q_cell=sd(cv_q_cell,na.rm=TRUE)) %>%
+  mutate(mean_mean_lambda_cell=mean(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_mean_lambda_cell=sd(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(mean_cv_lambda_cell=mean(cv_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_cv_lambda_cell=sd(cv_lambda_cell,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  distinct(condition,.keep_all=TRUE) %>% 
+  left_join(conditions_df,by=c("condition"))
+  #mutate(mean_cell_rank_integer=as.integer(mean_cell_rank)) %>% 
+  
+myframes_sampled %>%
+  mutate(q_cell=q_m) %>% 
+  group_by(condition,mean_cell_rank,sampling) %>% 
+  mutate(mean_q_cell=mean(q_cell,na.rm=TRUE)) %>%
+  mutate(sd_q_cell=sd(q_cell,na.rm=TRUE)) %>%
+  mutate(cv_q_cell=sd_q_cell/mean_q_cell) %>%
+  mutate(mean_lambda_cell=mean(lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_lambda_cell=sd(lambda_cell,na.rm=TRUE)) %>%
+  mutate(cv_lambda_cell=sd_lambda_cell/mean_lambda_cell) %>%
+  ungroup() %>% 
+  distinct(condition,mean_cell_rank,sampling,.keep_all=TRUE) %>% 
+  group_by(condition,mean_cell_rank) %>% 
+  mutate(mean_mean_q_cell=mean(mean_q_cell,na.rm=TRUE)) %>%
+  mutate(sd_mean_q_cell=sd(mean_q_cell,na.rm=TRUE)) %>%
+  mutate(mean_cv_q_cell=mean(cv_q_cell,na.rm=TRUE)) %>%
+  mutate(sd_cv_q_cell=sd(cv_q_cell,na.rm=TRUE)) %>%
+  mutate(mean_mean_lambda_cell=mean(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_mean_lambda_cell=sd(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(mean_cv_lambda_cell=mean(cv_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_cv_lambda_cell=sd(cv_lambda_cell,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  distinct(condition,mean_cell_rank,.keep_all=TRUE) %>% 
+  mutate(mean_cell_rank_integer=as.integer(mean_cell_rank)) %>% 
+  left_join(conditions_df,by=c("condition")) %>% 
+  mutate(condition_explicit=factor(condition_explicit,levels=c("acetate 0.05%","acetate 0.2%","glycerol 0.4%","glucose 0.2%","glucose 0.2% + aa"))) %>% 
+  ggplot()+
+  geom_point(aes(mean_mean_lambda_cell,mean_mean_q_cell,col=condition_explicit,shape=mean_cell_rank),size=2)+
+  geom_errorbar(aes(x=mean_mean_lambda_cell,ymin=mean_mean_q_cell-sd_mean_q_cell,ymax=mean_mean_q_cell+sd_mean_q_cell,col=condition_explicit))+
+  #geom_point(aes(mean_cell_rank_integer,mean_cv_q_cell,col=mean_cell_rank))+
+  geom_errorbar(aes(y=mean_mean_q_cell,xmin=mean_mean_lambda_cell-sd_mean_lambda_cell,xmax=mean_mean_lambda_cell+sd_mean_lambda_cell,col=condition_explicit))+
+  
+  geom_point(data=toplot,aes(mean_mean_lambda_cell,mean_mean_q_cell,col=condition_explicit),alpha=0.2,size=2)+
+  geom_errorbar(data=toplot,aes(x=mean_mean_lambda_cell,ymin=mean_mean_q_cell-sd_mean_q_cell,ymax=mean_mean_q_cell+sd_mean_q_cell,col=condition_explicit),alpha=0.2)+
+  #geom_point(aes(mean_cell_rank_integer,mean_cv_q_cell,col=mean_cell_rank))+
+  geom_errorbar(data=toplot,aes(y=mean_mean_q_cell,xmin=mean_mean_lambda_cell-sd_mean_lambda_cell,xmax=mean_mean_lambda_cell+sd_mean_lambda_cell,col=condition_explicit),alpha=0.2)+
+  theme_cowplot()+
+  ylim(0,250)+
+  xlim(0,2.5)+
+  #scale_x_continuous(trans='log',breaks=c(0.125,0.25,0.5,1,2))+
+  xlab("Mean Growth Rate (h-1)")+
+  ylab("Mean volumic production (#GFP/min/um)")+
+  guides(col=guide_legend(title="Conditions"))+
+  guides(shape=guide_legend(title="Cell rank"))
+
+ggsave("./20221208_presentation/mean_q_cv_vs_mean_gr.pdf",width=8,height=4)
+
+```
+
+```{r}
+toplot <- myframes_sampled %>% 
+  group_by(condition,sampling) %>% 
+  mutate(mean_q_cell=mean(q_cell,na.rm=TRUE)) %>%
+  mutate(sd_q_cell=sd(q_cell,na.rm=TRUE)) %>%
+  mutate(cv_q_cell=sd_q_cell/mean_q_cell) %>%
+  mutate(mean_lambda_cell=mean(lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_lambda_cell=sd(lambda_cell,na.rm=TRUE)) %>%
+  mutate(cv_lambda_cell=sd_lambda_cell/mean_lambda_cell) %>%
+  ungroup() %>% 
+  distinct(condition,sampling,.keep_all=TRUE) %>% 
+  group_by(condition,mean_cell_rank) %>% 
+  mutate(mean_mean_q_cell=mean(mean_q_cell,na.rm=TRUE)) %>%
+  mutate(sd_mean_q_cell=sd(mean_q_cell,na.rm=TRUE)) %>%
+  mutate(mean_cv_q_cell=mean(cv_q_cell,na.rm=TRUE)) %>%
+  mutate(sd_cv_q_cell=sd(cv_q_cell,na.rm=TRUE)) %>%
+  mutate(mean_mean_lambda_cell=mean(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_mean_lambda_cell=sd(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(mean_cv_lambda_cell=mean(cv_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_cv_lambda_cell=sd(cv_lambda_cell,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  distinct(condition,.keep_all=TRUE) %>% 
+  left_join(conditions_df,by=c("condition"))
+  #mutate(mean_cell_rank_integer=as.integer(mean_cell_rank)) %>% 
+  
+myframes_sampled %>%
+  group_by(condition,mean_cell_rank,sampling) %>% 
+  mutate(mean_q_cell=mean(q_cell,na.rm=TRUE)) %>%
+  mutate(sd_q_cell=sd(q_cell,na.rm=TRUE)) %>%
+  mutate(cv_q_cell=sd_q_cell/mean_q_cell) %>%
+  mutate(mean_lambda_cell=mean(lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_lambda_cell=sd(lambda_cell,na.rm=TRUE)) %>%
+  mutate(cv_lambda_cell=sd_lambda_cell/mean_lambda_cell) %>%
+  ungroup() %>% 
+  distinct(condition,mean_cell_rank,sampling,.keep_all=TRUE) %>% 
+  group_by(condition,mean_cell_rank) %>% 
+  mutate(mean_mean_q_cell=mean(mean_q_cell,na.rm=TRUE)) %>%
+  mutate(sd_mean_q_cell=sd(mean_q_cell,na.rm=TRUE)) %>%
+  mutate(mean_cv_q_cell=mean(cv_q_cell,na.rm=TRUE)) %>%
+  mutate(sd_cv_q_cell=sd(cv_q_cell,na.rm=TRUE)) %>%
+  mutate(mean_mean_lambda_cell=mean(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_mean_lambda_cell=sd(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(mean_cv_lambda_cell=mean(cv_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_cv_lambda_cell=sd(cv_lambda_cell,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  distinct(condition,mean_cell_rank,.keep_all=TRUE) %>% 
+  mutate(mean_cell_rank_integer=as.integer(mean_cell_rank)) %>% 
+  left_join(conditions_df,by=c("condition")) %>% 
+  mutate(condition_explicit=factor(condition_explicit,levels=c("acetate 0.05%","acetate 0.2%","glycerol 0.4%","glucose 0.2%","glucose 0.2% + aa"))) %>% 
+  ggplot()+
+  geom_point(aes(mean_mean_lambda_cell,mean_mean_q_cell,col=condition_explicit,shape=mean_cell_rank))+
+  geom_errorbar(aes(x=mean_mean_lambda_cell,ymin=mean_mean_q_cell-sd_mean_q_cell,ymax=mean_mean_q_cell+sd_mean_q_cell,col=condition_explicit))+
+  #geom_point(aes(mean_cell_rank_integer,mean_cv_q_cell,col=mean_cell_rank))+
+  geom_errorbar(aes(y=mean_mean_q_cell,xmin=mean_mean_lambda_cell-sd_mean_lambda_cell,xmax=mean_mean_lambda_cell+sd_mean_lambda_cell,col=condition_explicit))+
+  
+  geom_point(data=toplot,aes(mean_mean_lambda_cell,mean_mean_q_cell,col=condition_explicit),alpha=0.2)+
+  geom_errorbar(data=toplot,aes(x=mean_mean_lambda_cell,ymin=mean_mean_q_cell-sd_mean_q_cell,ymax=mean_mean_q_cell+sd_mean_q_cell,col=condition_explicit),alpha=0.2)+
+  #geom_point(aes(mean_cell_rank_integer,mean_cv_q_cell,col=mean_cell_rank))+
+  geom_errorbar(data=toplot,aes(y=mean_mean_q_cell,xmin=mean_mean_lambda_cell-sd_mean_lambda_cell,xmax=mean_mean_lambda_cell+sd_mean_lambda_cell,col=condition_explicit),alpha=0.2)+
+  theme_cowplot()+
+  #ylim(0,0.5)+
+  #xlim(0,3)+
+  scale_y_continuous(trans='log',breaks=c(5,10,20,40,80,160,320,640))+
+  scale_x_continuous(trans='log',breaks=c(0.0625,0.125,0.25,0.5,1,2))+
+  xlab("Mean Growth Rate (h-1)")+
+  ylab("Mean volumic production (#GFP/min/um)")+
+  guides(col=guide_legend(title="Conditions"))+
+  guides(shape=guide_legend(title="Cell rank"))
+```
+
+
+```{r}
+toplot <- myframes_sampled %>% 
+  mutate(q_cell=q) %>% 
+  group_by(condition,sampling) %>% 
+  mutate(mean_q_cell=mean(q_cell,na.rm=TRUE)) %>%
+  mutate(sd_q_cell=sd(q_cell,na.rm=TRUE)) %>%
+  mutate(cv_q_cell=sd_q_cell/mean_q_cell) %>%
+  mutate(mean_lambda_cell=mean(lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_lambda_cell=sd(lambda_cell,na.rm=TRUE)) %>%
+  mutate(cv_lambda_cell=sd_lambda_cell/mean_lambda_cell) %>%
+  ungroup() %>% 
+  distinct(condition,sampling,.keep_all=TRUE) %>% 
+  group_by(condition,mean_cell_rank) %>% 
+  mutate(mean_mean_q_cell=mean(mean_q_cell,na.rm=TRUE)) %>%
+  mutate(sd_mean_q_cell=sd(mean_q_cell,na.rm=TRUE)) %>%
+  mutate(mean_cv_q_cell=mean(cv_q_cell,na.rm=TRUE)) %>%
+  mutate(sd_cv_q_cell=sd(cv_q_cell,na.rm=TRUE)) %>%
+  mutate(mean_mean_lambda_cell=mean(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_mean_lambda_cell=sd(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(mean_cv_lambda_cell=mean(cv_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_cv_lambda_cell=sd(cv_lambda_cell,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  distinct(condition,.keep_all=TRUE) %>% 
+  left_join(conditions_df,by=c("condition")) %>% 
+  mutate(s=compute_slope_errxy_robust(mean_mean_lambda_cell,mean_mean_q_cell)) %>% 
+  mutate(sd=compute_sdslope_errxy_robust(mean_mean_lambda_cell,mean_mean_q_cell)) %>% 
+  mutate(b=compute_intercept_errxy_robust(mean_mean_lambda_cell,mean_mean_q_cell))
+  #mutate(mean_cell_rank_integer=as.integer(mean_cell_rank)) %>%
+
+
+  
+myframes_sampled %>%
+  mutate(q_cell=q) %>% 
+  group_by(condition,mean_cell_rank,sampling) %>% 
+  mutate(mean_q_cell=mean(q_cell,na.rm=TRUE)) %>%
+  mutate(sd_q_cell=sd(q_cell,na.rm=TRUE)) %>%
+  mutate(cv_q_cell=sd_q_cell/mean_q_cell) %>%
+  mutate(mean_lambda_cell=mean(lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_lambda_cell=sd(lambda_cell,na.rm=TRUE)) %>%
+  mutate(cv_lambda_cell=sd_lambda_cell/mean_lambda_cell) %>%
+  ungroup() %>% 
+  distinct(condition,mean_cell_rank,sampling,.keep_all=TRUE) %>% 
+  group_by(condition,mean_cell_rank) %>% 
+  mutate(mean_mean_q_cell=mean(mean_q_cell,na.rm=TRUE)) %>%
+  mutate(sd_mean_q_cell=sd(mean_q_cell,na.rm=TRUE)) %>%
+  mutate(mean_cv_q_cell=mean(cv_q_cell,na.rm=TRUE)) %>%
+  mutate(sd_cv_q_cell=sd(cv_q_cell,na.rm=TRUE)) %>%
+  mutate(mean_mean_lambda_cell=mean(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_mean_lambda_cell=sd(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(mean_cv_lambda_cell=mean(cv_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_cv_lambda_cell=sd(cv_lambda_cell,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  distinct(condition,mean_cell_rank,.keep_all=TRUE) %>% 
+  mutate(mean_cell_rank_integer=as.integer(mean_cell_rank)) %>% 
+  left_join(conditions_df,by=c("condition")) %>% 
+  mutate(condition_explicit=factor(condition_explicit,levels=c("acetate 0.05%","acetate 0.2%","glycerol 0.4%","glucose 0.2%","glucose 0.2% + aa"))) %>% 
+  ggplot()+
+  geom_point(aes(mean_mean_lambda_cell,mean_mean_q_cell,col=condition_explicit,shape=mean_cell_rank))+
+  geom_errorbar(aes(x=mean_mean_lambda_cell,ymin=mean_mean_q_cell-sd_mean_q_cell,ymax=mean_mean_q_cell+sd_mean_q_cell,col=condition_explicit))+
+  #geom_point(aes(mean_cell_rank_integer,mean_cv_q_cell,col=mean_cell_rank))+
+  geom_errorbar(aes(y=mean_mean_q_cell,xmin=mean_mean_lambda_cell-sd_mean_lambda_cell,xmax=mean_mean_lambda_cell+sd_mean_lambda_cell,col=condition_explicit))+
+  
+  geom_point(data=toplot,aes(mean_mean_lambda_cell,mean_mean_q_cell,col=condition_explicit),alpha=0.2)+
+  geom_errorbar(data=toplot,aes(x=mean_mean_lambda_cell,ymin=mean_mean_q_cell-sd_mean_q_cell,ymax=mean_mean_q_cell+sd_mean_q_cell,col=condition_explicit),alpha=0.2)+
+  geom_line(data=toplot,aes(mean_mean_lambda_cell,mean_mean_lambda_cell*s+b),col="red",linetype="dashed",alpha=0.2)+
+  #geom_point(aes(mean_cell_rank_integer,mean_cv_q_cell,col=mean_cell_rank))+
+  geom_errorbar(data=toplot,aes(y=mean_mean_q_cell,xmin=mean_mean_lambda_cell-sd_mean_lambda_cell,xmax=mean_mean_lambda_cell+sd_mean_lambda_cell,col=condition_explicit),alpha=0.2)+
+  theme_cowplot()+
+  ylim(0,250)+
+  xlim(0,2.5)+
+  #scale_x_continuous(trans='log',breaks=c(0.125,0.25,0.5,1,2))+
+  xlab("Mean Growth Rate (h-1)")+
+  ylab("Mean volumic production (#GFP/min/um)")+
+  guides(col=guide_legend(title="Conditions"))+
+  guides(shape=guide_legend(title="Cell rank"))
+
+ggsave("./20221208_presentation/meanq_vs_mean_gr.pdf",width=6,height=4)
+```
+
+
+
+```{r}
+toplot <- myframes_sampled %>% 
+  group_by(condition,sampling) %>% 
+  mutate(mean_q_cell=mean(q_cell,na.rm=TRUE)) %>%
+  mutate(sd_q_cell=sd(q_cell,na.rm=TRUE)) %>%
+  mutate(cv_q_cell=sd_q_cell/mean_q_cell) %>%
+  mutate(mean_lambda_cell=mean(lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_lambda_cell=sd(lambda_cell,na.rm=TRUE)) %>%
+  mutate(cv_lambda_cell=sd_lambda_cell/mean_lambda_cell) %>%
+  ungroup() %>% 
+  distinct(condition,sampling,.keep_all=TRUE) %>% 
+  group_by(condition,mean_cell_rank) %>% 
+  mutate(mean_mean_q_cell=mean(mean_q_cell,na.rm=TRUE)) %>%
+  mutate(sd_mean_q_cell=sd(mean_q_cell,na.rm=TRUE)) %>%
+  mutate(mean_cv_q_cell=mean(cv_q_cell,na.rm=TRUE)) %>%
+  mutate(sd_cv_q_cell=sd(cv_q_cell,na.rm=TRUE)) %>%
+  mutate(mean_mean_lambda_cell=mean(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_mean_lambda_cell=sd(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(mean_cv_lambda_cell=mean(cv_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_cv_lambda_cell=sd(cv_lambda_cell,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  distinct(condition,.keep_all=TRUE) %>% 
+  left_join(conditions_df,by=c("condition"))
+  #mutate(mean_cell_rank_integer=as.integer(mean_cell_rank)) %>% 
+  
+toplot %>% 
+  mutate(condition_explicit=factor(condition_explicit,levels=c("acetate 0.05%","acetate 0.2%","glycerol 0.4%","glucose 0.2%","glucose 0.2% + aa"))) %>% 
+  mutate(s=compute_slope_errxy_robust(mean_mean_lambda_cell,mean_mean_q_cell)) %>% 
+  mutate(sd=compute_sdslope_errxy_robust(mean_mean_lambda_cell,mean_mean_q_cell)) %>% 
+  mutate(b=compute_intercept_errxy_robust(mean_mean_lambda_cell,mean_mean_q_cell)) %>% 
+  ggplot()+
+  geom_point(aes(mean_mean_lambda_cell,mean_mean_q_cell,col=condition_explicit))+
+  geom_line(aes(mean_mean_lambda_cell,mean_mean_lambda_cell*s+b),col="red")+
+  geom_errorbar(aes(x=mean_mean_lambda_cell,ymin=mean_mean_q_cell-sd_mean_q_cell,ymax=mean_mean_q_cell+sd_mean_q_cell,col=condition_explicit))+
+  #geom_point(aes(mean_cell_rank_integer,mean_cv_q_cell,col=mean_cell_rank))+
+  geom_errorbar(aes(y=mean_mean_q_cell,xmin=mean_mean_lambda_cell-sd_mean_lambda_cell,xmax=mean_mean_lambda_cell+sd_mean_lambda_cell,col=condition_explicit))+
+  
+  #geom_point(data=toplot,aes(mean_mean_lambda_cell,mean_mean_q_cell,col=condition_explicit),alpha=0.2)+
+  #geom_errorbar(data=toplot,aes(x=mean_mean_lambda_cell,ymin=mean_mean_q_cell-sd_mean_q_cell,ymax=mean_mean_q_cell+sd_mean_q_cell,col=condition_explicit),alpha=0.2)+
+  #geom_point(aes(mean_cell_rank_integer,mean_cv_q_cell,col=mean_cell_rank))+
+  #geom_errorbar(data=toplot,aes(y=mean_mean_q_cell,xmin=mean_mean_lambda_cell-sd_mean_lambda_cell,xmax=mean_mean_lambda_cell+sd_mean_lambda_cell,col=condition_explicit),alpha=0.2)+
+  theme_cowplot()+
+  #ylim(0,0.5)+
+  xlim(0,2.5)+
+  #scale_y_continuous(trans='log',breaks=c(5,10,20,40,80,160,320,640))+
+  #scale_x_continuous(trans='log',breaks=c(0.0625,0.125,0.25,0.5,1,2))+
+  xlab("Mean Growth Rate (h-1)")+
+  ylab("Mean volumic production (#GFP/min/um)")+
+  guides(col=guide_legend(title="Conditions"))+
+  guides(shape=guide_legend(title="Cell rank"))
+```
+```{r}
+toplot %>% 
+  mutate(condition_explicit=factor(condition_explicit,levels=c("acetate 0.05%","acetate 0.2%","glycerol 0.4%","glucose 0.2%","glucose 0.2% + aa"))) %>% 
+  mutate(s=compute_slope_errxy_robust(mean_mean_lambda_cell,mean_mean_q_cell)) %>% 
+  mutate(sd=compute_sdslope_errxy_robust(mean_mean_lambda_cell,mean_mean_q_cell)) %>% 
+  mutate(b=compute_intercept_errxy_robust(mean_mean_lambda_cell,mean_mean_q_cell)) %>% 
+  distinct(s,b,sd)
+```
+
+
+# Mean concentration versus mean growth rate
+
+```{r}
+toplot <- myframes_sampled %>% 
+  mutate(c_cell=c_m) %>% 
+  ungroup() %>% 
+  group_by(condition,sampling) %>% 
+  mutate(mean_c_cell=mean(c_cell,na.rm=TRUE)) %>%
+  mutate(sd_c_cell=sd(c_cell,na.rm=TRUE)) %>%
+  mutate(cv_c_cell=sd_c_cell/mean_c_cell) %>%
+  mutate(mean_lambda_cell=mean(lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_lambda_cell=sd(lambda_cell,na.rm=TRUE)) %>%
+  mutate(cv_lambda_cell=sd_lambda_cell/mean_lambda_cell) %>%
+  ungroup() %>% 
+  distinct(condition,sampling,.keep_all=TRUE) %>% 
+  group_by(condition) %>% 
+  mutate(mean_mean_c_cell=mean(mean_c_cell,na.rm=TRUE)) %>%
+  mutate(sd_mean_c_cell=sd(mean_c_cell,na.rm=TRUE)) %>%
+  mutate(mean_cv_c_cell=mean(cv_c_cell,na.rm=TRUE)) %>%
+  mutate(sd_cv_c_cell=sd(cv_c_cell,na.rm=TRUE)) %>%
+  mutate(mean_mean_lambda_cell=mean(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_mean_lambda_cell=sd(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(mean_cv_lambda_cell=mean(cv_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_cv_lambda_cell=sd(cv_lambda_cell,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  distinct(condition,.keep_all=TRUE) %>% 
+  left_join(conditions_df,by=c("condition"))
+  #mutate(mean_cell_rank_integer=as.integer(mean_cell_rank)) %>% 
+  
+myframes_sampled %>%
+  mutate(c_cell=c_m) %>% 
+  group_by(condition,mean_cell_rank,sampling) %>% 
+  mutate(mean_c_cell=mean(c_cell,na.rm=TRUE)) %>%
+  mutate(sd_c_cell=sd(c_cell,na.rm=TRUE)) %>%
+  mutate(cv_c_cell=sd_c_cell/mean_c_cell) %>%
+  mutate(mean_lambda_cell=mean(lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_lambda_cell=sd(lambda_cell,na.rm=TRUE)) %>%
+  mutate(cv_lambda_cell=sd_lambda_cell/mean_lambda_cell) %>%
+  ungroup() %>% 
+  distinct(condition,mean_cell_rank,sampling,.keep_all=TRUE) %>% 
+  group_by(condition,mean_cell_rank) %>% 
+  mutate(mean_mean_c_cell=mean(mean_c_cell,na.rm=TRUE)) %>%
+  mutate(sd_mean_c_cell=sd(mean_c_cell,na.rm=TRUE)) %>%
+  mutate(mean_cv_c_cell=mean(cv_c_cell,na.rm=TRUE)) %>%
+  mutate(sd_cv_c_cell=sd(cv_c_cell,na.rm=TRUE)) %>%
+  mutate(mean_mean_lambda_cell=mean(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_mean_lambda_cell=sd(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(mean_cv_lambda_cell=mean(cv_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_cv_lambda_cell=sd(cv_lambda_cell,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  distinct(condition,mean_cell_rank,.keep_all=TRUE) %>% 
+  mutate(mean_cell_rank_integer=as.integer(mean_cell_rank)) %>% 
+  left_join(conditions_df,by=c("condition")) %>% 
+  mutate(condition_explicit=factor(condition_explicit,levels=c("acetate 0.05%","acetate 0.2%","glycerol 0.4%","glucose 0.2%","glucose 0.2% + aa"))) %>% 
+  ggplot()+
+  geom_point(aes(mean_mean_lambda_cell,mean_mean_c_cell,col=condition_explicit,shape=mean_cell_rank),size=2)+
+  geom_errorbar(aes(x=mean_mean_lambda_cell,ymin=mean_mean_c_cell-sd_mean_c_cell,ymax=mean_mean_c_cell+sd_mean_c_cell,col=condition_explicit))+
+  #geom_point(aes(mean_cell_rank_integer,mean_cv_c_cell,col=mean_cell_rank))+
+  geom_errorbar(aes(y=mean_mean_c_cell,xmin=mean_mean_lambda_cell-sd_mean_lambda_cell,xmax=mean_mean_lambda_cell+sd_mean_lambda_cell,col=condition_explicit))+
+  
+  geom_point(data=toplot,aes(mean_mean_lambda_cell,mean_mean_c_cell,col=condition_explicit),alpha=0.2,size=2)+
+  geom_errorbar(data=toplot,aes(x=mean_mean_lambda_cell,ymin=mean_mean_c_cell-sd_mean_c_cell,ymax=mean_mean_c_cell+sd_mean_c_cell,col=condition_explicit),alpha=0.2)+
+  #geom_point(aes(mean_cell_rank_integer,mean_cv_c_cell,col=mean_cell_rank))+
+  geom_errorbar(data=toplot,aes(y=mean_mean_c_cell,xmin=mean_mean_lambda_cell-sd_mean_lambda_cell,xmax=mean_mean_lambda_cell+sd_mean_lambda_cell,col=condition_explicit),alpha=0.2)+
+  theme_cowplot()+
+  ylim(0,25000)+
+  xlim(0,2.5)+
+  #scale_x_continuous(trans='log',breaks=c(0.125,0.25,0.5,1,2))+
+  xlab("Mean Growth Rate (h-1)")+
+  ylab("Mean Concentration (#GFP/um)")+
+  guides(col=guide_legend(title="Conditions"))+
+  guides(shape=guide_legend(title="Cell rank"))
+
+ggsave("./20221208_presentation/mean_c_cv_vs_mean_gr.pdf",width=8,height=4)
+
+```
+
+```{r}
+toplot <- myframes_sampled %>% 
+  mutate(c_cell=gfp_nb/length_um) %>% 
+  ungroup() %>% 
+  group_by(condition,sampling) %>% 
+  mutate(mean_c_cell=mean(c_cell,na.rm=TRUE)) %>%
+  mutate(sd_c_cell=sd(c_cell,na.rm=TRUE)) %>%
+  mutate(cv_c_cell=sd_c_cell/mean_c_cell) %>%
+  mutate(mean_lambda_cell=mean(lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_lambda_cell=sd(lambda_cell,na.rm=TRUE)) %>%
+  mutate(cv_lambda_cell=sd_lambda_cell/mean_lambda_cell) %>%
+  ungroup() %>% 
+  distinct(condition,sampling,.keep_all=TRUE) %>% 
+  group_by(condition,mean_cell_rank) %>% 
+  mutate(mean_mean_c_cell=mean(mean_c_cell,na.rm=TRUE)) %>%
+  mutate(sd_mean_c_cell=sd(mean_c_cell,na.rm=TRUE)) %>%
+  mutate(mean_cv_c_cell=mean(cv_c_cell,na.rm=TRUE)) %>%
+  mutate(sd_cv_c_cell=sd(cv_c_cell,na.rm=TRUE)) %>%
+  mutate(mean_mean_lambda_cell=mean(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_mean_lambda_cell=sd(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(mean_cv_lambda_cell=mean(cv_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_cv_lambda_cell=sd(cv_lambda_cell,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  distinct(condition,.keep_all=TRUE) %>% 
+  left_join(conditions_df,by=c("condition"))
+  #mutate(mean_cell_rank_integer=as.integer(mean_cell_rank)) %>% 
+  
+myframes_sampled %>%
+  mutate(c_cell=gfp_nb/length_um) %>% 
+  group_by(condition,mean_cell_rank,sampling) %>% 
+  mutate(mean_c_cell=mean(c_cell,na.rm=TRUE)) %>%
+  mutate(sd_c_cell=sd(c_cell,na.rm=TRUE)) %>%
+  mutate(cv_c_cell=sd_c_cell/mean_c_cell) %>%
+  mutate(mean_lambda_cell=mean(lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_lambda_cell=sd(lambda_cell,na.rm=TRUE)) %>%
+  mutate(cv_lambda_cell=sd_lambda_cell/mean_lambda_cell) %>%
+  ungroup() %>% 
+  distinct(condition,mean_cell_rank,sampling,.keep_all=TRUE) %>% 
+  group_by(condition,mean_cell_rank) %>% 
+  mutate(mean_mean_c_cell=mean(mean_c_cell,na.rm=TRUE)) %>%
+  mutate(sd_mean_c_cell=sd(mean_c_cell,na.rm=TRUE)) %>%
+  mutate(mean_cv_c_cell=mean(cv_c_cell,na.rm=TRUE)) %>%
+  mutate(sd_cv_c_cell=sd(cv_c_cell,na.rm=TRUE)) %>%
+  mutate(mean_mean_lambda_cell=mean(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_mean_lambda_cell=sd(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(mean_cv_lambda_cell=mean(cv_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_cv_lambda_cell=sd(cv_lambda_cell,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  distinct(condition,mean_cell_rank,.keep_all=TRUE) %>% 
+  mutate(mean_cell_rank_integer=as.integer(mean_cell_rank)) %>% 
+  left_join(conditions_df,by=c("condition")) %>% 
+  mutate(condition_explicit=factor(condition_explicit,levels=c("acetate 0.05%","acetate 0.2%","glycerol 0.4%","glucose 0.2%","glucose 0.2% + aa"))) %>% 
+  ggplot()+
+  geom_point(aes(mean_mean_lambda_cell,mean_mean_c_cell,col=condition_explicit,shape=mean_cell_rank))+
+  geom_errorbar(aes(x=mean_mean_lambda_cell,ymin=mean_mean_c_cell-sd_mean_c_cell,ymax=mean_mean_c_cell+sd_mean_c_cell,col=condition_explicit))+
+  #geom_point(aes(mean_cell_rank_integer,mean_cv_c_cell,col=mean_cell_rank))+
+  geom_errorbar(aes(y=mean_mean_c_cell,xmin=mean_mean_lambda_cell-sd_mean_lambda_cell,xmax=mean_mean_lambda_cell+sd_mean_lambda_cell,col=condition_explicit))+
+  
+  geom_point(data=toplot,aes(mean_mean_lambda_cell,mean_mean_c_cell,col=condition_explicit),alpha=0.2)+
+  geom_errorbar(data=toplot,aes(x=mean_mean_lambda_cell,ymin=mean_mean_c_cell-sd_mean_c_cell,ymax=mean_mean_c_cell+sd_mean_c_cell,col=condition_explicit),alpha=0.2)+
+  #geom_point(aes(mean_cell_rank_integer,mean_cv_c_cell,col=mean_cell_rank))+
+  geom_errorbar(data=toplot,aes(y=mean_mean_c_cell,xmin=mean_mean_lambda_cell-sd_mean_lambda_cell,xmax=mean_mean_lambda_cell+sd_mean_lambda_cell,col=condition_explicit),alpha=0.2)+
+  theme_cowplot()+
+  scale_y_continuous(trans='log',breaks=c(8000,12000,18000,27000))+
+  scale_x_continuous(trans='log',breaks=c(0.125,0.25,0.5,1,2))+
+  #ylim(0,0.5)+
+  #xlim(2500,40000)+
+  xlab("Mean Growth Rate (h-1)")+
+  ylab("Mean Concentration (#GFP/um)")+
+  guides(col=guide_legend(title="Conditions"))+
+  guides(shape=guide_legend(title="Cell rank"))
+```
+```{r}
+toplot <- myframes_sampled %>% 
+  mutate(c_cell=gfp_nb/length_um) %>% 
+  group_by(condition,sampling) %>% 
+  mutate(mean_c_cell=mean(c_cell,na.rm=TRUE)) %>%
+  mutate(sd_c_cell=sd(c_cell,na.rm=TRUE)) %>%
+  mutate(cv_c_cell=sd_c_cell/mean_c_cell) %>%
+  mutate(mean_lambda_cell=mean(lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_lambda_cell=sd(lambda_cell,na.rm=TRUE)) %>%
+  mutate(cv_lambda_cell=sd_lambda_cell/mean_lambda_cell) %>%
+  ungroup() %>% 
+  distinct(condition,sampling,.keep_all=TRUE) %>% 
+  group_by(condition,mean_cell_rank) %>% 
+  mutate(mean_mean_c_cell=mean(mean_c_cell,na.rm=TRUE)) %>%
+  mutate(sd_mean_c_cell=sd(mean_c_cell,na.rm=TRUE)) %>%
+  mutate(mean_cv_c_cell=mean(cv_c_cell,na.rm=TRUE)) %>%
+  mutate(sd_cv_c_cell=sd(cv_c_cell,na.rm=TRUE)) %>%
+  mutate(mean_mean_lambda_cell=mean(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_mean_lambda_cell=sd(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(mean_cv_lambda_cell=mean(cv_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_cv_lambda_cell=sd(cv_lambda_cell,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  distinct(condition,.keep_all=TRUE) %>% 
+  left_join(conditions_df,by=c("condition"))
+  #mutate(mean_cell_rank_integer=as.integer(mean_cell_rank)) %>% 
+  
+toplot %>% 
+  mutate(condition_explicit=factor(condition_explicit,levels=c("acetate 0.05%","acetate 0.2%","glycerol 0.4%","glucose 0.2%","glucose 0.2% + aa"))) %>% 
+  mutate(s=compute_slope_errxy_robust(log(mean_mean_lambda_cell),log(mean_mean_c_cell))) %>% 
+  mutate(sd=compute_sdslope_errxy_robust(log(mean_mean_lambda_cell),log(mean_mean_c_cell))) %>% 
+  mutate(b=compute_intercept_errxy_robust(log(mean_mean_lambda_cell),log(mean_mean_c_cell))) %>% 
+  ggplot()+
+  geom_point(aes(mean_mean_lambda_cell,mean_mean_c_cell,col=condition_explicit))+
+  geom_line(aes(mean_mean_lambda_cell,exp(log(mean_mean_lambda_cell)*s+b)),col="red")+
+  geom_errorbar(aes(x=mean_mean_lambda_cell,ymin=mean_mean_c_cell-sd_mean_c_cell,ymax=mean_mean_c_cell+sd_mean_c_cell,col=condition_explicit))+
+  #geom_point(aes(mean_cell_rank_integer,mean_cv_c_cell,col=mean_cell_rank))+
+  geom_errorbar(aes(y=mean_mean_c_cell,xmin=mean_mean_lambda_cell-sd_mean_lambda_cell,xmax=mean_mean_lambda_cell+sd_mean_lambda_cell,col=condition_explicit))+
+  
+  #geom_point(data=toplot,aes(mean_mean_lambda_cell,mean_mean_c_cell,col=condition_explicit),alpha=0.2)+
+  #geom_errorbar(data=toplot,aes(x=mean_mean_lambda_cell,ymin=mean_mean_c_cell-sd_mean_c_cell,ymax=mean_mean_c_cell+sd_mean_c_cell,col=condition_explicit),alpha=0.2)+
+  #geom_point(aes(mean_cell_rank_integer,mean_cv_c_cell,col=mean_cell_rank))+
+  #geom_errorbar(data=toplot,aes(y=mean_mean_c_cell,xmin=mean_mean_lambda_cell-sd_mean_lambda_cell,xmax=mean_mean_lambda_cell+sd_mean_lambda_cell,col=condition_explicit),alpha=0.2)+
+  theme_cowplot()+
+  scale_y_continuous(trans='log',breaks=c(8000,12000,18000,27000))+
+  scale_x_continuous(trans='log',breaks=c(0.125,0.25,0.5,1,2))+
+  #ylim(0,0.5)+
+  #xlim(2500,40000)+
+  xlab("Mean Growth Rate (h-1)")+
+  ylab("Mean Concentration (#GFP/um)")+
+  guides(col=guide_legend(title="Conditions"))+
+  guides(shape=guide_legend(title="Cell rank"))
+```
+```{r}
+toplot %>% 
+  mutate(condition_explicit=factor(condition_explicit,levels=c("acetate 0.05%","acetate 0.2%","glycerol 0.4%","glucose 0.2%","glucose 0.2% + aa"))) %>% 
+  mutate(s=compute_slope_errxy_robust(log(mean_mean_lambda_cell),log(mean_mean_c_cell))) %>% 
+  mutate(sd=compute_sdslope_errxy_robust(log(mean_mean_lambda_cell),log(mean_mean_c_cell))) %>% 
+  mutate(b=compute_intercept_errxy_robust(log(mean_mean_lambda_cell),log(mean_mean_c_cell))) %>% 
+  distinct(s,b,sd)
+```
+
+
+```{r}
+toplot <- myframes_sampled %>% 
+  mutate(c_cell=gfp_nb/length_um) %>% 
+  ungroup() %>% 
+  group_by(condition,sampling) %>% 
+  mutate(mean_c_cell=mean(c_cell,na.rm=TRUE)) %>%
+  mutate(sd_c_cell=sd(c_cell,na.rm=TRUE)) %>%
+  mutate(cv_c_cell=sd_c_cell/mean_c_cell) %>%
+  mutate(mean_lambda_cell=mean(lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_lambda_cell=sd(lambda_cell,na.rm=TRUE)) %>%
+  mutate(cv_lambda_cell=sd_lambda_cell/mean_lambda_cell) %>%
+  ungroup() %>% 
+  distinct(condition,sampling,.keep_all=TRUE) %>% 
+  group_by(condition,mean_cell_rank) %>% 
+  mutate(mean_mean_c_cell=mean(mean_c_cell,na.rm=TRUE)) %>%
+  mutate(sd_mean_c_cell=sd(mean_c_cell,na.rm=TRUE)) %>%
+  mutate(mean_cv_c_cell=mean(cv_c_cell,na.rm=TRUE)) %>%
+  mutate(sd_cv_c_cell=sd(cv_c_cell,na.rm=TRUE)) %>%
+  mutate(mean_mean_lambda_cell=mean(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_mean_lambda_cell=sd(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(mean_cv_lambda_cell=mean(cv_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_cv_lambda_cell=sd(cv_lambda_cell,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  distinct(condition,.keep_all=TRUE) %>% 
+  left_join(conditions_df,by=c("condition"))
+  #mutate(mean_cell_rank_integer=as.integer(mean_cell_rank)) %>% 
+  
+myframes_sampled %>%
+  mutate(c_cell=gfp_nb/length_um) %>% 
+  group_by(condition,mean_cell_rank,sampling) %>% 
+  mutate(mean_c_cell=mean(c_cell,na.rm=TRUE)) %>%
+  mutate(sd_c_cell=sd(c_cell,na.rm=TRUE)) %>%
+  mutate(cv_c_cell=sd_c_cell/mean_c_cell) %>%
+  mutate(mean_lambda_cell=mean(lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_lambda_cell=sd(lambda_cell,na.rm=TRUE)) %>%
+  mutate(cv_lambda_cell=sd_lambda_cell/mean_lambda_cell) %>%
+  ungroup() %>% 
+  distinct(condition,mean_cell_rank,sampling,.keep_all=TRUE) %>% 
+  group_by(condition,mean_cell_rank) %>% 
+  mutate(mean_mean_c_cell=mean(mean_c_cell,na.rm=TRUE)) %>%
+  mutate(sd_mean_c_cell=sd(mean_c_cell,na.rm=TRUE)) %>%
+  mutate(mean_cv_c_cell=mean(cv_c_cell,na.rm=TRUE)) %>%
+  mutate(sd_cv_c_cell=sd(cv_c_cell,na.rm=TRUE)) %>%
+  mutate(mean_mean_lambda_cell=mean(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_mean_lambda_cell=sd(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(mean_cv_lambda_cell=mean(cv_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_cv_lambda_cell=sd(cv_lambda_cell,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  distinct(condition,mean_cell_rank,.keep_all=TRUE) %>% 
+  mutate(mean_cell_rank_integer=as.integer(mean_cell_rank)) %>% 
+  left_join(conditions_df,by=c("condition")) %>% 
+  mutate(condition_explicit=factor(condition_explicit,levels=c("acetate 0.05%","acetate 0.2%","glycerol 0.4%","glucose 0.2%","glucose 0.2% + aa"))) %>% 
+  ggplot()+
+  geom_point(aes(mean_mean_lambda_cell,mean_mean_c_cell,col=condition_explicit,shape=mean_cell_rank))+
+  geom_errorbar(aes(x=mean_mean_lambda_cell,ymin=mean_mean_c_cell-sd_mean_c_cell,ymax=mean_mean_c_cell+sd_mean_c_cell,col=condition_explicit))+
+  #geom_point(aes(mean_cell_rank_integer,mean_cv_c_cell,col=mean_cell_rank))+
+  geom_errorbar(aes(y=mean_mean_c_cell,xmin=mean_mean_lambda_cell-sd_mean_lambda_cell,xmax=mean_mean_lambda_cell+sd_mean_lambda_cell,col=condition_explicit))+
+  
+  geom_point(data=toplot,aes(mean_mean_lambda_cell,mean_mean_c_cell,col=condition_explicit),alpha=0.2)+
+  geom_errorbar(data=toplot,aes(x=mean_mean_lambda_cell,ymin=mean_mean_c_cell-sd_mean_c_cell,ymax=mean_mean_c_cell+sd_mean_c_cell,col=condition_explicit),alpha=0.2)+
+  #geom_point(aes(mean_cell_rank_integer,mean_cv_c_cell,col=mean_cell_rank))+
+  geom_errorbar(data=toplot,aes(y=mean_mean_c_cell,xmin=mean_mean_lambda_cell-sd_mean_lambda_cell,xmax=mean_mean_lambda_cell+sd_mean_lambda_cell,col=condition_explicit),alpha=0.2)+
+  theme_cowplot()+
+  #scale_y_continuous(trans='log',breaks=c(8000,12000,18000,27000))+
+  #scale_x_continuous(trans='log',breaks=c(0.125,0.25,0.5,1,2))+
+  ylim(5000,30000)+
+  xlim(0,2.5)+
+  xlab("Mean Growth Rate (h-1)")+
+  ylab("Mean Concentration (#GFP/um)")+
+  guides(col=guide_legend(title="Conditions"))+
+  guides(shape=guide_legend(title="Cell rank"))
+```
+
+
+# Variance and CV of production together with mean production
+
+```{r}
+conditions_df <- tibble(condition=c("acetate005","acetate020","glycerol040","glucose020","glucoseaa020"),condition_explicit=c("acetate 0.05%","acetate 0.2%","glycerol 0.4%","glucose 0.2%","glucose 0.2% + aa"))
+```
+
+```{r}
+toplot <- myframes_sampled %>% 
+  mutate(q_cell=q) %>% 
+  #mutate(q_cell=q_m) %>% 
+  group_by(condition,sampling) %>% 
+  mutate(mean_lambda_cell=mean(lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_lambda_cell=sd(lambda_cell,na.rm=TRUE)) %>%
+  mutate(cv_lambda_cell=sd_lambda_cell/mean_lambda_cell) %>%
+  mutate(mean_q_cell=mean(q_cell,na.rm=TRUE)) %>%
+  mutate(sd_q_cell=sqrt(mean(q**2+cov_qq)-mean_q_cell**2)) %>%
+  #mutate(sd_q_cell=sd(q_cell,na.rm=TRUE)) %>%
+  mutate(cv_q_cell=sd_q_cell/mean_q_cell) %>%
+  ungroup() %>% 
+  distinct(condition,sampling,.keep_all=TRUE) %>% 
+  group_by(condition) %>% 
+  mutate(mean_mean_lambda_cell=mean(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_mean_lambda_cell=sd(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(mean_cv_lambda_cell=mean(cv_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_cv_lambda_cell=sd(cv_lambda_cell,na.rm=TRUE)) %>%
+  mutate(mean_mean_q_cell=mean(mean_q_cell,na.rm=TRUE)) %>%
+  mutate(mean_sd_q_cell=mean(sd_q_cell,na.rm=TRUE)) %>%
+  mutate(sd_sd_q_cell=sd(sd_q_cell,na.rm=TRUE)) %>%
+  mutate(sd_mean_q_cell=sd(mean_q_cell,na.rm=TRUE)) %>%
+  mutate(mean_cv_q_cell=mean(cv_q_cell,na.rm=TRUE)) %>%
+  mutate(sd_cv_q_cell=sd(cv_q_cell,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  distinct(condition,.keep_all=TRUE) %>% 
+  left_join(conditions_df,by=c("condition"))
+  #mutate(mean_cell_rank_integer=as.integer(mean_cell_rank)) %>% 
+  
+conditions_df <- tibble(condition=c("acetate005","acetate020","glycerol040","glucose020","glucoseaa020"),condition_explicit=c("acetate 0.05%","acetate 0.2%","glycerol 0.4%","glucose 0.2%","glucose 0.2% + aa"))
+
+myframes_sampled %>%
+  #mutate(q_cell=q_m) %>% 
+  group_by(condition,mean_cell_rank,sampling) %>% 
+  mutate(mean_lambda_cell=mean(lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_lambda_cell=sd(lambda_cell,na.rm=TRUE)) %>%
+  mutate(cv_lambda_cell=sd_lambda_cell/mean_lambda_cell) %>%
+  mutate(mean_q_cell=mean(q_cell,na.rm=TRUE)) %>%
+  mutate(sd_q_cell=sqrt(mean(q**2+cov_qq)-mean_q_cell**2)) %>%
+  #mutate(sd_q_cell=sd(q_cell,na.rm=TRUE)) %>%
+  mutate(cv_q_cell=sd_q_cell/mean_q_cell) %>%
+  ungroup() %>% 
+  distinct(condition,mean_cell_rank,sampling,.keep_all=TRUE) %>% 
+  group_by(condition,mean_cell_rank) %>% 
+  mutate(mean_mean_lambda_cell=mean(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_mean_lambda_cell=sd(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(mean_cv_lambda_cell=mean(cv_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_cv_lambda_cell=sd(cv_lambda_cell,na.rm=TRUE)) %>%
+  mutate(mean_mean_q_cell=mean(mean_q_cell,na.rm=TRUE)) %>%
+  mutate(mean_sd_q_cell=mean(sd_q_cell,na.rm=TRUE)) %>%
+  mutate(sd_sd_q_cell=sd(sd_q_cell,na.rm=TRUE)) %>%
+  mutate(sd_mean_q_cell=sd(mean_q_cell,na.rm=TRUE)) %>%
+  mutate(mean_cv_q_cell=mean(cv_q_cell,na.rm=TRUE)) %>%
+  mutate(sd_cv_q_cell=sd(cv_q_cell,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  distinct(condition,mean_cell_rank,.keep_all=TRUE) %>% 
+  mutate(mean_cell_rank_integer=as.integer(mean_cell_rank)) %>% 
+  left_join(conditions_df,by=c("condition")) %>% 
+  mutate(condition_explicit=factor(condition_explicit,levels=c("acetate 0.05%","acetate 0.2%","glycerol 0.4%","glucose 0.2%","glucose 0.2% + aa"))) %>% 
+  ggplot()+
+  geom_point(aes(mean_mean_q_cell,mean_sd_q_cell**2,col=condition_explicit,shape=mean_cell_rank),size=2)+
+  geom_errorbar(aes(x=mean_mean_q_cell,ymin=(mean_sd_q_cell-sd_sd_q_cell)**2,ymax=(mean_sd_q_cell+sd_sd_q_cell)**2,col=condition_explicit))+
+  #geom_point(aes(mean_cell_rank_integer,mean_sd_q_cell,col=mean_cell_rank))+
+  geom_errorbar(aes(y=mean_sd_q_cell**2,xmin=mean_mean_q_cell-sd_mean_q_cell,xmax=mean_mean_q_cell+sd_mean_q_cell,col=condition_explicit))+
+  
+  geom_point(data=toplot,aes(mean_mean_q_cell,mean_sd_q_cell**2,col=condition_explicit),alpha=0.2,size=2)+
+  geom_errorbar(data=toplot,aes(x=mean_mean_q_cell,ymin=(mean_sd_q_cell-sd_sd_q_cell)**2,ymax=(mean_sd_q_cell+sd_sd_q_cell)**2,col=condition_explicit),alpha=0.2)+
+  #geom_point(aes(mean_cell_rank_integer,mean_sd_lambda_cell,col=mean_cell_rank))+
+  geom_errorbar(data=toplot,aes(y=mean_sd_q_cell**2,xmin=mean_mean_q_cell-sd_mean_q_cell,xmax=mean_mean_q_cell+sd_mean_q_cell,col=condition_explicit),alpha=0.2)+
+  theme_cowplot()+
+  #ylim(0,0.5)+
+  #xlim(0,3)+
+  scale_y_continuous(trans='log10',breaks=c(10,100,1000,10000),limits=c(10,20000))+
+  annotation_logticks(sides="l")+
+  #scale_x_continuous(trans='log',breaks=c(1,10,100,1000))+
+  xlab("Mean production (#GFP/min/um)")+
+  ylab("Production variance")+
+  guides(col=guide_legend(title="Conditions"))+
+  guides(shape=guide_legend(title="Cell rank"))
+
+ggsave("./20221208_presentation/var_q_vs_gr.pdf",width=7,height=4)
+
+```
+
+```{r}
+toplot <- myframes_sampled %>% 
+  mutate(q_cell=q) %>% 
+  #mutate(q_cell=q_m) %>% 
+  group_by(condition,sampling) %>% 
+  mutate(mean_lambda_cell=mean(lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_lambda_cell=sd(lambda_cell,na.rm=TRUE)) %>%
+  mutate(cv_lambda_cell=sd_lambda_cell/mean_lambda_cell) %>%
+  mutate(mean_q_cell=mean(q_cell,na.rm=TRUE)) %>%
+  mutate(sd_q_cell=sqrt(mean(q**2+cov_qq)-mean_q_cell**2)) %>%
+  #mutate(sd_q_cell=sd(q_cell,na.rm=TRUE)) %>%
+  mutate(cv_q_cell=sd_q_cell/mean_q_cell) %>%
+  ungroup() %>% 
+  distinct(condition,sampling,.keep_all=TRUE) %>% 
+  group_by(condition) %>% 
+  mutate(mean_mean_lambda_cell=mean(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_mean_lambda_cell=sd(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(mean_cv_lambda_cell=mean(cv_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_cv_lambda_cell=sd(cv_lambda_cell,na.rm=TRUE)) %>%
+  mutate(mean_mean_q_cell=mean(mean_q_cell,na.rm=TRUE)) %>%
+  mutate(mean_sd_q_cell=mean(sd_q_cell,na.rm=TRUE)) %>%
+  mutate(sd_sd_q_cell=sd(sd_q_cell,na.rm=TRUE)) %>%
+  mutate(sd_mean_q_cell=sd(mean_q_cell,na.rm=TRUE)) %>%
+  mutate(mean_cv_q_cell=mean(cv_q_cell,na.rm=TRUE)) %>%
+  mutate(sd_cv_q_cell=sd(cv_q_cell,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  distinct(condition,.keep_all=TRUE) %>% 
+  left_join(conditions_df,by=c("condition")) %>% 
+  mutate(s=compute_slope_errxy_robust(mean_mean_q_cell,mean_sd_q_cell**2)) %>% 
+  mutate(sd=compute_sdslope_errxy_robust(mean_mean_q_cell,mean_sd_q_cell**2)) %>% 
+  mutate(b=compute_intercept_errxy_robust(mean_mean_q_cell,mean_sd_q_cell**2))
+  #mutate(mean_cell_rank_integer=as.integer(mean_cell_rank)) %>% 
+  
+conditions_df <- tibble(condition=c("acetate005","acetate020","glycerol040","glucose020","glucoseaa020"),condition_explicit=c("acetate 0.05%","acetate 0.2%","glycerol 0.4%","glucose 0.2%","glucose 0.2% + aa"))
+
+myframes_sampled %>%
+  #mutate(q_cell=q_m) %>% 
+  group_by(condition,mean_cell_rank,sampling) %>% 
+  mutate(mean_lambda_cell=mean(lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_lambda_cell=sd(lambda_cell,na.rm=TRUE)) %>%
+  mutate(cv_lambda_cell=sd_lambda_cell/mean_lambda_cell) %>%
+  mutate(mean_q_cell=mean(q_cell,na.rm=TRUE)) %>%
+  mutate(sd_q_cell=sqrt(mean(q**2+cov_qq)-mean_q_cell**2)) %>%
+  #mutate(sd_q_cell=sd(q_cell,na.rm=TRUE)) %>%
+  mutate(cv_q_cell=sd_q_cell/mean_q_cell) %>%
+  ungroup() %>% 
+  distinct(condition,mean_cell_rank,sampling,.keep_all=TRUE) %>% 
+  group_by(condition,mean_cell_rank) %>% 
+  mutate(mean_mean_lambda_cell=mean(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_mean_lambda_cell=sd(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(mean_cv_lambda_cell=mean(cv_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_cv_lambda_cell=sd(cv_lambda_cell,na.rm=TRUE)) %>%
+  mutate(mean_mean_q_cell=mean(mean_q_cell,na.rm=TRUE)) %>%
+  mutate(mean_sd_q_cell=mean(sd_q_cell,na.rm=TRUE)) %>%
+  mutate(sd_sd_q_cell=sd(sd_q_cell,na.rm=TRUE)) %>%
+  mutate(sd_mean_q_cell=sd(mean_q_cell,na.rm=TRUE)) %>%
+  mutate(mean_cv_q_cell=mean(cv_q_cell,na.rm=TRUE)) %>%
+  mutate(sd_cv_q_cell=sd(cv_q_cell,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  distinct(condition,mean_cell_rank,.keep_all=TRUE) %>% 
+  mutate(mean_cell_rank_integer=as.integer(mean_cell_rank)) %>% 
+  left_join(conditions_df,by=c("condition")) %>% 
+  mutate(condition_explicit=factor(condition_explicit,levels=c("acetate 0.05%","acetate 0.2%","glycerol 0.4%","glucose 0.2%","glucose 0.2% + aa"))) %>% 
+  ggplot()+
+  geom_point(aes(mean_mean_q_cell,mean_sd_q_cell**2,col=condition_explicit,shape=mean_cell_rank),size=2)+
+  geom_errorbar(aes(x=mean_mean_q_cell,ymin=(mean_sd_q_cell-sd_sd_q_cell)**2,ymax=(mean_sd_q_cell+sd_sd_q_cell)**2,col=condition_explicit))+
+  #geom_point(aes(mean_cell_rank_integer,mean_sd_q_cell,col=mean_cell_rank))+
+  geom_errorbar(aes(y=mean_sd_q_cell**2,xmin=mean_mean_q_cell-sd_mean_q_cell,xmax=mean_mean_q_cell+sd_mean_q_cell,col=condition_explicit))+
+  
+  geom_point(data=toplot,aes(mean_mean_q_cell,mean_sd_q_cell**2,col=condition_explicit),alpha=0.2,size=2)+
+  geom_errorbar(data=toplot,aes(x=mean_mean_q_cell,ymin=(mean_sd_q_cell-sd_sd_q_cell)**2,ymax=(mean_sd_q_cell+sd_sd_q_cell)**2,col=condition_explicit),alpha=0.2)+
+  geom_line(data=toplot,aes(mean_mean_q_cell,mean_mean_q_cell*s+b,col=condition_explicit),alpha=0.2,col="red",linetype="dashed")+
+  #geom_point(aes(mean_cell_rank_integer,mean_sd_lambda_cell,col=mean_cell_rank))+
+  geom_errorbar(data=toplot,aes(y=mean_sd_q_cell**2,xmin=mean_mean_q_cell-sd_mean_q_cell,xmax=mean_mean_q_cell+sd_mean_q_cell,col=condition_explicit),alpha=0.2)+
+  theme_cowplot()+
+  #ylim(0,0.5)+
+  #xlim(0,3)+
+  #scale_y_continuous(trans='log10',breaks=c(10,100,1000,10000),limits=c(10,20000))+
+  #annotation_logticks(sides="l")+
+  #scale_x_continuous(trans='log',breaks=c(1,10,100,1000))+
+  xlab("Mean production (#GFP/min/um)")+
+  ylab("Production variance")+
+  guides(col=guide_legend(title="Conditions"))+
+  guides(shape=guide_legend(title="Cell rank"))
+
+ggsave("./20221208_presentation/var_q_vs_gr_lin.pdf",width=7,height=4)
+
+```
+
+
+
+```{r}
+N <- 100
+N0 <- 10
+
+random_selection <- function(.d,.N,.N0){
+  #.d: input dataframe
+  #.N: Number of cells to pick per group
+  #.N0 number of 'bags'
+  
+  .df <- .d %>% 
+        group_by(cell) %>%  #already grouped by condition, promoter, type, simulationid
+        sample_n(1) %>% 
+        #mutate(lambda_cell=mean(lambda*60/log(2),na.rm=TRUE)) %>% 
+        ungroup() %>% 
+        #distinct(cell,.keep_all = TRUE) %>% 
+        #mutate(re) %>% 
+        sample_n(.N,replace=TRUE) %>% 
+        mutate(sampling=1)
+  
+  for(i in 2:.N0){
+    .df_new <- .d %>% 
+        group_by(cell) %>%  #already grouped by condition, promoter, type, simulationid
+        sample_n(1) %>% 
+        #mutate(lambda_cell=mean(lambda*60/log(2),na.rm=TRUE)) %>% 
+        ungroup() %>% 
+        #distinct(cell,.keep_all = TRUE) %>% 
+        sample_n(.N,replace=TRUE) %>% 
+        mutate(sampling=i)
+    .df <- rbind(.df,.df_new)}
+  
+  return(.df)}
+
+if(!exists("mycluster")){
+mycluster <- min(30, parallel::detectCores()-1) %>%  # do not use more than 30 cores
+  default_cluster() %>% cluster_library( # load currently loaded packages on each core
+    names(sessionInfo()$otherPkgs))
+  
+cluster_copy(mycluster,c("fit_exp_elongation_predict","fit_exp_elongation_slope","fit_exp_elongation_sd_slope","fit_exp_elongation_intercept"))
+}
+
+cluster_copy(mycluster,c("fit_exp_elongation_predict","fit_exp_elongation_slope","fit_exp_elongation_sd_slope","fit_exp_elongation_intercept","N0","random_selection","N"))
+
+selected_conditions <- myframes_final %>% 
+  distinct(cell,.keep_all = TRUE) %>% 
+  group_by(promoter,mean_cell_rank,condition) %>% 
+  filter(n()>50) %>% 
+  ungroup() %>% 
+  distinct(promoter,mean_cell_rank,condition)
+
+myframes_sampled <- myframes_final %>% 
+  semi_join(selected_conditions,by=c("promoter","mean_cell_rank","condition")) %>% 
+  group_by(cell) %>% 
+  partition(cluster=mycluster) %>%
+  arrange(frame) %>% 
+  mutate(alpha=fit_exp_elongation_slope(time_sec,length_um_m)) %>% 
+  mutate(lambda_cell=mean(lambda_m*60/log(2),na.remove=TRUE)) %>% 
+  mutate(q_cell=mean(q_m,na.remove=TRUE)) %>% 
+  mutate(q_full_cellcycle=(last(gfp_nb_m)-first(gfp_nb_m))/(last(length_um_m)-first(length_um_m))*alpha) %>% 
+  collect() %>% 
+  ungroup() %>% 
+  group_by(condition,promoter,mean_cell_rank) %>% 
+  partition(cluster=mycluster) %>%
+  do((function(.df){
+    .new_df <- random_selection(.df,N,N0)
+    return(.new_df)})
+    (.)) %>% 
+  collect() %>% 
+  ungroup()
+```
+
+```{r}
+toplot <- myframes_sampled %>% 
+  mutate(q_cell=q) %>% 
+  #mutate(q_cell=q_m) %>% 
+  group_by(condition,sampling) %>% 
+  mutate(mean_lambda_cell=mean(lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_lambda_cell=sd(lambda_cell,na.rm=TRUE)) %>%
+  mutate(cv_lambda_cell=sd_lambda_cell/mean_lambda_cell) %>%
+  mutate(mean_q_cell=mean(q_cell,na.rm=TRUE)) %>%
+  mutate(sd_q_cell=sqrt(mean(q**2+cov_qq)-mean_q_cell**2)) %>%
+  #mutate(sd_q_cell=sd(q_cell,na.rm=TRUE)) %>%
+  mutate(cv_q_cell=sd_q_cell/mean_q_cell) %>%
+  ungroup() %>% 
+  distinct(condition,sampling,.keep_all=TRUE) %>% 
+  group_by(condition) %>% 
+  mutate(mean_mean_lambda_cell=mean(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_mean_lambda_cell=sd(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(mean_cv_lambda_cell=mean(cv_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_cv_lambda_cell=sd(cv_lambda_cell,na.rm=TRUE)) %>%
+  mutate(mean_mean_q_cell=mean(mean_q_cell,na.rm=TRUE)) %>%
+  mutate(mean_sd_q_cell=mean(sd_q_cell,na.rm=TRUE)) %>%
+  mutate(sd_sd_q_cell=sd(sd_q_cell,na.rm=TRUE)) %>%
+  mutate(sd_mean_q_cell=sd(mean_q_cell,na.rm=TRUE)) %>%
+  mutate(mean_cv_q_cell=mean(cv_q_cell,na.rm=TRUE)) %>%
+  mutate(sd_cv_q_cell=sd(cv_q_cell,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  distinct(condition,.keep_all=TRUE) %>% 
+  left_join(conditions_df,by=c("condition"))
+  #mutate(mean_cell_rank_integer=as.integer(mean_cell_rank)) %>% 
+  
+conditions_df <- tibble(condition=c("acetate005","acetate020","glycerol040","glucose020","glucoseaa020"),condition_explicit=c("acetate 0.05%","acetate 0.2%","glycerol 0.4%","glucose 0.2%","glucose 0.2% + aa"))
+
+myframes_sampled %>%
+  #mutate(q_cell=q_m) %>% 
+  group_by(condition,mean_cell_rank,sampling) %>% 
+  mutate(mean_lambda_cell=mean(lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_lambda_cell=sd(lambda_cell,na.rm=TRUE)) %>%
+  mutate(cv_lambda_cell=sd_lambda_cell/mean_lambda_cell) %>%
+  mutate(mean_q_cell=mean(q_cell,na.rm=TRUE)) %>%
+  mutate(sd_q_cell=sqrt(mean(q**2+cov_qq)-mean_q_cell**2)) %>%
+  #mutate(sd_q_cell=sd(q_cell,na.rm=TRUE)) %>%
+  mutate(cv_q_cell=sd_q_cell/mean_q_cell) %>%
+  ungroup() %>% 
+  distinct(condition,mean_cell_rank,sampling,.keep_all=TRUE) %>% 
+  group_by(condition,mean_cell_rank) %>% 
+  mutate(mean_mean_lambda_cell=mean(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_mean_lambda_cell=sd(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(mean_cv_lambda_cell=mean(cv_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_cv_lambda_cell=sd(cv_lambda_cell,na.rm=TRUE)) %>%
+  mutate(mean_mean_q_cell=mean(mean_q_cell,na.rm=TRUE)) %>%
+  mutate(mean_sd_q_cell=mean(sd_q_cell,na.rm=TRUE)) %>%
+  mutate(sd_sd_q_cell=sd(sd_q_cell,na.rm=TRUE)) %>%
+  mutate(sd_mean_q_cell=sd(mean_q_cell,na.rm=TRUE)) %>%
+  mutate(mean_cv_q_cell=mean(cv_q_cell,na.rm=TRUE)) %>%
+  mutate(sd_cv_q_cell=sd(cv_q_cell,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  distinct(condition,mean_cell_rank,.keep_all=TRUE) %>% 
+  mutate(mean_cell_rank_integer=as.integer(mean_cell_rank)) %>% 
+  left_join(conditions_df,by=c("condition")) %>% 
+  mutate(condition_explicit=factor(condition_explicit,levels=c("acetate 0.05%","acetate 0.2%","glycerol 0.4%","glucose 0.2%","glucose 0.2% + aa"))) %>% 
+  ggplot()+
+  geom_point(aes(mean_mean_q_cell,mean_cv_q_cell,col=condition_explicit,shape=mean_cell_rank),size=2)+
+  geom_errorbar(aes(x=mean_mean_q_cell,ymin=mean_cv_q_cell-sd_cv_q_cell,ymax=mean_cv_q_cell+sd_cv_q_cell,col=condition_explicit))+
+  #geom_point(aes(mean_cell_rank_integer,mean_sd_q_cell,col=mean_cell_rank))+
+  geom_errorbar(aes(y=mean_cv_q_cell,xmin=mean_mean_q_cell-sd_mean_q_cell,xmax=mean_mean_q_cell+sd_mean_q_cell,col=condition_explicit))+
+  
+  geom_point(data=toplot,aes(mean_mean_q_cell,mean_cv_q_cell,col=condition_explicit),alpha=0.2,size=2)+
+  geom_errorbar(data=toplot,aes(x=mean_mean_q_cell,ymin=mean_cv_q_cell-sd_cv_q_cell,ymax=mean_cv_q_cell+sd_cv_q_cell,col=condition_explicit),alpha=0.2)+
+  #geom_point(aes(mean_cell_rank_integer,mean_sd_lambda_cell,col=mean_cell_rank))+
+  geom_errorbar(data=toplot,aes(y=mean_cv_q_cell,xmin=mean_mean_q_cell-sd_mean_q_cell,xmax=mean_mean_q_cell+sd_mean_q_cell,col=condition_explicit),alpha=0.2)+
+  theme_cowplot()+
+  ylim(0,1)+
+  #xlim(0,3)+
+  #scale_y_continuous(trans='log10',breaks=c(10,100,1000,10000),limits=c(10,20000))+
+  #annotation_logticks(sides="l")+
+  #scale_x_continuous(trans='log',breaks=c(1,10,100,1000))+
+  xlab("Mean production (#GFP/min/um)")+
+  ylab("Production CV")+
+  guides(col=guide_legend(title="Conditions"))+
+  guides(shape=guide_legend(title="Cell rank"))
+
+ggsave("./20221208_presentation/cv_q_vs_mean_q.pdf",width=7,height=4)
+
+```
+
+```{r}
+toplot <- myframes_sampled %>% 
+  mutate(q_cell=q_m) %>% 
+  group_by(condition,sampling) %>% 
+  mutate(mean_lambda_cell=mean(lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_lambda_cell=sd(lambda_cell,na.rm=TRUE)) %>%
+  mutate(cv_lambda_cell=sd_lambda_cell/mean_lambda_cell) %>%
+  mutate(mean_q_cell=mean(q_cell,na.rm=TRUE)) %>%
+  mutate(sd_q_cell=sd(q_cell,na.rm=TRUE)) %>%
+  mutate(cv_q_cell=sd_q_cell/mean_q_cell) %>%
+  ungroup() %>% 
+  distinct(condition,sampling,.keep_all=TRUE) %>% 
+  group_by(condition) %>% 
+  mutate(mean_mean_lambda_cell=mean(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_mean_lambda_cell=sd(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(mean_cv_lambda_cell=mean(cv_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_cv_lambda_cell=sd(cv_lambda_cell,na.rm=TRUE)) %>%
+  mutate(mean_mean_q_cell=mean(mean_q_cell,na.rm=TRUE)) %>%
+  mutate(sd_mean_q_cell=sd(mean_q_cell,na.rm=TRUE)) %>%
+  mutate(mean_cv_q_cell=mean(cv_q_cell,na.rm=TRUE)) %>%
+  mutate(sd_cv_q_cell=sd(cv_q_cell,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  distinct(condition,.keep_all=TRUE) %>% 
+  left_join(conditions_df,by=c("condition"))
+  #mutate(mean_cell_rank_integer=as.integer(mean_cell_rank)) %>% 
+  
+
+conditions_df <- tibble(condition=c("acetate005","acetate020","glycerol040","glucose020","glucoseaa020"),condition_explicit=c("acetate 0.05%","acetate 0.2%","glycerol 0.4%","glucose 0.2%","glucose 0.2% + aa"))
+
+
+myframes_sampled %>%
+  mutate(q_cell=q_m) %>% 
+  group_by(condition,mean_cell_rank,sampling) %>% 
+  mutate(mean_lambda_cell=mean(lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_lambda_cell=sd(lambda_cell,na.rm=TRUE)) %>%
+  mutate(cv_lambda_cell=sd_lambda_cell/mean_lambda_cell) %>%
+  mutate(mean_q_cell=mean(q_cell,na.rm=TRUE)) %>%
+  mutate(sd_q_cell=sd(q_cell,na.rm=TRUE)) %>%
+  mutate(cv_q_cell=sd_q_cell/mean_q_cell) %>%
+  ungroup() %>% 
+  distinct(condition,mean_cell_rank,sampling,.keep_all=TRUE) %>% 
+  group_by(condition,mean_cell_rank) %>% 
+  mutate(mean_mean_lambda_cell=mean(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_mean_lambda_cell=sd(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(mean_cv_lambda_cell=mean(cv_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_cv_lambda_cell=sd(cv_lambda_cell,na.rm=TRUE)) %>%
+  mutate(mean_mean_q_cell=mean(mean_q_cell,na.rm=TRUE)) %>%
+  mutate(sd_mean_q_cell=sd(mean_q_cell,na.rm=TRUE)) %>%
+  mutate(mean_cv_q_cell=mean(cv_q_cell,na.rm=TRUE)) %>%
+  mutate(sd_cv_q_cell=sd(cv_q_cell,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  distinct(condition,mean_cell_rank,.keep_all=TRUE) %>% 
+  mutate(mean_cell_rank_integer=as.integer(mean_cell_rank)) %>% 
+  left_join(conditions_df,by=c("condition")) %>% 
+  mutate(condition_explicit=factor(condition_explicit,levels=c("acetate 0.05%","acetate 0.2%","glycerol 0.4%","glucose 0.2%","glucose 0.2% + aa"))) %>% 
+  ggplot()+
+  geom_point(aes(mean_mean_q_cell,mean_cv_q_cell,col=condition_explicit,shape=mean_cell_rank),size=2)+
+  geom_errorbar(aes(x=mean_mean_q_cell,ymin=mean_cv_q_cell-sd_cv_q_cell,ymax=mean_cv_q_cell+sd_cv_q_cell,col=condition_explicit))+
+  #geom_point(aes(mean_cell_rank_integer,mean_cv_q_cell,col=mean_cell_rank))+
+  geom_errorbar(aes(y=mean_cv_q_cell,xmin=mean_mean_q_cell-sd_mean_q_cell,xmax=mean_mean_q_cell+sd_mean_q_cell,col=condition_explicit))+
+  
+  geom_point(data=toplot,aes(mean_mean_q_cell,mean_cv_q_cell,col=condition_explicit),alpha=0.2,size=2)+
+  geom_errorbar(data=toplot,aes(x=mean_mean_q_cell,ymin=mean_cv_q_cell-sd_cv_q_cell,ymax=mean_cv_q_cell+sd_cv_q_cell,col=condition_explicit),alpha=0.2)+
+  #geom_point(aes(mean_cell_rank_integer,mean_cv_lambda_cell,col=mean_cell_rank))+
+  geom_errorbar(data=toplot,aes(y=mean_cv_q_cell,xmin=mean_mean_q_cell-sd_mean_q_cell,xmax=mean_mean_q_cell+sd_mean_q_cell,col=condition_explicit),alpha=0.2)+
+  theme_cowplot()+
+  ylim(0,0.6)+
+  #xlim(0,3)+
+  #scale_x_continuous(trans='log',breaks=c(0.125,0.25,0.5,1,2))+
+  xlab("Mean Production (#GFP/min/um)")+
+  ylab("Production CV")+
+  guides(col=guide_legend(title="Conditions"))+
+  guides(shape=guide_legend(title="Cell rank"))
+
+ggsave("./20221208_presentation/cv_q_vs_gr.pdf",width=7,height=4)
+
+```
+
+# CV of concentration
+
+```{r}
+conditions_df <- tibble(condition=c("acetate005","acetate020","glycerol040","glucose020","glucoseaa020"),condition_explicit=c("acetate 0.05%","acetate 0.2%","glycerol 0.4%","glucose 0.2%","glucose 0.2% + aa"))
+```
+
+```{r}
+toplot <- myframes_sampled %>% 
+  mutate(c_cell=gfp_nb/length_um) %>% 
+  mutate(sigma2_c_cell=(1/length_um*sqrt(cov_gg)-gfp_nb/(length_um**2)*sqrt(cov_ll))**2) %>%
+  group_by(condition,sampling) %>% 
+  mutate(mean_lambda_cell=mean(lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_lambda_cell=sd(lambda_cell,na.rm=TRUE)) %>%
+  mutate(cv_lambda_cell=sd_lambda_cell/mean_lambda_cell) %>%
+  mutate(mean_c_cell=mean(c_cell,na.rm=TRUE)) %>%
+  mutate(sd_c_cell=sqrt(mean(c_cell**2+sigma2_c_cell)-mean_c_cell**2)) %>%
+  mutate(cv_c_cell=sd_c_cell/mean_c_cell) %>%
+  ungroup() %>% 
+  distinct(condition,sampling,.keep_all=TRUE) %>% 
+  group_by(condition) %>% 
+  mutate(mean_mean_lambda_cell=mean(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_mean_lambda_cell=sd(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(mean_cv_lambda_cell=mean(cv_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_cv_lambda_cell=sd(cv_lambda_cell,na.rm=TRUE)) %>%
+  mutate(mean_mean_c_cell=mean(mean_c_cell,na.rm=TRUE)) %>%
+  mutate(mean_sd_c_cell=mean(sd_c_cell,na.rm=TRUE)) %>%
+  mutate(sd_sd_c_cell=sd(sd_c_cell,na.rm=TRUE)) %>%
+  mutate(sd_mean_c_cell=sd(mean_c_cell,na.rm=TRUE)) %>%
+  mutate(mean_cv_c_cell=mean(cv_c_cell,na.rm=TRUE)) %>%
+  mutate(sd_cv_c_cell=sd(cv_c_cell,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  distinct(condition,.keep_all=TRUE) %>% 
+  left_join(conditions_df,by=c("condition"))
+  #mutate(mean_cell_rank_integer=as.integer(mean_cell_rank)) %>% 
+  
+conditions_df <- tibble(condition=c("acetate005","acetate020","glycerol040","glucose020","glucoseaa020"),condition_explicit=c("acetate 0.05%","acetate 0.2%","glycerol 0.4%","glucose 0.2%","glucose 0.2% + aa"))
+
+myframes_sampled %>%
+  mutate(c_cell=gfp_nb/length_um) %>% 
+  mutate(sigma2_c_cell=(1/length_um*sqrt(cov_gg)-gfp_nb/(length_um**2)*sqrt(cov_ll))**2) %>%
+  group_by(condition,mean_cell_rank,sampling) %>% 
+  mutate(mean_lambda_cell=mean(lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_lambda_cell=sd(lambda_cell,na.rm=TRUE)) %>%
+  mutate(cv_lambda_cell=sd_lambda_cell/mean_lambda_cell) %>%
+  mutate(mean_c_cell=mean(c_cell,na.rm=TRUE)) %>%
+  #mutate(sd_c_cell=sd(c_cell,na.rm=TRUE)) %>%
+  mutate(sd_c_cell=sqrt(mean(c_cell**2+sigma2_c_cell)-mean_c_cell**2)) %>%
+  mutate(cv_c_cell=sd_c_cell/mean_c_cell) %>%
+  ungroup() %>% 
+  distinct(condition,mean_cell_rank,sampling,.keep_all=TRUE) %>% 
+  group_by(condition,mean_cell_rank) %>% 
+  mutate(mean_mean_lambda_cell=mean(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_mean_lambda_cell=sd(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(mean_cv_lambda_cell=mean(cv_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_cv_lambda_cell=sd(cv_lambda_cell,na.rm=TRUE)) %>%
+  mutate(mean_mean_c_cell=mean(mean_c_cell,na.rm=TRUE)) %>%
+  mutate(mean_sd_c_cell=mean(sd_c_cell,na.rm=TRUE)) %>%
+  mutate(sd_sd_c_cell=sd(sd_c_cell,na.rm=TRUE)) %>%
+  mutate(sd_mean_c_cell=sd(mean_c_cell,na.rm=TRUE)) %>%
+  mutate(mean_cv_c_cell=mean(cv_c_cell,na.rm=TRUE)) %>%
+  mutate(sd_cv_c_cell=sd(cv_c_cell,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  distinct(condition,mean_cell_rank,.keep_all=TRUE) %>% 
+  mutate(mean_cell_rank_integer=as.integer(mean_cell_rank)) %>% 
+  left_join(conditions_df,by=c("condition")) %>% 
+  mutate(condition_explicit=factor(condition_explicit,levels=c("acetate 0.05%","acetate 0.2%","glycerol 0.4%","glucose 0.2%","glucose 0.2% + aa"))) %>% 
+  ggplot()+
+  geom_point(aes(mean_mean_c_cell,mean_sd_c_cell**2,col=condition_explicit,shape=mean_cell_rank),size=2)+
+  geom_errorbar(aes(x=mean_mean_c_cell,ymin=(mean_sd_c_cell-sd_sd_c_cell)**2,ymax=(mean_sd_c_cell+sd_sd_c_cell)**2,col=condition_explicit))+
+  #geom_point(aes(mean_cell_rank_integer,mean_sd_c_cell,col=mean_cell_rank))+
+  geom_errorbar(aes(y=mean_sd_c_cell**2,xmin=mean_mean_c_cell-sd_mean_c_cell,xmax=mean_mean_c_cell+sd_mean_c_cell,col=condition_explicit))+
+  
+  geom_point(data=toplot,aes(mean_mean_c_cell,mean_sd_c_cell**2,col=condition_explicit),alpha=0.2,size=2)+
+  geom_errorbar(data=toplot,aes(x=mean_mean_c_cell,ymin=(mean_sd_c_cell-sd_sd_c_cell)**2,ymax=(mean_sd_c_cell+sd_sd_c_cell)**2,col=condition_explicit),alpha=0.2)+
+  #geom_point(aes(mean_cell_rank_integer,mean_sd_lambda_cell,col=mean_cell_rank))+
+  geom_errorbar(data=toplot,aes(y=mean_sd_c_cell**2,xmin=mean_mean_c_cell-sd_mean_c_cell,xmax=mean_mean_c_cell+sd_mean_c_cell,col=condition_explicit),alpha=0.2)+
+  theme_cowplot()+
+  #ylim(0,0.5)+
+  #xlim(0,3)+
+  #scale_y_continuous(trans='log',breaks=c(1,10,100,1000))+
+  #scale_x_continuous(trans='log',breaks=c(1,10,100,1000))+
+  xlab("Mean concentration (#GFP/min/um)")+
+  ylab("Concentration variance")+
+  guides(col=guide_legend(title="Conditions"))+
+  guides(shape=guide_legend(title="Cell rank"))
+
+ggsave("./20221208_presentation/var_c_vs_mean_c.pdf",width=7,height=4)
+
+```
+
+
+```{r}
+toplot <- myframes_sampled %>% 
+  mutate(c_cell=gfp_nb/length_um) %>% 
+  mutate(sigma2_c_cell=(1/length_um*sqrt(cov_gg)-gfp_nb/(length_um**2)*sqrt(cov_ll))**2) %>%
+  group_by(condition,sampling) %>% 
+  mutate(mean_lambda_cell=mean(lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_lambda_cell=sd(lambda_cell,na.rm=TRUE)) %>%
+  mutate(cv_lambda_cell=sd_lambda_cell/mean_lambda_cell) %>%
+  mutate(mean_c_cell=mean(c_cell,na.rm=TRUE)) %>%
+  mutate(sd_c_cell=sqrt(mean(c_cell**2+sigma2_c_cell)-mean_c_cell**2)) %>%
+  mutate(cv_c_cell=sd_c_cell/mean_c_cell) %>%
+  ungroup() %>% 
+  distinct(condition,sampling,.keep_all=TRUE) %>% 
+  group_by(condition) %>% 
+  mutate(mean_mean_lambda_cell=mean(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_mean_lambda_cell=sd(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(mean_cv_lambda_cell=mean(cv_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_cv_lambda_cell=sd(cv_lambda_cell,na.rm=TRUE)) %>%
+  mutate(mean_mean_c_cell=mean(mean_c_cell,na.rm=TRUE)) %>%
+  mutate(mean_sd_c_cell=mean(sd_c_cell,na.rm=TRUE)) %>%
+  mutate(sd_sd_c_cell=sd(sd_c_cell,na.rm=TRUE)) %>%
+  mutate(sd_mean_c_cell=sd(mean_c_cell,na.rm=TRUE)) %>%
+  mutate(mean_cv_c_cell=mean(cv_c_cell,na.rm=TRUE)) %>%
+  mutate(sd_cv_c_cell=sd(cv_c_cell,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  distinct(condition,.keep_all=TRUE) %>% 
+  left_join(conditions_df,by=c("condition")) %>% 
+  mutate(s=compute_slope_errxy_robust(mean_mean_c_cell,log(mean_sd_c_cell**2))) %>% 
+  mutate(sd=compute_sdslope_errxy_robust(mean_mean_c_cell,log(mean_sd_c_cell**2))) %>%
+  mutate(b=compute_intercept_errxy_robust(mean_mean_c_cell,log(mean_sd_c_cell**2)))
+  #mutate(mean_cell_rank_integer=as.integer(mean_cell_rank)) %>% 
+  #mutate(mean_cell_rank_integer=as.integer(mean_cell_rank)) %>% 
+
+print(unique(toplot$s))
+print(unique(toplot$b))
+print(unique(toplot$sd))
+  
+conditions_df <- tibble(condition=c("acetate005","acetate020","glycerol040","glucose020","glucoseaa020"),condition_explicit=c("acetate 0.05%","acetate 0.2%","glycerol 0.4%","glucose 0.2%","glucose 0.2% + aa"))
+
+myframes_sampled %>%
+  mutate(c_cell=gfp_nb/length_um) %>% 
+  mutate(sigma2_c_cell=(1/length_um*sqrt(cov_gg)-gfp_nb/(length_um**2)*sqrt(cov_ll))**2) %>%
+  group_by(condition,mean_cell_rank,sampling) %>% 
+  mutate(mean_lambda_cell=mean(lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_lambda_cell=sd(lambda_cell,na.rm=TRUE)) %>%
+  mutate(cv_lambda_cell=sd_lambda_cell/mean_lambda_cell) %>%
+  mutate(mean_c_cell=mean(c_cell,na.rm=TRUE)) %>%
+  #mutate(sd_c_cell=sd(c_cell,na.rm=TRUE)) %>%
+  mutate(sd_c_cell=sqrt(mean(c_cell**2+sigma2_c_cell)-mean_c_cell**2)) %>%
+  mutate(cv_c_cell=sd_c_cell/mean_c_cell) %>%
+  ungroup() %>% 
+  distinct(condition,mean_cell_rank,sampling,.keep_all=TRUE) %>% 
+  group_by(condition,mean_cell_rank) %>% 
+  mutate(mean_mean_lambda_cell=mean(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_mean_lambda_cell=sd(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(mean_cv_lambda_cell=mean(cv_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_cv_lambda_cell=sd(cv_lambda_cell,na.rm=TRUE)) %>%
+  mutate(mean_mean_c_cell=mean(mean_c_cell,na.rm=TRUE)) %>%
+  mutate(mean_sd_c_cell=mean(sd_c_cell,na.rm=TRUE)) %>%
+  mutate(sd_sd_c_cell=sd(sd_c_cell,na.rm=TRUE)) %>%
+  mutate(sd_mean_c_cell=sd(mean_c_cell,na.rm=TRUE)) %>%
+  mutate(mean_cv_c_cell=mean(cv_c_cell,na.rm=TRUE)) %>%
+  mutate(sd_cv_c_cell=sd(cv_c_cell,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  distinct(condition,mean_cell_rank,.keep_all=TRUE) %>% 
+  mutate(mean_cell_rank_integer=as.integer(mean_cell_rank)) %>% 
+  left_join(conditions_df,by=c("condition")) %>% 
+  mutate(condition_explicit=factor(condition_explicit,levels=c("acetate 0.05%","acetate 0.2%","glycerol 0.4%","glucose 0.2%","glucose 0.2% + aa"))) %>% 
+  ggplot()+
+  geom_point(aes(mean_mean_c_cell,mean_sd_c_cell**2,col=condition_explicit,shape=mean_cell_rank),size=2)+
+  geom_errorbar(aes(x=mean_mean_c_cell,ymin=(mean_sd_c_cell-sd_sd_c_cell)**2,ymax=(mean_sd_c_cell+sd_sd_c_cell)**2,col=condition_explicit))+
+  #geom_point(aes(mean_cell_rank_integer,mean_sd_c_cell,col=mean_cell_rank))+
+  geom_errorbar(aes(y=mean_sd_c_cell**2,xmin=mean_mean_c_cell-sd_mean_c_cell,xmax=mean_mean_c_cell+sd_mean_c_cell,col=condition_explicit))+
+  
+  geom_point(data=toplot,aes(mean_mean_c_cell,mean_sd_c_cell**2,col=condition_explicit),alpha=0.2,size=2)+
+  geom_line(data=toplot,aes(mean_mean_c_cell,exp(mean_mean_c_cell*s+b)),alpha=0.2,col="red",linetype="dashed")+
+  geom_errorbar(data=toplot,aes(x=mean_mean_c_cell,ymin=(mean_sd_c_cell-sd_sd_c_cell)**2,ymax=(mean_sd_c_cell+sd_sd_c_cell)**2,col=condition_explicit),alpha=0.2)+
+  #geom_point(aes(mean_cell_rank_integer,mean_sd_lambda_cell,col=mean_cell_rank))+
+  geom_errorbar(data=toplot,aes(y=mean_sd_c_cell**2,xmin=mean_mean_c_cell-sd_mean_c_cell,xmax=mean_mean_c_cell+sd_mean_c_cell,col=condition_explicit),alpha=0.2)+
+  theme_cowplot()+
+  #ylim(0,0.5)+
+  #xlim(0,3)+
+  scale_y_continuous(trans='log10',breaks=c(1e5,1e6,1e7,1e8),limits=c(1e6,1e8))+
+  annotation_logticks(side="l")+
+  #scale_x_continuous(trans='log',breaks=c(1,10,100,1000))+
+  xlab("Mean concentration (#GFP/min/um)")+
+  ylab("Concentration variance")+
+  guides(col=guide_legend(title="Conditions"))+
+  guides(shape=guide_legend(title="Cell rank"))
+
+ggsave("./20221208_presentation/var_c_vs_mean_c_log.pdf",width=7,height=4)
+
+```
+
+```{r}
+toplot <- myframes_sampled %>% 
+  mutate(c_cell=gfp_nb/length_um) %>% 
+  mutate(sigma2_c_cell=(1/length_um*sqrt(cov_gg)-gfp_nb/(length_um**2)*sqrt(cov_ll))**2) %>%
+  group_by(condition,sampling) %>% 
+  mutate(mean_lambda_cell=mean(lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_lambda_cell=sd(lambda_cell,na.rm=TRUE)) %>%
+  mutate(cv_lambda_cell=sd_lambda_cell/mean_lambda_cell) %>%
+  mutate(mean_c_cell=mean(c_cell,na.rm=TRUE)) %>%
+  mutate(sd_c_cell=sqrt(mean(c_cell**2+sigma2_c_cell)-mean_c_cell**2)) %>%
+  mutate(cv_c_cell=sd_c_cell/mean_c_cell) %>%
+  ungroup() %>% 
+  distinct(condition,sampling,.keep_all=TRUE) %>% 
+  group_by(condition) %>% 
+  mutate(mean_mean_lambda_cell=mean(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_mean_lambda_cell=sd(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(mean_cv_lambda_cell=mean(cv_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_cv_lambda_cell=sd(cv_lambda_cell,na.rm=TRUE)) %>%
+  mutate(mean_mean_c_cell=mean(mean_c_cell,na.rm=TRUE)) %>%
+  mutate(mean_sd_c_cell=mean(sd_c_cell,na.rm=TRUE)) %>%
+  mutate(sd_sd_c_cell=sd(sd_c_cell,na.rm=TRUE)) %>%
+  mutate(sd_mean_c_cell=sd(mean_c_cell,na.rm=TRUE)) %>%
+  mutate(mean_cv_c_cell=mean(cv_c_cell,na.rm=TRUE)) %>%
+  mutate(sd_cv_c_cell=sd(cv_c_cell,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  distinct(condition,.keep_all=TRUE) %>% 
+  left_join(conditions_df,by=c("condition"))
+  #mutate(mean_cell_rank_integer=as.integer(mean_cell_rank)) %>% 
+  
+conditions_df <- tibble(condition=c("acetate005","acetate020","glycerol040","glucose020","glucoseaa020"),condition_explicit=c("acetate 0.05%","acetate 0.2%","glycerol 0.4%","glucose 0.2%","glucose 0.2% + aa"))
+
+myframes_sampled %>%
+  mutate(c_cell=gfp_nb/length_um) %>% 
+  mutate(sigma2_c_cell=(1/length_um*sqrt(cov_gg)-gfp_nb/(length_um**2)*sqrt(cov_ll))**2) %>%
+  group_by(condition,mean_cell_rank,sampling) %>% 
+  mutate(mean_lambda_cell=mean(lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_lambda_cell=sd(lambda_cell,na.rm=TRUE)) %>%
+  mutate(cv_lambda_cell=sd_lambda_cell/mean_lambda_cell) %>%
+  mutate(mean_c_cell=mean(c_cell,na.rm=TRUE)) %>%
+  #mutate(sd_c_cell=sd(c_cell,na.rm=TRUE)) %>%
+  mutate(sd_c_cell=sqrt(mean(c_cell**2+sigma2_c_cell)-mean_c_cell**2)) %>%
+  mutate(cv_c_cell=sd_c_cell/mean_c_cell) %>%
+  ungroup() %>% 
+  distinct(condition,mean_cell_rank,sampling,.keep_all=TRUE) %>% 
+  group_by(condition,mean_cell_rank) %>% 
+  mutate(mean_mean_lambda_cell=mean(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_mean_lambda_cell=sd(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(mean_cv_lambda_cell=mean(cv_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_cv_lambda_cell=sd(cv_lambda_cell,na.rm=TRUE)) %>%
+  mutate(mean_mean_c_cell=mean(mean_c_cell,na.rm=TRUE)) %>%
+  mutate(mean_sd_c_cell=mean(sd_c_cell,na.rm=TRUE)) %>%
+  mutate(sd_sd_c_cell=sd(sd_c_cell,na.rm=TRUE)) %>%
+  mutate(sd_mean_c_cell=sd(mean_c_cell,na.rm=TRUE)) %>%
+  mutate(mean_cv_c_cell=mean(cv_c_cell,na.rm=TRUE)) %>%
+  mutate(sd_cv_c_cell=sd(cv_c_cell,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  distinct(condition,mean_cell_rank,.keep_all=TRUE) %>% 
+  mutate(mean_cell_rank_integer=as.integer(mean_cell_rank)) %>% 
+  left_join(conditions_df,by=c("condition")) %>% 
+  mutate(condition_explicit=factor(condition_explicit,levels=c("acetate 0.05%","acetate 0.2%","glycerol 0.4%","glucose 0.2%","glucose 0.2% + aa"))) %>% 
+  ggplot()+
+  geom_point(aes(mean_mean_c_cell,mean_cv_c_cell,col=condition_explicit,shape=mean_cell_rank),size=2)+
+  geom_errorbar(aes(x=mean_mean_c_cell,ymin=mean_cv_c_cell-sd_cv_c_cell,ymax=mean_cv_c_cell+sd_cv_c_cell,col=condition_explicit))+
+  #geom_point(aes(mean_cell_rank_integer,mean_cv_c_cell,col=mean_cell_rank))+
+  geom_errorbar(aes(y=mean_cv_c_cell,xmin=mean_mean_c_cell-sd_mean_c_cell,xmax=mean_mean_c_cell+sd_mean_c_cell,col=condition_explicit))+
+  
+  geom_point(data=toplot,aes(mean_mean_c_cell,mean_cv_c_cell,col=condition_explicit),alpha=0.2,size=2)+
+  geom_errorbar(data=toplot,aes(x=mean_mean_c_cell,ymin=mean_cv_c_cell-sd_cv_c_cell,ymax=mean_cv_c_cell+sd_cv_c_cell,col=condition_explicit),alpha=0.2)+
+  #geom_point(aes(mean_cell_rank_integer,mean_sd_lambda_cell,col=mean_cell_rank))+
+  geom_errorbar(data=toplot,aes(y=mean_cv_c_cell,xmin=mean_mean_c_cell-sd_mean_c_cell,xmax=mean_mean_c_cell+sd_mean_c_cell,col=condition_explicit),alpha=0.2)+
+  theme_cowplot()+
+  ylim(0,1)+
+  #xlim(0,3)+
+  #scale_y_continuous(trans='log',breaks=c(1,10,100,1000))+
+  #scale_x_continuous(trans='log',breaks=c(1,10,100,1000))+
+  xlab("Mean concentration (#GFP/um)")+
+  ylab("Concentration CV")+
+  guides(col=guide_legend(title="Conditions"))+
+  guides(shape=guide_legend(title="Cell rank"))
+
+ggsave("./20221208_presentation/cv_c_vs_mean_c.pdf",width=7,height=4)
+
+```
+
+
+
+
+```{r}
+toplot <- myframes_sampled %>% 
+  mutate(c_cell=c_m) %>% 
+  group_by(condition,sampling) %>% 
+  mutate(mean_lambda_cell=mean(lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_lambda_cell=sd(lambda_cell,na.rm=TRUE)) %>%
+  mutate(cv_lambda_cell=sd_lambda_cell/mean_lambda_cell) %>%
+  mutate(mean_c_cell=mean(c_cell,na.rm=TRUE)) %>%
+  mutate(sd_c_cell=sd(c_cell,na.rm=TRUE)) %>%
+  mutate(cv_c_cell=sd_c_cell/mean_c_cell) %>%
+  ungroup() %>% 
+  distinct(condition,sampling,.keep_all=TRUE) %>% 
+  group_by(condition) %>% 
+  mutate(mean_mean_lambda_cell=mean(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_mean_lambda_cell=sd(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(mean_cv_lambda_cell=mean(cv_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_cv_lambda_cell=sd(cv_lambda_cell,na.rm=TRUE)) %>%
+  mutate(mean_mean_c_cell=mean(mean_c_cell,na.rm=TRUE)) %>%
+  mutate(mean_sd_c_cell=mean(sd_c_cell,na.rm=TRUE)) %>%
+  mutate(sd_sd_c_cell=sd(sd_c_cell,na.rm=TRUE)) %>%
+  mutate(sd_mean_c_cell=sd(mean_c_cell,na.rm=TRUE)) %>%
+  mutate(mean_cv_c_cell=mean(cv_c_cell,na.rm=TRUE)) %>%
+  mutate(sd_cv_c_cell=sd(cv_c_cell,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  distinct(condition,.keep_all=TRUE) %>% 
+  left_join(conditions_df,by=c("condition"))
+  #mutate(mean_cell_rank_integer=as.integer(mean_cell_rank)) %>% 
+  
+conditions_df <- tibble(condition=c("acetate005","acetate020","glycerol040","glucose020","glucoseaa020"),condition_explicit=c("acetate 0.05%","acetate 0.2%","glycerol 0.4%","glucose 0.2%","glucose 0.2% + aa"))
+
+myframes_sampled %>%
+  mutate(c_cell=c_m) %>% 
+  group_by(condition,mean_cell_rank,sampling) %>% 
+  mutate(mean_lambda_cell=mean(lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_lambda_cell=sd(lambda_cell,na.rm=TRUE)) %>%
+  mutate(cv_lambda_cell=sd_lambda_cell/mean_lambda_cell) %>%
+  mutate(mean_c_cell=mean(c_cell,na.rm=TRUE)) %>%
+  mutate(sd_c_cell=sd(c_cell,na.rm=TRUE)) %>%
+  mutate(cv_c_cell=sd_c_cell/mean_c_cell) %>%
+  ungroup() %>% 
+  distinct(condition,mean_cell_rank,sampling,.keep_all=TRUE) %>% 
+  group_by(condition,mean_cell_rank) %>% 
+  mutate(mean_mean_lambda_cell=mean(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_mean_lambda_cell=sd(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(mean_cv_lambda_cell=mean(cv_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_cv_lambda_cell=sd(cv_lambda_cell,na.rm=TRUE)) %>%
+  mutate(mean_mean_c_cell=mean(mean_c_cell,na.rm=TRUE)) %>%
+  mutate(mean_sd_c_cell=mean(sd_c_cell,na.rm=TRUE)) %>%
+  mutate(sd_sd_c_cell=sd(sd_c_cell,na.rm=TRUE)) %>%
+  mutate(sd_mean_c_cell=sd(mean_c_cell,na.rm=TRUE)) %>%
+  mutate(mean_cv_c_cell=mean(cv_c_cell,na.rm=TRUE)) %>%
+  mutate(sd_cv_c_cell=sd(cv_c_cell,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  distinct(condition,mean_cell_rank,.keep_all=TRUE) %>% 
+  mutate(mean_cell_rank_integer=as.integer(mean_cell_rank)) %>% 
+  left_join(conditions_df,by=c("condition")) %>% 
+  mutate(condition_explicit=factor(condition_explicit,levels=c("acetate 0.05%","acetate 0.2%","glycerol 0.4%","glucose 0.2%","glucose 0.2% + aa"))) %>% 
+  ggplot()+
+  
+  geom_point(aes(mean_mean_c_cell,mean_cv_c_cell,col=condition_explicit,shape=mean_cell_rank),size=2)+
+  geom_errorbar(aes(x=mean_mean_c_cell,ymin=mean_cv_c_cell-sd_cv_c_cell,ymax=mean_cv_c_cell+sd_cv_c_cell,col=condition_explicit))+
+  #geom_point(aes(mean_cell_rank_integer,mean_sd_c_cell,col=mean_cell_rank))+
+  geom_errorbar(aes(y=mean_cv_c_cell,xmin=mean_mean_c_cell-sd_mean_c_cell,xmax=mean_mean_c_cell+sd_mean_c_cell,col=condition_explicit))+
+  
+  geom_point(data=toplot,aes(mean_mean_c_cell,mean_cv_c_cell,col=condition_explicit),alpha=0.2,size=2)+
+  geom_errorbar(data=toplot,aes(x=mean_mean_c_cell,ymin=(mean_cv_c_cell-sd_cv_c_cell),ymax=(mean_cv_c_cell+sd_cv_c_cell),col=condition_explicit),alpha=0.2)+
+  #geom_point(aes(mean_cell_rank_integer,mean_sd_lambda_cell,col=mean_cell_rank))+
+  geom_errorbar(data=toplot,aes(y=mean_cv_c_cell,xmin=mean_mean_c_cell-sd_mean_c_cell,xmax=mean_mean_c_cell+sd_mean_c_cell,col=condition_explicit),alpha=0.2)+
+  
+  theme_cowplot()+
+  ylim(0,0.5)+
+  #xlim(0,3)+
+  #scale_y_continuous(trans='log',breaks=c(1,10,100,1000))+
+  #scale_x_continuous(trans='log',breaks=c(1,10,100,1000))+
+  xlab("Mean concentration (#GFP/min/um)")+
+  ylab("CV concentration")+
+  guides(col=guide_legend(title="Conditions"))+
+  guides(shape=guide_legend(title="Cell rank"))
+
+ggsave("./20221208_presentation/cv_c_vs_mean_c.pdf",width=7,height=4)
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+```{r}
+toplot <- myframes_sampled %>% 
+  mutate(q_cell=q_m) %>% 
+  group_by(condition,sampling) %>% 
+  mutate(mean_lambda_cell=mean(lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_lambda_cell=sd(lambda_cell,na.rm=TRUE)) %>%
+  mutate(cv_lambda_cell=sd_lambda_cell/mean_lambda_cell) %>%
+  mutate(mean_q_cell=mean(q_cell,na.rm=TRUE)) %>%
+  mutate(sd_q_cell=sd(q_cell,na.rm=TRUE)) %>%
+  mutate(cv_q_cell=sd_q_cell/mean_q_cell) %>%
+  ungroup() %>% 
+  distinct(condition,sampling,.keep_all=TRUE) %>% 
+  group_by(condition) %>% 
+  mutate(mean_mean_lambda_cell=mean(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_mean_lambda_cell=sd(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(mean_cv_lambda_cell=mean(cv_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_cv_lambda_cell=sd(cv_lambda_cell,na.rm=TRUE)) %>%
+  mutate(mean_mean_q_cell=mean(mean_q_cell,na.rm=TRUE)) %>%
+  mutate(sd_mean_q_cell=sd(mean_q_cell,na.rm=TRUE)) %>%
+  mutate(mean_cv_q_cell=mean(cv_q_cell,na.rm=TRUE)) %>%
+  mutate(sd_cv_q_cell=sd(cv_q_cell,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  distinct(condition,.keep_all=TRUE) %>% 
+  left_join(conditions_df,by=c("condition"))
+  #mutate(mean_cell_rank_integer=as.integer(mean_cell_rank)) %>% 
+  
+
+conditions_df <- tibble(condition=c("acetate005","acetate020","glycerol040","glucose020","glucoseaa020"),condition_explicit=c("acetate 0.05%","acetate 0.2%","glycerol 0.4%","glucose 0.2%","glucose 0.2% + aa"))
+
+
+myframes_sampled %>%
+  mutate(q_cell=q_m) %>% 
+  group_by(condition,mean_cell_rank,sampling) %>% 
+  mutate(mean_lambda_cell=mean(lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_lambda_cell=sd(lambda_cell,na.rm=TRUE)) %>%
+  mutate(cv_lambda_cell=sd_lambda_cell/mean_lambda_cell) %>%
+  mutate(mean_q_cell=mean(q_cell,na.rm=TRUE)) %>%
+  mutate(sd_q_cell=sd(q_cell,na.rm=TRUE)) %>%
+  mutate(cv_q_cell=sd_q_cell/mean_q_cell) %>%
+  ungroup() %>% 
+  distinct(condition,mean_cell_rank,sampling,.keep_all=TRUE) %>% 
+  group_by(condition,mean_cell_rank) %>% 
+  mutate(mean_mean_lambda_cell=mean(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_mean_lambda_cell=sd(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(mean_cv_lambda_cell=mean(cv_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_cv_lambda_cell=sd(cv_lambda_cell,na.rm=TRUE)) %>%
+  mutate(mean_mean_q_cell=mean(mean_q_cell,na.rm=TRUE)) %>%
+  mutate(sd_mean_q_cell=sd(mean_q_cell,na.rm=TRUE)) %>%
+  mutate(mean_cv_q_cell=mean(cv_q_cell,na.rm=TRUE)) %>%
+  mutate(sd_cv_q_cell=sd(cv_q_cell,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  distinct(condition,mean_cell_rank,.keep_all=TRUE) %>% 
+  mutate(mean_cell_rank_integer=as.integer(mean_cell_rank)) %>% 
+  left_join(conditions_df,by=c("condition")) %>% 
+  mutate(condition_explicit=factor(condition_explicit,levels=c("acetate 0.05%","acetate 0.2%","glycerol 0.4%","glucose 0.2%","glucose 0.2% + aa"))) %>% 
+  ggplot()+
+  geom_point(aes(mean_mean_q_cell,mean_cv_q_cell,col=condition_explicit,shape=mean_cell_rank),size=2)+
+  geom_errorbar(aes(x=mean_mean_q_cell,ymin=mean_cv_q_cell-sd_cv_q_cell,ymax=mean_cv_q_cell+sd_cv_q_cell,col=condition_explicit))+
+  #geom_point(aes(mean_cell_rank_integer,mean_cv_q_cell,col=mean_cell_rank))+
+  geom_errorbar(aes(y=mean_cv_q_cell,xmin=mean_mean_q_cell-sd_mean_q_cell,xmax=mean_mean_q_cell+sd_mean_q_cell,col=condition_explicit))+
+  
+  geom_point(data=toplot,aes(mean_mean_q_cell,mean_cv_q_cell,col=condition_explicit),alpha=0.2,size=2)+
+  geom_errorbar(data=toplot,aes(x=mean_mean_q_cell,ymin=mean_cv_q_cell-sd_cv_q_cell,ymax=mean_cv_q_cell+sd_cv_q_cell,col=condition_explicit),alpha=0.2)+
+  #geom_point(aes(mean_cell_rank_integer,mean_cv_lambda_cell,col=mean_cell_rank))+
+  geom_errorbar(data=toplot,aes(y=mean_cv_q_cell,xmin=mean_mean_q_cell-sd_mean_q_cell,xmax=mean_mean_q_cell+sd_mean_q_cell,col=condition_explicit),alpha=0.2)+
+  theme_cowplot()+
+  ylim(0,0.6)+
+  #xlim(0,3)+
+  #scale_x_continuous(trans='log',breaks=c(0.125,0.25,0.5,1,2))+
+  xlab("Mean Production (#GFP/min/um)")+
+  ylab("Production CV")+
+  guides(col=guide_legend(title="Conditions"))+
+  guides(shape=guide_legend(title="Cell rank"))
+
+ggsave("./20221208_presentation/cv_q_vs_gr.pdf",width=7,height=4)
+
+```
+
+
+
+
+# Production OU parameters
+
+```{r}
+myparameters %>% 
+  filter(name %in% c("mean_q","var_q","gamma_q")) %>% 
+  select(name,final,carbon_source,carbon_source_concentration) %>% 
+  pivot_wider(names_from = name,values_from = final) %>% 
+  mutate(condition=paste(carbon_source,carbon_source_concentration,sep="")) %>% 
+  mutate(variance_q=var_q/(2*gamma_q)) %>% 
+  ggplot()+
+  geom_point(aes(mean_q,variance_q,col=condition))
+
+myparameters %>% 
+  filter(name %in% c("mean_q","var_q","gamma_q")) %>% 
+  select(name,final,carbon_source,carbon_source_concentration) %>% 
+  pivot_wider(names_from = name,values_from = final) %>% 
+  mutate(condition=paste(carbon_source,carbon_source_concentration,sep="")) %>% 
+  mutate(variance_q=var_q/(2*gamma_q)) %>% 
+  mutate(cv_q=sqrt(variance_q)/mean_q) %>% 
+  ggplot()+
+  geom_point(aes(mean_q,cv_q,col=condition))
+
+```
+
+# Production: full cell cycle variables
+
+```{r}
+myframes_sampled$mean_cell_rank <- factor(myframes_sampled$mean_cell_rank,levels = c(0:10))
+conditions_df <- tibble(condition=c("acetate005","acetate020","glycerol040","glucose020","glucoseaa020"),condition_explicit=c("acetate 0.05%","acetate 0.2%","glycerol 0.4%","glucose 0.2%","glucose 0.2% + aa"))
+
+toplot <- myframes_sampled %>% 
+  mutate(q_cell=q_full_cellcycle*60) %>% 
+  group_by(condition,sampling) %>% 
+  mutate(mean_lambda_cell=mean(lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_lambda_cell=sd(lambda_cell,na.rm=TRUE)) %>%
+  mutate(cv_lambda_cell=sd_lambda_cell/mean_lambda_cell) %>%
+  mutate(mean_q_cell=mean(q_cell,na.rm=TRUE)) %>%
+  mutate(sd_q_cell=sd(q_cell,na.rm=TRUE)) %>%
+  mutate(cv_q_cell=sd_q_cell/mean_q_cell) %>%
+  ungroup() %>% 
+  distinct(condition,sampling,.keep_all=TRUE) %>% 
+  group_by(condition,mean_cell_rank) %>% 
+  mutate(mean_mean_lambda_cell=mean(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_mean_lambda_cell=sd(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(mean_cv_lambda_cell=mean(cv_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_cv_lambda_cell=sd(cv_lambda_cell,na.rm=TRUE)) %>%
+  mutate(mean_mean_q_cell=mean(mean_q_cell,na.rm=TRUE)) %>%
+  mutate(mean_sd_q_cell=mean(sd_q_cell,na.rm=TRUE)) %>%
+  mutate(sd_sd_q_cell=sd(sd_q_cell,na.rm=TRUE)) %>%
+  mutate(sd_mean_q_cell=sd(mean_q_cell,na.rm=TRUE)) %>%
+  mutate(mean_cv_q_cell=mean(cv_q_cell,na.rm=TRUE)) %>%
+  mutate(sd_cv_q_cell=sd(cv_q_cell,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  distinct(condition,.keep_all=TRUE) %>% 
+  left_join(conditions_df,by=c("condition"))
+  #mutate(mean_cell_rank_integer=as.integer(mean_cell_rank)) %>% 
+  
+
+
+myframes_sampled %>%
+  mutate(q_cell=q_full_cellcycle*60) %>% 
+  group_by(condition,mean_cell_rank,sampling) %>% 
+  mutate(mean_lambda_cell=mean(lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_lambda_cell=sd(lambda_cell,na.rm=TRUE)) %>%
+  mutate(cv_lambda_cell=sd_lambda_cell/mean_lambda_cell) %>%
+  mutate(mean_q_cell=mean(q_cell,na.rm=TRUE)) %>%
+  mutate(sd_q_cell=sd(q_cell,na.rm=TRUE)) %>%
+  mutate(cv_q_cell=sd_q_cell/mean_q_cell) %>%
+  ungroup() %>% 
+  distinct(condition,mean_cell_rank,sampling,.keep_all=TRUE) %>% 
+  group_by(condition,mean_cell_rank) %>% 
+  mutate(mean_mean_lambda_cell=mean(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_mean_lambda_cell=sd(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(mean_cv_lambda_cell=mean(cv_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_cv_lambda_cell=sd(cv_lambda_cell,na.rm=TRUE)) %>%
+  mutate(mean_mean_q_cell=mean(mean_q_cell,na.rm=TRUE)) %>%
+  mutate(mean_sd_q_cell=mean(sd_q_cell,na.rm=TRUE)) %>%
+  mutate(sd_sd_q_cell=sd(sd_q_cell,na.rm=TRUE)) %>%
+  mutate(sd_mean_q_cell=sd(mean_q_cell,na.rm=TRUE)) %>%
+  mutate(mean_cv_q_cell=mean(cv_q_cell,na.rm=TRUE)) %>%
+  mutate(sd_cv_q_cell=sd(cv_q_cell,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  distinct(condition,mean_cell_rank,.keep_all=TRUE) %>% 
+  mutate(mean_cell_rank_integer=as.integer(mean_cell_rank)) %>% 
+  left_join(conditions_df,by=c("condition")) %>% 
+  mutate(condition_explicit=factor(condition_explicit,levels=c("acetate 0.05%","acetate 0.2%","glycerol 0.4%","glucose 0.2%","glucose 0.2% + aa"))) %>% 
+  ggplot()+
+  geom_point(aes(mean_mean_q_cell,mean_sd_q_cell**2,col=condition_explicit,shape=mean_cell_rank))+
+  geom_errorbar(aes(x=mean_mean_q_cell,ymin=(mean_sd_q_cell-sd_sd_q_cell)**2,ymax=(mean_sd_q_cell+sd_sd_q_cell)**2,col=condition_explicit))+
+  #geom_point(aes(mean_cell_rank_integer,mean_sd_q_cell,col=mean_cell_rank))+
+  geom_errorbar(aes(y=mean_sd_q_cell**2,xmin=mean_mean_q_cell-sd_mean_q_cell,xmax=mean_mean_q_cell+sd_mean_q_cell,col=condition_explicit))+
+  
+  geom_point(data=toplot,aes(mean_mean_q_cell,mean_sd_q_cell**2,col=condition_explicit),alpha=0.2)+
+  geom_errorbar(data=toplot,aes(x=mean_mean_q_cell,ymin=(mean_sd_q_cell-sd_sd_q_cell)**2,ymax=(mean_sd_q_cell+sd_sd_q_cell)**2,col=condition_explicit),alpha=0.2)+
+  #geom_point(aes(mean_cell_rank_integer,mean_sd_lambda_cell,col=mean_cell_rank))+
+  geom_errorbar(data=toplot,aes(y=mean_sd_q_cell**2,xmin=mean_mean_q_cell-sd_mean_q_cell,xmax=mean_mean_q_cell+sd_mean_q_cell,col=condition_explicit),alpha=0.2)+
+  theme_cowplot()+
+  #ylim(0,0.5)+
+  #xlim(0,3)+
+  #scale_y_continuous(trans='log',breaks=c(1,10,100,1000))+
+  #scale_x_continuous(trans='log',breaks=c(1,10,100,1000))+
+  xlab("Mean production (#GFP/min/um)")+
+  ylab("Production variance")+
+  guides(col=guide_legend(title="Conditions"))+
+  guides(shape=guide_legend(title="Cell rank"))
+```
+
+# Comparing full cell cycle observables and mean value over the cell cycle
+
+```{r}
+conditions_df <- tibble(condition=c("acetate005","acetate020","glycerol040","glucose020","glucoseaa020"),condition_explicit=c("acetate 0.05%","acetate 0.2%","glycerol 0.4%","glucose 0.2%","glucose 0.2% + aa"))
+
+
+toplot_mean_norank <- myframes_sampled %>% 
+  #mutate(q_cell=q) %>% 
+  group_by(condition,sampling) %>% 
+  mutate(mean_lambda_cell=mean(lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_lambda_cell=sd(lambda_cell,na.rm=TRUE)) %>%
+  mutate(cv_lambda_cell=sd_lambda_cell/mean_lambda_cell) %>%
+  mutate(mean_q_cell=mean(q_cell,na.rm=TRUE)) %>%
+  mutate(sd_q_cell=sd(q_cell,na.rm=TRUE)) %>%
+  mutate(cv_q_cell=sd_q_cell/mean_q_cell) %>%
+  ungroup() %>% 
+  distinct(condition,sampling,.keep_all=TRUE) %>% 
+  group_by(condition,mean_cell_rank) %>% 
+  mutate(mean_mean_lambda_cell=mean(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_mean_lambda_cell=sd(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(mean_cv_lambda_cell=mean(cv_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_cv_lambda_cell=sd(cv_lambda_cell,na.rm=TRUE)) %>%
+  mutate(mean_mean_q_cell=mean(mean_q_cell,na.rm=TRUE)) %>%
+  mutate(mean_sd_q_cell=mean(sd_q_cell,na.rm=TRUE)) %>%
+  mutate(sd_sd_q_cell=sd(sd_q_cell,na.rm=TRUE)) %>%
+  mutate(sd_mean_q_cell=sd(mean_q_cell,na.rm=TRUE)) %>%
+  mutate(mean_cv_q_cell=mean(cv_q_cell,na.rm=TRUE)) %>%
+  mutate(sd_cv_q_cell=sd(cv_q_cell,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  distinct(condition,.keep_all=TRUE) %>% 
+  left_join(conditions_df,by=c("condition"))
+  #mutate(mean_cell_rank_integer=as.integer(mean_cell_rank)) %>% 
+  
+
+toplot_mean <- myframes_sampled %>% 
+  #mutate(q_cell=q) %>% 
+  group_by(condition,mean_cell_rank,sampling) %>% 
+  mutate(mean_lambda_cell=mean(lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_lambda_cell=sd(lambda_cell,na.rm=TRUE)) %>%
+  mutate(cv_lambda_cell=sd_lambda_cell/mean_lambda_cell) %>%
+  mutate(mean_q_cell=mean(q_cell,na.rm=TRUE)) %>%
+  mutate(sd_q_cell=sd(q_cell,na.rm=TRUE)) %>%
+  mutate(cv_q_cell=sd_q_cell/mean_q_cell) %>%
+  ungroup() %>% 
+  distinct(condition,mean_cell_rank,sampling,.keep_all=TRUE) %>% 
+  group_by(condition,mean_cell_rank) %>% 
+  mutate(mean_mean_lambda_cell=mean(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_mean_lambda_cell=sd(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(mean_cv_lambda_cell=mean(cv_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_cv_lambda_cell=sd(cv_lambda_cell,na.rm=TRUE)) %>%
+  mutate(mean_mean_q_cell=mean(mean_q_cell,na.rm=TRUE)) %>%
+  mutate(mean_sd_q_cell=mean(sd_q_cell,na.rm=TRUE)) %>%
+  mutate(sd_sd_q_cell=sd(sd_q_cell,na.rm=TRUE)) %>%
+  mutate(sd_mean_q_cell=sd(mean_q_cell,na.rm=TRUE)) %>%
+  mutate(mean_cv_q_cell=mean(cv_q_cell,na.rm=TRUE)) %>%
+  mutate(sd_cv_q_cell=sd(cv_q_cell,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  distinct(condition,mean_cell_rank,.keep_all=TRUE) %>% 
+  mutate(mean_cell_rank_integer=as.integer(mean_cell_rank)) %>% 
+  left_join(conditions_df,by=c("condition")) %>% 
+  mutate(condition_explicit=factor(condition_explicit,levels=c("acetate 0.05%","acetate 0.2%","glycerol 0.4%","glucose 0.2%","glucose 0.2% + aa")))
+  
+toplot_full_norank <- myframes_sampled %>% 
+  mutate(q_cell=q_full_cellcycle*60) %>% 
+  group_by(condition,sampling) %>% 
+  mutate(mean_lambda_cell=mean(lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_lambda_cell=sd(lambda_cell,na.rm=TRUE)) %>%
+  mutate(cv_lambda_cell=sd_lambda_cell/mean_lambda_cell) %>%
+  mutate(mean_q_cell=mean(q_cell,na.rm=TRUE)) %>%
+  mutate(sd_q_cell=sd(q_cell,na.rm=TRUE)) %>%
+  mutate(cv_q_cell=sd_q_cell/mean_q_cell) %>%
+  ungroup() %>% 
+  distinct(condition,sampling,.keep_all=TRUE) %>% 
+  group_by(condition,mean_cell_rank) %>% 
+  mutate(mean_mean_lambda_cell=mean(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_mean_lambda_cell=sd(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(mean_cv_lambda_cell=mean(cv_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_cv_lambda_cell=sd(cv_lambda_cell,na.rm=TRUE)) %>%
+  mutate(mean_mean_q_cell=mean(mean_q_cell,na.rm=TRUE)) %>%
+  mutate(mean_sd_q_cell=mean(sd_q_cell,na.rm=TRUE)) %>%
+  mutate(sd_sd_q_cell=sd(sd_q_cell,na.rm=TRUE)) %>%
+  mutate(sd_mean_q_cell=sd(mean_q_cell,na.rm=TRUE)) %>%
+  mutate(mean_cv_q_cell=mean(cv_q_cell,na.rm=TRUE)) %>%
+  mutate(sd_cv_q_cell=sd(cv_q_cell,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  distinct(condition,.keep_all=TRUE) %>% 
+  left_join(conditions_df,by=c("condition"))
+  #mutate(mean_cell_rank_integer=as.integer(mean_cell_rank)) %>% 
+  
+
+toplot_full <- myframes_sampled %>% 
+  mutate(q_cell=q_full_cellcycle*60) %>% 
+  group_by(condition,mean_cell_rank,sampling) %>% 
+  mutate(mean_lambda_cell=mean(lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_lambda_cell=sd(lambda_cell,na.rm=TRUE)) %>%
+  mutate(cv_lambda_cell=sd_lambda_cell/mean_lambda_cell) %>%
+  mutate(mean_q_cell=mean(q_cell,na.rm=TRUE)) %>%
+  mutate(sd_q_cell=sd(q_cell,na.rm=TRUE)) %>%
+  mutate(cv_q_cell=sd_q_cell/mean_q_cell) %>%
+  ungroup() %>% 
+  distinct(condition,mean_cell_rank,sampling,.keep_all=TRUE) %>% 
+  group_by(condition,mean_cell_rank) %>% 
+  mutate(mean_mean_lambda_cell=mean(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_mean_lambda_cell=sd(mean_lambda_cell,na.rm=TRUE)) %>%
+  mutate(mean_cv_lambda_cell=mean(cv_lambda_cell,na.rm=TRUE)) %>%
+  mutate(sd_cv_lambda_cell=sd(cv_lambda_cell,na.rm=TRUE)) %>%
+  mutate(mean_mean_q_cell=mean(mean_q_cell,na.rm=TRUE)) %>%
+  mutate(mean_sd_q_cell=mean(sd_q_cell,na.rm=TRUE)) %>%
+  mutate(sd_sd_q_cell=sd(sd_q_cell,na.rm=TRUE)) %>%
+  mutate(sd_mean_q_cell=sd(mean_q_cell,na.rm=TRUE)) %>%
+  mutate(mean_cv_q_cell=mean(cv_q_cell,na.rm=TRUE)) %>%
+  mutate(sd_cv_q_cell=sd(cv_q_cell,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  distinct(condition,mean_cell_rank,.keep_all=TRUE) %>% 
+  mutate(mean_cell_rank_integer=as.integer(mean_cell_rank)) %>% 
+  left_join(conditions_df,by=c("condition")) %>% 
+  mutate(condition_explicit=factor(condition_explicit,levels=c("acetate 0.05%","acetate 0.2%","glycerol 0.4%","glucose 0.2%","glucose 0.2% + aa")))
+  
+ptot <- ggplot()+
+  geom_point(data=toplot_full,aes(mean_mean_q_cell,mean_sd_q_cell**2,shape=mean_cell_rank),col="blue")+
+  geom_errorbar(data=toplot_full,aes(x=mean_mean_q_cell,ymin=(mean_sd_q_cell-sd_sd_q_cell)**2,ymax=(mean_sd_q_cell+sd_sd_q_cell)**2),col="blue")+
+  #geom_point(aes(mean_cell_rank_integer,mean_sd_q_cell,col=mean_cell_rank))+
+  geom_errorbar(data=toplot_full,aes(y=mean_sd_q_cell**2,xmin=mean_mean_q_cell-sd_mean_q_cell,xmax=mean_mean_q_cell+sd_mean_q_cell),col="blue")+
+  
+  geom_point(data=toplot_full_norank,aes(mean_mean_q_cell,mean_sd_q_cell**2),alpha=0.2,col="blue")+
+  geom_errorbar(data=toplot_full_norank,aes(x=mean_mean_q_cell,ymin=(mean_sd_q_cell-sd_sd_q_cell)**2,ymax=(mean_sd_q_cell+sd_sd_q_cell)**2),alpha=0.2,col="blue")+
+  #geom_point(aes(mean_cell_rank_integer,mean_sd_lambda_cell,col=mean_cell_rank))+
+  geom_errorbar(data=toplot_full_norank,aes(y=mean_sd_q_cell**2,xmin=mean_mean_q_cell-sd_mean_q_cell,xmax=mean_mean_q_cell+sd_mean_q_cell),alpha=0.2,col="blue")+
+  
+  geom_point(data=toplot_mean,aes(mean_mean_q_cell,mean_sd_q_cell**2,shape=mean_cell_rank),col="red")+
+  geom_errorbar(data=toplot_mean,aes(x=mean_mean_q_cell,ymin=(mean_sd_q_cell-sd_sd_q_cell)**2,ymax=(mean_sd_q_cell+sd_sd_q_cell)**2),col="red")+
+  #geom_point(aes(mean_cell_rank_integer,mean_sd_q_cell,col=mean_cell_rank))+
+  geom_errorbar(data=toplot_mean,aes(y=mean_sd_q_cell**2,xmin=mean_mean_q_cell-sd_mean_q_cell,xmax=mean_mean_q_cell+sd_mean_q_cell),col="red")+
+  
+  geom_point(data=toplot_mean_norank,aes(mean_mean_q_cell,mean_sd_q_cell**2),alpha=0.2,col="red")+
+  geom_errorbar(data=toplot_mean_norank,aes(x=mean_mean_q_cell,ymin=(mean_sd_q_cell-sd_sd_q_cell)**2,ymax=(mean_sd_q_cell+sd_sd_q_cell)**2),alpha=0.2,col="red")+
+  #geom_point(aes(mean_cell_rank_integer,mean_sd_lambda_cell,col=mean_cell_rank))+
+  geom_errorbar(data=toplot_mean_norank,aes(y=mean_sd_q_cell**2,xmin=mean_mean_q_cell-sd_mean_q_cell,xmax=mean_mean_q_cell+sd_mean_q_cell),alpha=0.2,col="red")+
+  
+  theme_cowplot()+
+  #ylim(0,0.5)+
+  #xlim(0,3)+
+  #scale_y_continuous(trans='log',breaks=c(1,10,100,1000))+
+  #scale_x_continuous(trans='log',breaks=c(1,10,100,1000))+
+  xlab("Mean production (#GFP/min/um)")+
+  ylab("Production variance")+
+  guides(col=guide_legend(title="Conditions"))+
+  guides(shape=guide_legend(title="Cell rank"))
+
+ptot
+```
+
+**Red**: mean value over the cell cycle, over 50 cells
+**Blue**: full cell cycle observable
+**Question to Bjoern**: could it be that the variance of the production is vastly underestimated in acetate 0.05%?
+
+# Looking at the production variance, using all data points at my disposal
+
+```{r}
+myframes_final$mean_cell_rank <- factor(myframes_final$mean_cell_rank,levels = c(0:10))
+
+myframes_final %>% 
+  group_by(condition) %>% 
+  mutate(variance_production=var(q,na.rm=FALSE)) %>% 
+  mutate(mean_production=mean(q,na.rm=TRUE)) %>% 
+  ungroup %>% 
+  ggplot()+
+  geom_point(aes(mean_production,variance_production,col=condition))+
+  theme_cowplot()
+
+
+myframes_final %>% 
+  group_by(condition) %>% 
+  mutate(variance_production=var(q,na.rm=FALSE)) %>% 
+  mutate(mean_production=mean(q,na.rm=TRUE)) %>% 
+  ungroup %>% 
+  ggplot()+
+  geom_point(aes(log(mean_production),log(variance_production),col=condition))+
+  theme_cowplot()
+
+myframes_final %>% 
+  group_by(condition,mean_cell_rank) %>% 
+  mutate(variance_production=var(q,na.rm=FALSE)) %>% 
+  mutate(mean_production=mean(q,na.rm=TRUE)) %>% 
+  ungroup %>% 
+  ggplot()+
+  geom_point(aes(mean_production,variance_production,col=condition,shape=mean_cell_rank))+
+  theme_cowplot()
+
+
+myframes_final %>% 
+  group_by(condition,mean_cell_rank) %>% 
+  mutate(variance_production=var(q,na.rm=FALSE)) %>% 
+  mutate(mean_production=mean(q,na.rm=TRUE)) %>% 
+  ungroup %>% 
+  ggplot()+
+  geom_point(aes(log(mean_production),log(variance_production),col=condition,shape=mean_cell_rank))+
+  theme_cowplot()
+```
+
+
+
+
+
+
+
+
+
+
+
+

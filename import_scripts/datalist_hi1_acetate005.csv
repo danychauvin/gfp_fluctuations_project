@@ -1,0 +1,2 @@
+date,description,f_start,f_end,condition,t_interval,data_path,promoter,vector,cell_detection_offset,experimental_setup,time_theshold_h
+20221121,acetate,0,334,acetate005,12,/scicore/home/nimwegen/rocasu25/MM_Data/Dany/20221121/curated_data/hi1_ch_curated,hi1,ch,110,3,2
