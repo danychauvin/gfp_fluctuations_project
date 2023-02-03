@@ -15,6 +15,18 @@ All packages are in /scicore/home/nimwegen/rocasu25/R/x86_64-pc-linux-gnu-librar
 Python 3.8.13 (GCC 7.5.0), with packages os, pandas, numpy, matplotlib, re, shutil, subprocess, seaborn, skimage, glob, tifffile, zarr and scipy.
 Environment is stored in /scicore/home/nimwegen/rocasu25/Documents/Projects/biozentrum/.conda_environment.
 
+### gfp_gaussian_process
+
+Should be installed within this git directory.
+https://github.com/bjks/gfp_gaussian_process
+Commit 5be92d0.
+
+### ggp_notebooks
+
+Should be installed within this git directory.
+https://github.com/bjks/ggp_notebooks
+Commit 82ce0a2.
+
 ## Project structure
 
 The essential scripts and files are listed below:
