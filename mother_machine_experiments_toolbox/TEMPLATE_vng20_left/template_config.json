@@ -1,0 +1,17 @@
+{
+  "description": "",
+  "gl_regions": [
+    {
+      "first_gl_position_from_top": 61,
+      "gl_spacing_vertical": 106.778,
+      "horizontal_range": [
+        30,
+        390
+      ],
+	"gl_exit_orientation": "left"
+    }
+  ],
+  "name": "",
+  "pixel_size_micron": 1.0,
+  "template_image_path": "./template_left.tif"
+}

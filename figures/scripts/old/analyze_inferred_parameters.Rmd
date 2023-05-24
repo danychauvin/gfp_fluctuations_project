@@ -1,0 +1,168 @@
+---
+title: "import_denoised_hi1_data_all_conditions.Rmd"
+author: "Dany Chauvin"
+date: '2022-12-01'
+output: html_document
+---
+
+# Set folder where to perform the analysis
+
+Note:
+-denoising_20230119195253
+Full cell cycles only. Promoter 'Hi1' in acetate 0.05% (20221121), acetate 0.20 % (20220824), glycerol 0.40% (20190515), glucose 0.20% (20190515), glucose 0.20% + amino acids (20220921).
+-denoising_20230120151340
+All cells (more than 10 data points, which doubles the number of cells I have in my dataset). Promoter 'Hi1' in acetate 0.05% (20221121), acetate 0.20 % (20220824), glycerol 0.40% (20190515), glucose 0.20% (20190515), glucose 0.20% + amino acids (20220921).
+
+```{r message=FALSE,warning=FALSE}
+#data_folder <- c("/scicore/home/nimwegen/rocasu25/Documents/Projects/biozentrum/gfp_fluctuations_project/raw_curated_data")
+data_folder <- c("/scicore/home/nimwegen/rocasu25/Documents/Projects/biozentrum/gfp_fluctuations_project/raw_curated_data_complete_cycles")
+#Accompanying raw data (full cell cycle only)
+
+# No bleaching 
+#denoised_data_files_dir <- "/scicore/home/nimwegen/rocasu25/Documents/Projects/biozentrum/gfp_fluctuations_project/denoising_raw_data/denoising_20230215111724"
+
+#With bleaching
+denoised_data_files_dir <-"/scicore/home/nimwegen/rocasu25/Documents/Projects/biozentrum/gfp_fluctuations_project/denoising_raw_data/denoising_20230215074335"
+```
+
+# Import raw data
+
+```{r}
+source("../mother_machine_experiments_toolbox/load_functions_and_packages.R")
+```
+
+```{r}
+list_of_data_files <- lapply(data_folder,function(.l){
+  list.files(path=.l,pattern="rawdata.csv$",recursive = TRUE,full.names=TRUE)}) %>% 
+  unlist()
+
+df_of_data_files <- tibble(path=list_of_data_files) %>% 
+    tidyr::extract(path,"condition","[0-9a-zA-Z]{1,}_([0-9a-zA-Z]{1,})_[0-9]{8}_rawdata.csv$",remove=FALSE,convert=FALSE) %>% 
+    tidyr::extract(path,"promoter","([0-9a-z]{1,})_[0-9a-zA-Z]{1,}_[0-9]{8}_rawdata.csv$",remove=FALSE,convert=FALSE) %>% 
+    tidyr::extract(path,"date","[0-9a-z]{1,}_[0-9a-zA-Z]{1,}_([0-9]{8})_rawdata.csv$",remove=FALSE,convert=FALSE) %>% 
+  rename(raw_curated_data_path=path) %>% 
+  tidyr::extract(condition,"carbon_source_concentration","^[a-z]{1,}0([0-9]{2})",remove=FALSE,convert=FALSE) %>% 
+  mutate(carbon_source_concentration=as.double(carbon_source_concentration)/100) %>% 
+  tidyr::extract(condition,"carbon_source","^([a-z]{1,})0[0-9]{2}",remove=FALSE,convert=FALSE)
+
+myframes_raw <- df_of_data_files %>% 
+  ungroup() %>% 
+  distinct(raw_curated_data_path) %>% 
+  .$raw_curated_data_path %>% 
+  lapply(function(.l) readr::read_csv(.l) %>% 
+  mutate(raw_curated_data_path=.l)) %>% 
+  do.call(rbind, .) %>% 
+  mutate(date=as.character(date)) %>% 
+  #rename(carbon_source=condition) %>% 
+  left_join(df_of_data_files,by=c("condition","promoter","date","raw_curated_data_path"))
+```
+
+# Importing denoised data (as well as parameters and errors)
+
+```{r}
+find_command <- sprintf("find %s -type f -name '*prediction.csv'",denoised_data_files_dir)
+list_of_denoised_data_files <- system(find_command, intern=TRUE)
+
+myframes_denoised <- list_of_denoised_data_files %>% 
+  lapply(function(.l) readr::read_csv(.l,skip=13) %>% 
+           mutate(denoised_data_path=.l)) %>% 
+  do.call(rbind,.) %>% 
+  extract(denoised_data_path,"promotercondition","/([a-z0-9A-Z]{1,}_[0-9a-zA-Z]{1,})_[0-9]{8}_rawdata_[a-z0-9]{1,}_b_prediction.csv$",remove=FALSE,convert=FALSE) %>% 
+  extract(denoised_data_path,"date","/[a-z0-9A-Z]{1,}_[0-9a-zA-Z]{1,}_([0-9]{8})_rawdata_[a-z0-9]{1,}_b_prediction.csv$",remove=FALSE,convert=FALSE) %>% 
+  separate(promotercondition,into=c("promoter","condition"),sep="_") %>% 
+  separate(condition,into=c("carbon_source","carbon_source_concentration"),sep="(?<=[A-Za-z])(?=[0-9])",remove=FALSE) %>% 
+  mutate(carbon_source_concentration=as.double(carbon_source_concentration)/100)
+  
+find_command <- sprintf("find %s -type f -name '*final.csv'",denoised_data_files_dir)
+
+myparameters <- system(find_command, intern=TRUE) %>% 
+  lapply(function(.l) readr::read_csv(.l,n_max=10) %>% 
+           mutate(denoised_data_path=.l)) %>% 
+  do.call(rbind,.) %>% 
+  extract(denoised_data_path,"promotercondition","/([a-z0-9A-Z]{1,}_[0-9a-zA-Z]{1,})_[0-9]{8}_rawdata_[a-z0-9]{1,}_b_final.csv$",remove=FALSE,convert=FALSE) %>% 
+  extract(denoised_data_path,"date","/[a-z0-9A-Z]{1,}_[0-9a-zA-Z]{1,}_([0-9]{8})_rawdata_[a-z0-9]{1,}_b_final.csv$",remove=FALSE,convert=FALSE) %>% 
+  separate(promotercondition,into=c("promoter","condition"),sep="_") %>% 
+  separate(condition,into=c("carbon_source","carbon_source_concentration"),sep="(?<=[A-Za-z])(?=[0-9])",remove=FALSE) %>% 
+  mutate(carbon_source_concentration=as.double(carbon_source_concentration)/100)
+
+myerrors <- system(find_command, intern=TRUE) %>% 
+  lapply(function(.l) readr::read_csv(.l,n_max=3,skip=14) %>% 
+           mutate(denoised_data_path=.l)) %>% 
+  do.call(rbind,.) %>% 
+ extract(denoised_data_path,"promotercondition","/([a-z0-9A-Z]{1,}_[0-9a-zA-Z]{1,})_[0-9]{8}_rawdata_[a-z0-9]{1,}_b_final.csv$",remove=FALSE,convert=FALSE) %>% 
+  extract(denoised_data_path,"date","/[a-z0-9A-Z]{1,}_[0-9a-zA-Z]{1,}_([0-9]{8})_rawdata_[a-z0-9]{1,}_b_final.csv$",remove=FALSE,convert=FALSE) %>% 
+  separate(promotercondition,into=c("promoter","condition"),sep="_") %>% 
+  separate(condition,into=c("carbon_source","carbon_source_concentration"),sep="(?<=[A-Za-z])(?=[0-9])",remove=FALSE) %>% 
+  mutate(carbon_source_concentration=as.double(carbon_source_concentration)/100)
+```
+
+# Analyze inferred parameters
+
+```{r}
+dt_df <- tibble(dt=c(12,6,3,1.5),condition=conditions)
+
+myparameters %>% 
+  filter(name=="beta") %>% 
+  select(name,final,promoter,date,condition) %>% 
+  pivot_wider(names_from = name, values_from = final) %>% 
+  left_join(dt_df,by=c("condition")) %>% 
+  ggplot()+
+  geom_point(aes(dt,beta,col=promoter))+
+  scale_y_continuous(trans="log10")
+
+myparameters %>% 
+  filter(name=="beta") %>% 
+  select(name,final,promoter,date,condition) %>% 
+  pivot_wider(names_from = name, values_from = final) %>% 
+  left_join(dt_df,by=c("condition")) %>% 
+  arrange(dt) %>% 
+  View()
+```
+
+
+# Concatenate denoised data and raw data
+
+```{r}
+myframes_raw <- myframes_raw %>% 
+  select(-c(length_um,gfp_nb,carbon_source_concentration,carbon_source,parent)) %>% 
+  ungroup()
+
+myframes_denoised <- myframes_denoised %>% 
+  ungroup() %>% 
+  rename(cell=cell_id,
+         parent=parent_id,
+         time_min=time,
+         gfp_nb=mean_g,
+         lambda=mean_l,
+         q=mean_q) %>% 
+  mutate(time_sec=time_min*60,
+         length_um_raw=exp(log_length),
+         gfp_nb_raw=fp,
+         length_um=exp(mean_x)) %>% 
+  select(-c(log_length,fp,mean_x))
+
+myframes_final <- left_join(myframes_raw,myframes_denoised,by=c("condition","promoter","date","cell","time_sec"))
+```
+
+# Save the data on the disk for further analysis
+
+```{r}
+#Filtering out cells which have bad segmentation issue.
+
+bad_cells <- myframes_final %>% 
+  mutate(lambda_high_boundary=lambda+sqrt(cov_ll)) %>% 
+  filter(lambda_high_boundary<0) %>% 
+  distinct(cell)
+
+myframes_final <- myframes_final %>% 
+  anti_join(bad_cells,by=c("cell"))
+
+myframes_final %>% 
+  group_by(date,promoter,condition) %>% 
+  do((function(.df) {
+    #readr::write_csv(.df,sprintf("../denoised_data/%s_%s_denoised.csv",unique(.df$promoter),unique(.df$condition)))
+    readr::write_csv(.df,sprintf("../denoised_data_complete_cycles/%s_%s_%s_date_denoised_complete.csv",unique(.df$promoter),unique(.df$condition),unique(.df$date)))
+    return(tibble())
+  })(.)) %>% 
+  ungroup()
+```

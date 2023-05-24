@@ -1,0 +1,1 @@
+POS_NAMES=(Pos0 Pos1 Pos2 Pos3 Pos4 Pos5 Pos6 Pos7 Pos8 Pos9 Pos10 Pos11 Pos14 Pos15 Pos20 Pos21 Pos22 Pos23 Pos28 Pos29 Pos30 Pos31 Pos34 Pos35)

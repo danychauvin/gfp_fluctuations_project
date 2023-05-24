@@ -1,0 +1,1767 @@
+# Manual curation of 96 well plates data
+# David Schar, Dany Chauvin
+# 20210302
+
+# Loading packages and functions
+
+```{r message=FALSE, warning=FALSE}
+source("./load_packages_functions.R")
+source("./modeling_functions.R")
+source("./inference_functions.R")
+```
+
+# Importing all data
+Here data of your choice can be imported, by providing correct paths. Here importing data which are stored in `path_to_data_list`.
+
+```{r message=FALSE, warning=FALSE}
+path_to_data_list <- "/scicore/home/nimwegen/schdav16/Projects/constitexpr/constitexpr_experiment_1/20210312_constitexpr3.0/dataList.csv"
+source("./import_data.R")
+mydata1 <- mydata
+path_to_data_list <- "/scicore/home/nimwegen/schdav16/Projects/constitexpr/constitexpr_experiment_1/20210317_constitexpr3.1/dataList.csv"
+source("./import_data.R")
+mydata2 <- mydata
+path_to_data_list <- "/scicore/home/nimwegen/rocasu25/Documents/Projects/biozentrum/constitexpr/20210208_constitexpr_testrun2/dataList.csv"
+source("./import_data.R")
+mydata3 <- mydata
+```
+# Now biding all data
+
+```{r}
+mydata <- rbind(
+  mydata1,
+  mydata2,
+  mydata3)
+```
+
+Adding well information
+
+```{r}
+mydata <- mydata %>% 
+  mutate(valid=NA) %>% 
+  mutate(well=paste(plate,row,column,strain,sep="_"))
+
+mean_blank_od <- 0.03840125
+mydata <- mydata %>% 
+  mutate(corrected_od=od-mean_blank_od)
+
+mean_blank_fluo <- 35.3075
+mydata <- mydata %>% 
+  mutate(corrected_fluo=fluo-mean_blank_fluo) %>% 
+  filter(!grepl("H_7",well))
+```
+
+# Import curated data
+
+```{r message=FALSE, warning=FALSE}
+#path_to_curated_data <- "../curated_data_dany"
+#mydata_curated <- do.call(rbind, #lapply(list.files(path_to_curated_data,pattern=".csv",full.names=TRUE), readr::read_csv))
+mydata_bad <- readr::read_csv("../manualCuration.csv")
+mydata <- mydata %>% 
+  mutate(rowcol=paste(row,column,sep=""))
+replica_df <- tibble(description=unique(mydata$description),replica=c(2,3,1))
+mydata_curated <- mydata %>% 
+  anti_join(mydata_bad,by=c("description","plate","rowcol")) %>% 
+  left_join(replica_df,by=c("description")) %>% 
+  mutate(well_rep=paste(well,replica,sep="-"))
+```
+
+# Checking variability of estimated Beta from one day to the next
+
+# ACETATE, replicate 1,2,3
+
+```{r}
+min_corrected_od <- 0.05
+max_corrected_od <- 0.15
+cond1 <- "acetate"
+reps1 <- c(1)
+reps2 <- c(2)
+reps3 <- c(3)
+
+
+inference_results <- rbind(
+  run_inference_clean(cond1,reps1,mydata_curated),
+  run_inference_clean(cond1,reps2,mydata_curated),
+  run_inference_clean(cond1,reps3,mydata_curated)
+  )
+
+mydata_inferred_ace <- mydata_curated %>% 
+  filter(!grepl("empty",strain)) %>% #filter out empty wells
+  filter(condition==cond1) %>% 
+  #filter(replica %in% reps) %>% 
+  #filter(valid=="y") %>% 
+  #filter(between(corrected_od,min_corrected_od,max_corrected_od)) %>% 
+  filter(max(od)>min_corrected_od) %>% #to get rid of wells in which there are no growth at all
+  ungroup() %>% 
+  group_by(description,plate,well) %>%
+  arrange(time_min) %>% 
+  mutate(above_max_time=ifelse(corrected_od>=max_corrected_od,time_min,NA)) %>% 
+  mutate(time_limit=min(c(above_max_time,Inf),na.rm=TRUE)) %>% 
+  filter(time_min<time_limit) %>% 
+  mutate(below_min_time=ifelse(corrected_od<=min_corrected_od,time_min,NA)) %>% 
+  mutate(time_limit=max(c(below_min_time,-Inf),na.rm=TRUE)) %>% 
+  filter(time_min>time_limit) %>% 
+  ungroup() %>% 
+  select(-c(above_max_time,time_limit,below_min_time)) %>% 
+  left_join(inference_results,by=c("description","well","replica","condition"))
+  
+```
+
+```{r}
+library(RColorBrewer)
+# Définissez le nombre de couleurs que vous voulez
+nb.cols <- 24
+mycolors <- colorRampPalette(brewer.pal(8, "Dark2"))(nb.cols)
+
+mydata_inferred_ace$replica <- factor(mydata_inferred_ace$replica,levels = c(1,2,3))
+for(s in unique(mydata_inferred_ace$strain)[1:10]){
+print(mydata_inferred_ace %>%
+    filter(strain==s) %>%
+    ggplot() +
+    geom_point(aes(corrected_od,fluo,col=replica),alpha=1)+
+    geom_line(aes(corrected_od,corrected_od*alpha_tot_predict+beta_predict_ite,group=interaction(replica,well)),col="red",alpha=0.2)+
+    geom_text(aes(x = -Inf, y = -Inf, label = s),size=5,vjust=-0.2,hjust=-0.2)+
+    facet_wrap(~replica)+
+    xlab("corrected_od")+
+    ylab("fluo")+
+    scale_color_manual(values = mycolors)+
+    theme_cowplot()
+)}
+```
+```{r}
+control_df <- mydata_inferred_ace %>% 
+  filter(strain=="MG1655") %>% 
+  mutate(mean_alpha_strain_control=mean(alpha_tot_predict)) %>% 
+  group_by(replica) %>% 
+  mutate(p=n()) %>% 
+  mutate(mean_alpha_control_offset=mean(alpha_tot_predict-mean_alpha_strain_control)) %>% 
+  mutate(mean_alpha_control=mean(alpha_tot_predict)) %>% 
+  mutate(sd_alpha_control=sqrt(var(alpha_tot_predict)+sum(sd_alpha_tot**2)/p)) %>% 
+  ungroup() %>% 
+  distinct(replica,mean_alpha_control,sd_alpha_control,mean_alpha_strain_control,mean_alpha_control_offset)
+
+mydata_inferred_ace %>% 
+  filter(strain!="MG1655") %>% 
+  filter(strain=="pl-hi1") %>% 
+  left_join(control_df,by=c("replica")) %>% 
+  group_by(strain) %>% 
+  mutate(sd_alpha=sd(alpha_tot_predict)) %>% 
+  mutate(mean_alpha=mean(alpha_tot_predict)) %>% 
+  ungroup() %>% 
+  ggplot()+
+  geom_point(aes(mean_alpha_control,mean_alpha),alpha=0.2)+
+  geom_errorbar(aes(x=mean_alpha_control,ymax=mean_alpha+sd_alpha,ymin=mean_alpha+sd_alpha))
+
+mydata_inferred_ace %>% 
+  filter(strain!="MG1655") %>% 
+  left_join(control_df,by=c("replica")) %>% 
+  #group_by(strain) %>% 
+  #mutate(sd_alpha=sd(alpha_tot_predict))+
+  ggplot()+
+  geom_boxplot(aes(x=mean_alpha_control,y=alpha_tot_predict,col=replica))+
+  coord_cartesian(xlim=c(1250,2500))+
+  theme_cowplot()
+
+mydata_inferred_ace %>% 
+  filter(strain!="MG1655") %>% 
+  left_join(control_df,by=c("replica")) %>% 
+  group_by(strain,replica) %>% 
+  mutate(mean_alpha=mean(alpha_tot_predict)) %>% 
+  mutate(sd_alpha=sd(alpha_tot_predict)) %>% 
+  ggplot()+
+  geom_point(aes(x=mean_alpha_control,y=alpha_tot_predict,col=replica))+
+  coord_cartesian(xlim=c(1250,2500))+
+  theme_cowplot()+
+  facet_wrap(~strain,scales="free")+
+  theme(strip.text = element_text(size = 20))+
+    ggsave("./covariation_control_prom.pdf",width=12*5,height=7*5,limitsize = FALSE)
+
+mydata_inferred_ace %>% 
+  filter(strain!="MG1655") %>% 
+  left_join(control_df,by=c("replica")) %>% 
+  group_by(strain,replica) %>% 
+  #mutate(mean_alpha=mean(alpha_tot_predict)) %>% 
+  #mutate(sd_alpha=sd(alpha_tot_predict)) %>% 
+  #distinct(strain,replica,.keep_all=TRUE) %>% 
+  ungroup() %>% 
+  ggplot()+
+  geom_point(aes(x=mean_alpha_control,y=alpha_tot_predict),col="black",size=3,alpha=0.5)+
+  geom_errorbar(aes(x=mean_alpha_control,ymax=alpha_tot_predict+sd_alpha_tot,ymin=alpha_tot_predict-sd_alpha_tot,col=replica),width=0)+
+  geom_errorbarh(aes(y=alpha_tot_predict,xmin=mean_alpha_control-sd_alpha_control,xmax=mean_alpha_control+sd_alpha_control,col=replica))+
+  coord_cartesian(xlim=c(1250,2500))+
+  theme_cowplot()+
+  facet_wrap(~strain,scales="free")+
+  theme(strip.text = element_text(size = 20))+
+    ggsave("./covariation_control_prom.pdf",width=12*5,height=7*5,limitsize = FALSE)
+
+mydata_inferred_ace %>% 
+  filter(strain!="MG1655") %>% 
+  left_join(control_df,by=c("replica")) %>% 
+  group_by(strain,replica) %>% 
+  mutate(mean_alpha=mean(alpha_tot_predict)-mean_alpha_control) %>% 
+  mutate(sd_alpha=sqrt(sd(alpha_tot_predict)**2+sd(sd_alpha_control))) %>%
+  #distinct(strain,replica,.keep_all=TRUE) %>% 
+  ungroup() %>% 
+  ggplot()+
+  geom_point(aes(x=replica,y=mean_alpha),col="black",size=3,alpha=0.5)+
+  geom_errorbar(aes(x=replica,ymax=mean_alpha+sd_alpha,ymin=mean_alpha-sd_alpha,col=replica),width=0)+
+  #geom_errorbarh(aes(y=mean_alpha,xmin=mean_alpha_control-sd_alpha_control,xmax=mean_alpha_control+sd_alpha_control,col=replica))+
+  #coord_cartesian(xlim=c(1250,2500))+
+  theme_cowplot()+
+  facet_wrap(~strain,scales="free")+
+  theme(strip.text = element_text(size = 20))+
+    ggsave("./covariation_control_prom_minus_mean_alpha_control.pdf",width=12*5,height=7*5,limitsize = FALSE)
+
+mydata_inferred_ace %>% 
+  filter(strain!="MG1655") %>% 
+  left_join(control_df,by=c("replica")) %>% 
+  group_by(strain) %>% 
+  mutate(mean_alpha_strain=mean(alpha_tot_predict)) %>% 
+  ungroup() %>% 
+  group_by(strain,replica) %>% 
+  mutate(alpha_offset=alpha_tot_predict-mean_alpha_strain) %>% 
+  mutate(mean_alpha_offset=mean(alpha_offset)) %>% 
+  mutate(sd_alpha=sd(alpha_tot_predict)) %>%
+  #distinct(strain,replica,.keep_all=TRUE) %>% 
+  ungroup() %>% 
+  ggplot()+
+  geom_point(aes(x=mean_alpha_control_offset,y=mean_alpha_offset),col="black",size=3,alpha=0.5)+
+  geom_errorbar(aes(x=mean_alpha_control_offset,ymax=mean_alpha_offset+sd_alpha,ymin=mean_alpha_offset-sd_alpha,col=replica),width=0)+
+  geom_errorbarh(aes(y=mean_alpha_offset,xmin=mean_alpha_control_offset-sd_alpha_control,xmax=mean_alpha_control_offset+sd_alpha_control,col=replica))+
+  #coord_cartesian(xlim=c(1250,2500))+
+  theme_cowplot()+
+  facet_wrap(~strain,scales="free")+
+  theme(strip.text = element_text(size = 20))+
+    ggsave("./covariation_control_prom_offset.pdf",width=12*5,height=7*5,limitsize = FALSE)
+
+mydata_inferred_ace %>% 
+  filter(strain!="MG1655") %>% 
+  left_join(control_df,by=c("replica")) %>% 
+  group_by(strain) %>% 
+  mutate(mean_alpha_strain=mean(alpha_tot_predict)) %>% 
+  ungroup() %>% 
+  group_by(strain,replica) %>% 
+  mutate(alpha_offset=alpha_tot_predict-mean_alpha_strain) %>% 
+  mutate(mean_alpha_offset=mean(alpha_offset)) %>% 
+  mutate(sd_alpha=sd(alpha_tot_predict)) %>%
+  #distinct(strain,replica,.keep_all=TRUE) %>% 
+  ungroup() %>% 
+  ggplot()+
+  geom_point(aes(x=mean_alpha_control_offset,y=mean_alpha_offset),col="black",size=3,alpha=0.5)+
+  geom_errorbar(aes(x=mean_alpha_control_offset,ymax=mean_alpha_offset+sd_alpha,ymin=mean_alpha_offset-sd_alpha,col=replica),width=0)+
+  geom_errorbarh(aes(y=mean_alpha_offset,xmin=mean_alpha_control_offset-sd_alpha_control,xmax=mean_alpha_control_offset+sd_alpha_control,col=replica))+
+  #coord_cartesian(xlim=c(1250,2500))+
+  theme_cowplot()+
+  #facet_wrap(~strain,scales="free")+
+  theme(strip.text = element_text(size = 20))
+    #ggsave("./covariation_control_prom_offset_all.pdf",width=12*5,height=7*5,limitsize = FALSE)
+```
+
+# Implementation of Erik's method for free Beta
+
+Given the previous results, we decided to go for a free model that assumes a alpha/beta specific to each well. Which is a much easier problem to solve.
+
+I will therefore create a new file for that.
+
+
+
+
+
+So there are wells that are obviously not good for controls. Ones that are too high.
+Ones that are too low. And for the bulk there seem to be variations that I do not get well.
+
+Now, How do I do to look at the co-variation?
+Also, is it safe to say that the Beta is the same everyday (beta=fluorescence when there is no autofluorescence, should be close to 35).
+p3-F8 has to out.
+
+Cleaning controls
+Clearly, the controls are pausing some problems there.
+Some are completely off. Isolate adn check them.
+They have very small slope, or very big slope.
+
+```{r}
+mydata_inferred_ace %>% 
+  filter(strain=="MG1655") %>% 
+  #filter(replica==2) %>% 
+  distinct(replica,well,.keep_all = TRUE) %>% 
+  select(replica,well,alpha_tot_predict,sd_alpha_tot,beta_predict_ite,beta_sd_ite) %>% 
+  group_by(replica) %>% 
+  mutate(p=n()) %>% 
+  mutate(mean_alpha_tot=mean(alpha_tot_predict)) %>%
+  mutate(var_alpha_day_to_day=sqrt(var(alpha_tot_predict))) %>% 
+  mutate(var_alpha_inf=sqrt(sum(sd_alpha_tot**2))/p) %>%
+  distinct(replica,mean_alpha_tot,var_alpha_inf,var_alpha_day_to_day,beta_predict_ite) %>% 
+  arrange(replica)
+  
+
+# So clearly, this is coming from pl2_H_7_MG1655 mislabelling by David.
+# I will erase that. Done.
+# Then there is pl1_H_2 and pl1_G_2 that are very low. Why?
+
+s <- "MG1655"
+mydata_inferred_ace %>%
+    filter(strain==s) %>%
+    #filter(replica==1) %>% 
+    ggplot() +
+    geom_point(aes(corrected_od,fluo,col=well),alpha=1)+
+    geom_line(aes(corrected_od,corrected_od*alpha_tot_predict+beta_predict_ite,group=interaction(replica,well)),col="red",alpha=0.2)+
+    geom_text(aes(x = -Inf, y = -Inf, label = s),size=5,vjust=-0.2,hjust=-0.2)+
+    facet_wrap(~interaction(replica,well))+
+    xlab("corrected_od")+
+    ylab("fluo")+
+    scale_color_manual(values = mycolors)+
+    theme_cowplot()
+
+s <- "MG1655"
+mydata_inferred_ace %>%
+    filter(strain==s) %>%
+    #filter(replica==1) %>% 
+    ggplot() +
+    geom_point(aes(corrected_od,fluo,col=well),alpha=1)+
+    geom_line(aes(corrected_od,corrected_od*alpha_tot_predict+beta_predict_ite,group=interaction(replica,well)),col="red",alpha=0.2)+
+    geom_point(aes(0,0*alpha_tot_predict+beta_predict_ite,group=interaction(replica,well)),shape="+",col="red",alpha=0.2,size=5)+
+    #geom_text(aes(x = -Inf, y = -Inf, label = s),size=5,vjust=-0.2,hjust=-0.2)+
+    facet_wrap(~replica)+
+    xlab("corrected_od")+
+    ylab("fluo")+
+    scale_color_manual(values = mycolors)+
+    theme_cowplot()+
+    coord_cartesian(xlim=c(0,0.15),ylim=c(0,350))
+```
+
+# GLYCEROL
+
+```{r}
+min_corrected_od <- 0.05
+max_corrected_od <- 0.2
+cond1 <- "glycerol"
+reps1 <- c(1)
+reps2 <- c(2)
+reps3 <- c(3)
+
+
+inference_results <- rbind(
+  run_inference_clean(cond1,reps1,mydata_curated),
+  run_inference_clean(cond1,reps2,mydata_curated),
+  run_inference_clean(cond1,reps3,mydata_curated)
+  )
+
+mydata_inferred_gly <- mydata_curated %>% 
+  filter(!grepl("empty",strain)) %>% #filter out empty wells
+  filter(condition==cond1) %>% 
+  #filter(replica %in% reps) %>% 
+  #filter(valid=="y") %>% 
+  #filter(between(corrected_od,min_corrected_od,max_corrected_od)) %>% 
+  filter(max(od)>min_corrected_od) %>% #to get rid of wells in which there are no growth at all
+  ungroup() %>% 
+  group_by(description,plate,well) %>%
+  arrange(time_min) %>% 
+  mutate(above_max_time=ifelse(corrected_od>=max_corrected_od,time_min,NA)) %>% 
+  mutate(time_limit=min(c(above_max_time,Inf),na.rm=TRUE)) %>% 
+  filter(time_min<time_limit) %>% 
+  mutate(below_min_time=ifelse(corrected_od<=min_corrected_od,time_min,NA)) %>% 
+  mutate(time_limit=max(c(below_min_time,-Inf),na.rm=TRUE)) %>% 
+  filter(time_min>time_limit) %>% 
+  ungroup() %>% 
+  select(-c(above_max_time,time_limit,below_min_time)) %>% 
+  left_join(inference_results,by=c("description","well","replica","condition"))
+  
+```
+
+
+```{r}
+library(RColorBrewer)
+# Définissez le nombre de couleurs que vous voulez
+nb.cols <- 24
+mycolors <- colorRampPalette(brewer.pal(8, "Dark2"))(nb.cols)
+
+mydata_inferred_gly$replica <- factor(mydata_inferred_gly$replica,levels = c(1,2,3))
+for(s in unique(mydata_inferred_gly$strain)[1:10]){
+print(mydata_inferred_gly %>%
+    filter(strain==s) %>%
+    ggplot() +
+    geom_point(aes(corrected_od,fluo,col=replica),alpha=1)+
+    geom_line(aes(corrected_od,corrected_od*alpha_tot_predict+beta_predict_ite,group=interaction(replica,well)),col="red",alpha=0.2)+
+    geom_text(aes(x = -Inf, y = -Inf, label = s),size=5,vjust=-0.2,hjust=-0.2)+
+    facet_wrap(~replica)+
+    xlab("corrected_od")+
+    ylab("fluo")+
+    scale_color_manual(values = mycolors)+
+    theme_cowplot()
+    )}
+```
+
+```{r}
+mydata_inferred_gly %>% 
+  filter(strain=="MG1655") %>% 
+  #filter(replica==2) %>% 
+  distinct(replica,well,.keep_all = TRUE) %>% 
+  select(replica,well,alpha_tot_predict,sd_alpha_tot,beta_predict_ite,beta_sd_ite) %>% 
+  group_by(replica) %>% 
+  mutate(p=n()) %>% 
+  mutate(mean_alpha_tot=mean(alpha_tot_predict)) %>%
+  mutate(var_alpha_day_to_day=sqrt(var(alpha_tot_predict))) %>% 
+  mutate(var_alpha_inf=sqrt(sum(sd_alpha_tot**2))/p) %>%
+  distinct(replica,mean_alpha_tot,var_alpha_inf,var_alpha_day_to_day,beta_predict_ite) %>% 
+  arrange(replica)
+  
+
+# So clearly, this is coming from pl2_H_7_MG1655 mislabelling by David.
+# I will erase that. Done.
+# Then there is pl1_H_2 and pl1_G_2 that are very low. Why?
+
+s <- "MG1655"
+mydata_inferred_gly %>%
+    filter(strain==s) %>%
+    #filter(replica==1) %>% 
+    ggplot() +
+    geom_point(aes(corrected_od,fluo,col=well),alpha=1)+
+    geom_line(aes(corrected_od,corrected_od*alpha_tot_predict+beta_predict_ite,group=interaction(replica,well)),col="red",alpha=0.2)+
+    geom_text(aes(x = -Inf, y = -Inf, label = s),size=5,vjust=-0.2,hjust=-0.2)+
+    facet_wrap(~interaction(replica,well))+
+    xlab("corrected_od")+
+    ylab("fluo")+
+    scale_color_manual(values = mycolors)+
+    theme_cowplot()
+
+s <- "MG1655"
+mydata_inferred_gly %>%
+    filter(strain==s) %>%
+    #filter(replica==1) %>% 
+    ggplot() +
+    geom_point(aes(corrected_od,fluo,col=well),alpha=1)+
+    geom_line(aes(corrected_od,corrected_od*alpha_tot_predict+beta_predict_ite,group=interaction(replica,well)),col="red",alpha=0.2)+
+    geom_point(aes(0,0*alpha_tot_predict+beta_predict_ite,group=interaction(replica,well)),shape="+",col="red",alpha=0.2,size=5)+
+    #geom_text(aes(x = -Inf, y = -Inf, label = s),size=5,vjust=-0.2,hjust=-0.2)+
+    facet_wrap(~replica)+
+    xlab("corrected_od")+
+    ylab("fluo")+
+    scale_color_manual(values = mycolors)+
+    theme_cowplot()+
+    coord_cartesian(xlim=c(0,0.2),ylim=c(0,250))
+```
+# GLUCOSE
+
+```{r}
+min_corrected_od <- 0.05
+max_corrected_od <- 0.4
+cond1 <- "glucose"
+reps1 <- c(1)
+reps2 <- c(2)
+reps3 <- c(3)
+
+
+inference_results <- rbind(
+  run_inference_clean(cond1,reps1,mydata_curated),
+  run_inference_clean(cond1,reps2,mydata_curated),
+  run_inference_clean(cond1,reps3,mydata_curated)
+  )
+
+mydata_inferred_glu <- mydata_curated %>% 
+  filter(!grepl("empty",strain)) %>% #filter out empty wells
+  filter(condition==cond1) %>% 
+  #filter(replica %in% reps) %>% 
+  #filter(valid=="y") %>% 
+  #filter(between(corrected_od,min_corrected_od,max_corrected_od)) %>% 
+  filter(max(od)>min_corrected_od) %>% #to get rid of wells in which there are no growth at all
+  ungroup() %>% 
+  group_by(description,plate,well) %>%
+  arrange(time_min) %>% 
+  mutate(above_max_time=ifelse(corrected_od>=max_corrected_od,time_min,NA)) %>% 
+  mutate(time_limit=min(c(above_max_time,Inf),na.rm=TRUE)) %>% 
+  filter(time_min<time_limit) %>% 
+  mutate(below_min_time=ifelse(corrected_od<=min_corrected_od,time_min,NA)) %>% 
+  mutate(time_limit=max(c(below_min_time,-Inf),na.rm=TRUE)) %>% 
+  filter(time_min>time_limit) %>% 
+  ungroup() %>% 
+  select(-c(above_max_time,time_limit,below_min_time)) %>% 
+  left_join(inference_results,by=c("description","well","replica","condition"))
+  
+```
+```{r}
+library(RColorBrewer)
+# Définissez le nombre de couleurs que vous voulez
+nb.cols <- 24
+mycolors <- colorRampPalette(brewer.pal(8, "Dark2"))(nb.cols)
+
+mydata_inferred_glu$replica <- factor(mydata_inferred_glu$replica,levels = c(1,2,3))
+for(s in unique(mydata_inferred_glu$strain)[1:10]){
+print(mydata_inferred_glu %>%
+    filter(strain==s) %>%
+    ggplot() +
+    geom_point(aes(corrected_od,fluo,col=replica),alpha=1)+
+    geom_line(aes(corrected_od,corrected_od*alpha_tot_predict+beta_predict_ite,group=interaction(replica,well)),col="red",alpha=0.2)+
+    geom_text(aes(x = -Inf, y = -Inf, label = s),size=5,vjust=-0.2,hjust=-0.2)+
+    facet_wrap(~replica)+
+    xlab("corrected_od")+
+    ylab("fluo")+
+    scale_color_manual(values = mycolors)+
+    theme_cowplot()
+    )}
+```
+
+```{r}
+library(RColorBrewer)
+# Définissez le nombre de couleurs que vous voulez
+nb.cols <- 8
+mycolors <- colorRampPalette(brewer.pal(8, "Set1"))(nb.cols)
+
+
+mydata_inferred_glu %>% 
+  filter(strain=="MG1655") %>% 
+  #filter(replica==2) %>% 
+  distinct(replica,well,.keep_all = TRUE) %>% 
+  select(replica,well,alpha_tot_predict,sd_alpha_tot,beta_predict_ite,beta_sd_ite) %>% 
+  group_by(replica) %>% 
+  mutate(p=n()) %>% 
+  mutate(mean_alpha_tot=mean(alpha_tot_predict)) %>%
+  mutate(var_alpha_day_to_day=sqrt(var(alpha_tot_predict))) %>% 
+  mutate(var_alpha_inf=sqrt(sum(sd_alpha_tot**2))/p) %>%
+  distinct(replica,mean_alpha_tot,var_alpha_inf,var_alpha_day_to_day,beta_predict_ite) %>% 
+  arrange(replica)
+  
+
+# So clearly, this is coming from pl2_H_7_MG1655 mislabelling by David.
+# I will erase that. Done.
+# Then there is pl1_H_2 and pl1_G_2 that are very low. Why?
+
+
+
+s <- "MG1655"
+mydata_inferred_glu %>%
+    filter(strain==s) %>%
+    #filter(replica==1) %>% 
+    ggplot() +
+    geom_point(aes(corrected_od,fluo,col=replica),alpha=1)+
+    geom_line(aes(corrected_od,corrected_od*alpha_tot_predict+beta_predict_ite,group=interaction(replica,well)),col="red",alpha=0.2)+
+    geom_text(aes(x = -Inf, y = -Inf, label = s),size=5,vjust=-0.2,hjust=-0.2)+
+    facet_wrap(~interaction(replica,well))+
+    xlab("corrected_od")+
+    ylab("fluo")+
+    scale_color_manual(values = mycolors)+
+    theme_cowplot()
+
+
+
+s <- "MG1655"
+mydata_inferred_glu %>%
+    filter(strain==s) %>%
+    #filter(replica==1) %>% 
+    ggplot() +
+    geom_point(aes(corrected_od,fluo,col=well),alpha=1)+
+    geom_line(aes(corrected_od,corrected_od*alpha_tot_predict+beta_predict_ite,group=interaction(replica,well)),col="red",alpha=0.2)+
+    geom_point(aes(0,0*alpha_tot_predict+beta_predict_ite,group=interaction(replica,well)),shape="+",col="red",alpha=0.2,size=5)+
+    #geom_text(aes(x = -Inf, y = -Inf, label = s),size=5,vjust=-0.2,hjust=-0.2)+
+    facet_wrap(~replica)+
+    xlab("corrected_od")+
+    ylab("fluo")+
+    scale_color_manual(values = mycolors)+
+    theme_cowplot()+
+    coord_cartesian(xlim=c(0,0.4),ylim=c(0,350))
+```
+
+# GLUCOSE
+
+```{r}
+min_corrected_od <- 0.05
+max_corrected_od <- 0.6
+cond1 <- "glucoseaa"
+reps1 <- c(1)
+reps2 <- c(2)
+reps3 <- c(3)
+
+
+inference_results <- rbind(
+  run_inference_clean(cond1,reps1,mydata_curated),
+  #run_inference_clean(cond1,reps2,mydata_curated),
+  run_inference_clean(cond1,reps3,mydata_curated)
+  )
+
+mydata_inferred_gluaa <- mydata_curated %>% 
+  filter(!grepl("empty",strain)) %>% #filter out empty wells
+  filter(condition==cond1) %>% 
+  #filter(replica %in% reps) %>% 
+  #filter(valid=="y") %>% 
+  #filter(between(corrected_od,min_corrected_od,max_corrected_od)) %>% 
+  filter(max(od)>min_corrected_od) %>% #to get rid of wells in which there are no growth at all
+  ungroup() %>% 
+  group_by(description,plate,well) %>%
+  arrange(time_min) %>% 
+  mutate(above_max_time=ifelse(corrected_od>=max_corrected_od,time_min,NA)) %>% 
+  mutate(time_limit=min(c(above_max_time,Inf),na.rm=TRUE)) %>% 
+  filter(time_min<time_limit) %>% 
+  mutate(below_min_time=ifelse(corrected_od<=min_corrected_od,time_min,NA)) %>% 
+  mutate(time_limit=max(c(below_min_time,-Inf),na.rm=TRUE)) %>% 
+  filter(time_min>time_limit) %>% 
+  ungroup() %>% 
+  select(-c(above_max_time,time_limit,below_min_time)) %>% 
+  left_join(inference_results,by=c("description","well","replica","condition"))
+  
+```
+
+```{r}
+library(RColorBrewer)
+# Définissez le nombre de couleurs que vous voulez
+nb.cols <- 24
+mycolors <- colorRampPalette(brewer.pal(8, "Set1"))(nb.cols)
+
+mydata_inferred_gluaa$replica <- factor(mydata_inferred_gluaa$replica,levels = c(1,2,3))
+for(s in unique(mydata_inferred_gluaa$strain)[1:10]){
+print(mydata_inferred_gluaa %>%
+    filter(strain==s) %>%
+    ggplot() +
+    geom_point(aes(corrected_od,fluo,col=replica),alpha=1)+
+    geom_line(aes(corrected_od,corrected_od*alpha_tot_predict+beta_predict_ite,group=interaction(replica,well)),col="red",alpha=0.2)+
+    geom_text(aes(x = -Inf, y = -Inf, label = s),size=5,vjust=-0.2,hjust=-0.2)+
+    facet_wrap(~replica)+
+    xlab("corrected_od")+
+    ylab("fluo")+
+    scale_color_manual(values = mycolors)+
+    theme_cowplot()
+    )}
+```
+
+```{r}
+library(RColorBrewer)
+# Définissez le nombre de couleurs que vous voulez
+nb.cols <- 8
+mycolors <- colorRampPalette(brewer.pal(8, "Set1"))(nb.cols)
+
+
+mydata_inferred_gluaa %>% 
+  filter(strain=="MG1655") %>% 
+  #filter(replica==2) %>% 
+  distinct(replica,well,.keep_all = TRUE) %>% 
+  select(replica,well,alpha_tot_predict,sd_alpha_tot,beta_predict_ite,beta_sd_ite) %>% 
+  group_by(replica) %>% 
+  mutate(p=n()) %>% 
+  mutate(mean_alpha_tot=mean(alpha_tot_predict)) %>%
+  mutate(var_alpha_day_to_day=var(alpha_tot_predict)) %>% 
+  mutate(var_alpha_inf=sqrt(sum(sd_alpha_tot**2))/p) %>%
+  distinct(replica,mean_alpha_tot,var_alpha_inf,var_alpha_day_to_day,beta_predict_ite) %>% 
+  arrange(replica)
+  
+
+# So clearly, this is coming from pl2_H_7_MG1655 mislabelling by David.
+# I will erase that. Done.
+# Then there is pl1_H_2 and pl1_G_2 that are very low. Why?
+
+
+
+s <- "MG1655"
+mydata_inferred_gluaa %>%
+    filter(strain==s) %>%
+    #filter(replica==1) %>% 
+    ggplot() +
+    geom_point(aes(corrected_od,fluo,col=replica),alpha=1)+
+    geom_line(aes(corrected_od,corrected_od*alpha_tot_predict+beta_predict_ite,group=interaction(replica,well)),col="red",alpha=0.2)+
+    geom_text(aes(x = -Inf, y = -Inf, label = s),size=5,vjust=-0.2,hjust=-0.2)+
+    facet_wrap(~interaction(replica,well))+
+    xlab("corrected_od")+
+    ylab("fluo")+
+    scale_color_manual(values = mycolors)+
+    theme_cowplot()
+
+
+
+s <- "MG1655"
+mydata_inferred_gluaa %>%
+    filter(strain==s) %>%
+    #filter(replica==1) %>% 
+    ggplot() +
+    geom_point(aes(corrected_od,fluo,col=well),alpha=1)+
+    geom_line(aes(corrected_od,corrected_od*alpha_tot_predict+beta_predict_ite,group=interaction(replica,well)),col="red",alpha=0.2)+
+    geom_point(aes(0,0*alpha_tot_predict+beta_predict_ite,group=interaction(replica,well)),shape="+",col="red",alpha=0.2,size=5)+
+    #geom_text(aes(x = -Inf, y = -Inf, label = s),size=5,vjust=-0.2,hjust=-0.2)+
+    facet_wrap(~replica)+
+    xlab("corrected_od")+
+    ylab("fluo")+
+    scale_color_manual(values = mycolors)+
+    theme_cowplot()+
+    coord_cartesian(xlim=c(0,0.6),ylim=c(0,350))
+```
+
+
+
+
+
+
+# GLYCEROL
+
+```{r}
+min_corrected_od <- 0.05
+max_corrected_od <- 0.2
+cond <- "glycerol"
+```
+
+```{r}
+source("./run_inference.R")
+```
+
+```{r}
+mydata_inferred_gly <- mydata_curated_cond %>% 
+  left_join(mydata_inference,by=c("well","description"))
+  #distinct(well,.keep_all = TRUE)
+
+mydata_inferred_gly %>% 
+  distinct(strain,.keep_all=TRUE) %>% 
+  ggplot()+
+  stat_ecdf(aes(alpha_tot_predict))+
+  theme_cowplot()
+```
+
+```{r}
+for(w in unique(mydata_inferred_gly$well)[1:10]){
+print(mydata_inferred_gly %>%
+    filter(well==w) %>%
+    ggplot() +
+    geom_point(aes(corrected_od,fluo),alpha=0.2,col="black")+
+    geom_point(aes(corrected_od,corrected_od*alpha_tot_predict+beta_predict_ite),col="red")+
+    xlab("log(c_od)")+
+    ylab("fluo")+theme_cowplot()
+    )}
+```
+
+# GLUCOSE
+
+```{r}
+min_corrected_od <- 0.05
+max_corrected_od <- 0.4
+cond <- "glucose"
+```
+
+```{r}
+source("./run_inference.R")
+```
+
+```{r}
+mydata_inferred_gluaa <- mydata_curated_cond %>% 
+  left_join(mydata_inference,by=c("well","description"))
+  #distinct(well,.keep_all = TRUE)
+
+mydata_inferred_gluaa %>% 
+  distinct(strain,.keep_all=TRUE) %>% 
+  ggplot()+
+  stat_ecdf(aes(alpha_tot_predict))+
+  theme_cowplot()
+```
+
+```{r}
+for(w in unique(mydata_inferred_glu$well)[1:10]){
+print(mydata_inferred_glu %>%
+    filter(well==w) %>%
+    ggplot() +
+    geom_point(aes(corrected_od,fluo),alpha=0.2,col="black")+
+    geom_point(aes(corrected_od,corrected_od*alpha_tot_predict+beta_predict_ite),col="red")+
+    xlab("log(c_od)")+
+    ylab("fluo")+theme_cowplot()
+    )}
+```
+
+# GLUCOSEAA
+
+```{r}
+min_corrected_od <- 0.05
+max_corrected_od <- 0.6
+cond <- "glucoseaa"
+```
+
+```{r}
+source("./run_inference.R")
+```
+
+```{r}
+mydata_inferred_gluaa <- mydata_curated_cond %>% 
+  left_join(mydata_inference,by=c("well","description"))
+  #distinct(well,.keep_all = TRUE)
+
+mydata_inferred_gluaa %>% 
+  distinct(strain,.keep_all=TRUE) %>% 
+  ggplot()+
+  stat_ecdf(aes(alpha_tot_predict))+
+  theme_cowplot()
+```
+
+```{r}
+for(w in unique(mydata_inferred_gluaa$well)[1:10]){
+print(mydata_inferred_gluaa %>%
+    filter(well==w) %>%
+    ggplot() +
+    geom_point(aes(corrected_od,fluo),alpha=0.2,col="black")+
+    geom_point(aes(corrected_od,corrected_od*alpha_tot_predict+beta_predict_ite),col="red")+
+    xlab("log(c_od)")+
+    ylab("fluo")+theme_cowplot()
+    )}
+```
+
+# All data together
+
+```{r}
+mydata_inferred_all <- rbind(
+  mydata_inferred_ace %>% 
+    distinct(description,well,.keep_all = TRUE),
+  
+  mydata_inferred_gly %>% 
+    distinct(description,well,.keep_all = TRUE),
+
+  mydata_inferred_glu%>% 
+    distinct(description,well,.keep_all = TRUE),
+  
+  mydata_inferred_gluaa%>% 
+    distinct(description,well,.keep_all = TRUE))
+```
+
+```{r}
+readr::write_csv(mydata_inferred_all,"./mydata_inferred_all.csv")
+```
+
+```{r message=FALSE, warning=FALSE}
+gr_df <- tibble(gr=c(0.2,0.5,1),condition=c("acetate","glycerol","glucose"))
+
+mydata_inferred_all %>% 
+  left_join(gr_df,by=c("condition")) %>% 
+  filter(grepl("p2-",strain)) %>% 
+  ggplot()+
+  geom_point(aes(gr,alpha_tot_predict,col=condition))+
+  geom_errorbar(aes(x=gr,ymin=alpha_tot_predict-sd_alpha_tot,ymax=alpha_tot_predict+sd_alpha_tot))+
+  theme_cowplot()+
+  xlab("Doublings per hour")+
+  ylab("alpha (GFP + autofluorescence)")
+  #facet_wrap(~well,scales="free")
+```
+
+
+```{r,message=FALSE,warning=FALSE}
+mystrain <- unique(mydata_inferred_all$strain)
+
+mydata_inferred_control <- mydata_inferred_all %>% 
+  filter(strain=="MG1655") %>% 
+  distinct(well,.keep_all = TRUE) %>% 
+  group_by(condition) %>% 
+  mutate(p=n()) %>% 
+  mutate(alpha_0_mean=mean(alpha_tot_predict)) %>% 
+  mutate(alpha_0_sd=sqrt(sum(sd_alpha_tot**2)/(p**2)+var(alpha_tot_predict))) %>% 
+  ungroup() %>% 
+  distinct(condition,.keep_all=TRUE) %>% 
+  select(condition,alpha_0_mean,alpha_0_sd)
+```
+
+```{r}
+mydata_inferred_all_control <- mydata_inferred_all %>%
+  left_join(mydata_inferred_control,by=c("condition")) %>% 
+  group_by(strain,condition) %>% 
+  filter(n()>=2) %>% 
+  mutate(p=n()) %>% 
+  mutate(alpha_gfp=mean(alpha_tot_predict-mean(alpha_0_mean))) %>% 
+  mutate(sd_alpha_gfp=sqrt(sum(sd_alpha_tot**2)/(p**2)+alpha_0_sd**2+var(alpha_tot_predict))) %>% 
+  ungroup()
+```
+
+# Save the data for future analysis
+
+```{r}
+mydata_inferred_all_control %>% 
+  readr::write_csv("./20210329_inference_results_constitexpr_all.csv")
+```
+
+# Comparison with mother machine data
+
+Fetch mother machine data first.
+
+Loading mother machine data, using the correct script in ouInferenceBjorn, dataAnalysis.Rmd.
+Using the length and width (small and big axis to reconstruct the total cell volume).
+
+The total volume is given by:
+
+((length_um-width_um)*(width_um/2)**2*3.14)+4/3*3.14*(width_um/2)***3
+
+```{r}
+library(RColorBrewer)
+# Définissez le nombre de couleurs que vous voulez
+nb.cols <- 18
+mycolors <- colorRampPalette(brewer.pal(8, "Set2"))(nb.cols)
+
+
+#myframes_to_mycells
+#mycells
+myframes_to_mycells <- myframes_to_mycells %>% 
+  mutate(volume_um=((length_um-width_um)*(width_um/2)**2*3.14)+4/3*3.14*(width_um/2)**3) %>%
+  mutate(concentration_length=gfp_nb/length_um) %>% 
+  mutate(concentration_volume=gfp_nb/volume_um) %>% 
+  group_by(promoter,condition) %>% 
+  mutate(mean_concentration_length=mean(concentration_length,na.rm=TRUE)) %>% 
+  mutate(mean_concentration_volume=mean(concentration_volume,na.rm=TRUE)) %>% 
+  mutate(sd_concentration_length=sd(concentration_length,na.rm=TRUE)) %>% 
+  mutate(sd_concentration_volume=sd(concentration_volume,na.rm=TRUE))
+
+gr_df <- mycells %>% 
+  group_by(condition,promoter) %>% 
+  mutate(mean_alpha=mean(alpha,na.rm=TRUE)) %>% 
+  mutate(mean_doubling_time=mean_alpha*3600/log(2)) %>% 
+  distinct(condition,promoter,.keep_all = TRUE ) %>% 
+  select(condition, promoter, mean_doubling_time,mean_alpha) %>% 
+  ungroup()
+
+```
+
+```{r}
+myframes_to_mycells %>% 
+  left_join(gr_df,by=c("condition","promoter")) %>% 
+  distinct(promoter,condition,.keep_all=TRUE) %>%
+  ggplot()+
+  geom_point(aes(log(mean_doubling_time),log(mean_concentration_length),col=promoter))+
+  geom_line(aes(log(mean_doubling_time),log(mean_concentration_length),col=promoter))+
+  scale_color_manual(values = mycolors)+
+  theme_cowplot()+
+  xlab("log(Doublings per hour)")+
+  ylab("log(<Concentration>) (length based)")
+  #facet_wrap(~promoter)
+  
+myframes_to_mycells %>% 
+  left_join(gr_df,by=c("condition","promoter")) %>% 
+  distinct(promoter,condition,.keep_all=TRUE) %>%
+  ggplot()+
+  geom_point(aes(log(mean_doubling_time),log(mean_concentration_volume),col=promoter))+
+  geom_line(aes(log(mean_doubling_time),log(mean_concentration_volume),col=promoter))+
+  scale_fill_manual(values = mycolors) +
+  #facet_wrap(~promoter)+
+  scale_color_manual(values = mycolors) +
+  theme_cowplot()+
+  xlab("log(Doublings per hour)")+
+  ylab("log(<Concentration>) (volume based)")
+```
+Correction for proper volume does not change anything. Mother machine data stays the same.
+Now let's compare the plate's data and mother machine data.
+
+```{r}
+myconcentrations <- myframes_to_mycells %>%
+  distinct(condition,promoter,.keep_all = TRUE) %>% 
+  left_join(gr_df,by=c("condition","promoter")) %>% 
+  select(condition,promoter,mean_concentration_length,mean_concentration_volume,sd_concentration_length,sd_concentration_volume)
+
+promoters_of_interest <- list("hi1","hi3","med2","med3","rpsB","rpmB","rplN","rrnB")
+```
+
+There is some uncertainty on the alpha's that I need to sum up.
+
+```{r}
+#No need to go for a reference, I can simply check all ratios
+library(RColorBrewer)
+# Définissez le nombre de couleurs que vous voulez
+nb.cols <- 18
+mycolors <- colorRampPalette(brewer.pal(8, "Set2"))(nb.cols)
+
+myconcentrations$condition <- factor(myconcentrations$condition, levels = c("acetate","glycerol","glucose","glucoseaa"))
+
+mydata_wells <- mydata_inferred_all_control %>%
+  separate(strain,into=c("vector","promoter")) %>%
+  filter(promoter %in% promoters_of_interest) %>% 
+  filter(vector=="pl") %>% 
+  distinct(promoter,condition,well,.keep_all = TRUE) %>% 
+  select(promoter,condition,well,alpha_gfp,sd_alpha_gfp)
+    
+myconcentrations %>% 
+  arrange(condition) %>% 
+  ungroup() %>% 
+  left_join(mydata_wells,by=c("promoter","condition")) %>%
+  mutate(ratio=mean_concentration_volume/alpha_gfp) %>%
+  ggplot()+
+  geom_point(aes(log(mean_concentration_volume),log(alpha_gfp),col=promoter),size=4)+
+  geom_errorbar(aes(x=log(mean_concentration_volume),ymax=log(alpha_gfp+sd_alpha_gfp),ymin=log(alpha_gfp-sd_alpha_gfp)))+
+  geom_errorbarh(aes(y=log(alpha_gfp),xmax=log(mean_concentration_volume+sd_concentration_volume),xmin=log(mean_concentration_volume-sd_concentration_volume)))+
+  stat_smooth(aes(log(mean_concentration_volume),log(alpha_gfp)),method="lm", fullrange=TRUE,col='blue',alpha=0.2)+
+    ggpubr::stat_cor(aes(log(mean_concentration_volume),log(alpha_gfp)),method = "pearson",size=4, label.y.npc = 0.8,label.x.npc = 0)+
+    ggpubr::stat_regline_equation(aes(log(mean_concentration_volume),log(alpha_gfp)),size=4,label.y.npc = 1,label.x.npc = 0)+
+  facet_wrap(~condition,scale="free")+
+  scale_color_manual(values = mycolors)+
+  theme_cowplot()+
+  xlab("log(<Concentration>), mother Machine")+
+  ylab("log(<alpha GFP>), bulk")+
+  labs(subtitle=("Bulk (plasmid) vs Mother Machine (chromosome) "))
+```
+
+
+
+```{r}
+mydata_wells <- mydata_inferred_all_control %>%
+  separate(strain,into=c("vector","promoter")) %>%
+  filter(promoter %in% promoters_of_interest) %>% 
+  filter(vector=="ch") %>% 
+  filter(promoter!="med2") %>% 
+  distinct(promoter,condition,well,.keep_all = TRUE) %>% 
+  select(promoter,condition,well,alpha_gfp,sd_alpha_gfp)
+
+myconcentrations %>% 
+  arrange(condition) %>% 
+  ungroup() %>% 
+  left_join(mydata_wells,by=c("promoter","condition")) %>%
+  mutate(ratio=mean_concentration_volume/alpha_gfp) %>%
+  ggplot()+
+  geom_point(aes(log(mean_concentration_volume),log(alpha_gfp),col=promoter),size=4)+
+  geom_errorbar(aes(x=log(mean_concentration_volume),ymax=log(alpha_gfp+sd_alpha_gfp),ymin=log(alpha_gfp-sd_alpha_gfp)))+
+  geom_errorbarh(aes(y=log(alpha_gfp),xmax=log(mean_concentration_volume+sd_concentration_volume),xmin=log(mean_concentration_volume-sd_concentration_volume)))+
+  stat_smooth(aes(log(mean_concentration_volume),log(alpha_gfp)),method="lm", fullrange=TRUE,col='blue',alpha=0.2)+
+    ggpubr::stat_cor(aes(log(mean_concentration_volume),log(alpha_gfp)),method = "pearson",size=4, label.y.npc = 0.8,label.x.npc = 0)+
+    ggpubr::stat_regline_equation(aes(log(mean_concentration_volume),log(alpha_gfp)),size=4,label.y.npc = 1,label.x.npc = 0)+
+  facet_wrap(~condition,scale="free")+
+  scale_color_manual(values = mycolors)+
+  theme_cowplot()+
+  xlab("log(<Concentration>), mother Machine")+
+  ylab("log(<alpha GFP>), bulk")+
+  labs(subtitle=("Bulk (chromosome) vs Mother Machine (chromosome) "))
+```
+
+It is hard to compare here, because the strains are slightly different. I am actually tempted to do the same, without any proper change.
+These slopes can be used to say something about how the concentration really changes together with the growth rate for plasmid species... except that my ground truth is NOT, in plasmid, it is within the chromosome. How am I going to get out of that?
+
+Which also mean that we do not need to these experiments to establish the concentration. We can simply use this "calibration curve", to determine the "real concentration", for other promoters as well. This concentration, should give us together with the growth rate, the actual production, by simply measuring the growth rate.
+
+But now, what I should do is redo these experiments, 8 promoters at a time, in the plasmid.
+
+But what I am showing here is that, the response to growth rate, in plasmid and chromosome is the same.
+The difference of power is certainly due to chromosome versus plasmid there.
+
+
+```{r}
+#No need to go for a reference, I can simply check all ratios
+library(RColorBrewer)
+# Définissez le nombre de couleurs que vous voulez
+nb.cols <- 18
+mycolors <- colorRampPalette(brewer.pal(8, "Set2"))(nb.cols)
+
+myconcentrations$condition <- factor(myconcentrations$condition, levels = c("acetate","glycerol","glucose","glucoseaa"))
+
+mydata_wells <- mydata_inferred_all_control %>%
+  separate(strain,into=c("vector","promoter")) %>%
+  filter(promoter %in% promoters_of_interest) %>% 
+  filter(vector=="pl") %>% 
+  distinct(promoter,condition,well,.keep_all = TRUE) %>% 
+  select(promoter,condition,well,alpha_gfp,sd_alpha_gfp)
+    
+myconcentrations %>% 
+  arrange(condition) %>% 
+  ungroup() %>% 
+  left_join(mydata_wells,by=c("promoter","condition")) %>%
+  mutate(ratio=mean_concentration_volume/alpha_gfp) %>%
+  ggplot()+
+  geom_point(aes(mean_concentration_volume,alpha_gfp,col=promoter),size=4)+
+  geom_errorbar(aes(x=mean_concentration_volume,ymax=alpha_gfp+sd_alpha_gfp,ymin=alpha_gfp-sd_alpha_gfp))+
+  geom_errorbarh(aes(y=alpha_gfp,xmax=mean_concentration_volume+sd_concentration_volume,xmin=mean_concentration_volume-sd_concentration_volume))+
+  stat_smooth(aes(mean_concentration_volume,alpha_gfp),formula=y~x+0,method="lm", fullrange=TRUE,col='blue',alpha=0.2)+
+    ggpubr::stat_cor(aes(mean_concentration_volume,alpha_gfp),method = "pearson",size=4, label.y.npc = 0.8,label.x.npc = 0)+
+    ggpubr::stat_regline_equation(aes(mean_concentration_volume,alpha_gfp),formula=y~x+0,size=4,label.y.npc = 1,label.x.npc = 0)+
+  facet_wrap(~condition,scale="free")+
+  scale_color_manual(values = mycolors)+
+  theme_cowplot()+
+  xlab("<Concentration>, mother Machine")+
+  ylab("<alpha GFP>, bulk")+
+  labs(subtitle=("Bulk (plasmid) vs Mother Machine (chromosome) "))
+```
+
+```{r}
+#No need to go for a reference, I can simply check all ratios
+library(RColorBrewer)
+# Définissez le nombre de couleurs que vous voulez
+nb.cols <- 18
+mycolors <- colorRampPalette(brewer.pal(8, "Set2"))(nb.cols)
+
+myconcentrations$condition <- factor(myconcentrations$condition, levels = c("acetate","glycerol","glucose","glucoseaa"))
+
+mydata_wells <- mydata_inferred_all_control %>%
+  separate(strain,into=c("vector","promoter")) %>%
+  filter(promoter %in% promoters_of_interest) %>% 
+  filter(vector=="ch") %>% 
+  filter(promoter!="med2") %>% 
+  distinct(promoter,condition,well,.keep_all = TRUE) %>% 
+  select(promoter,condition,well,alpha_gfp,sd_alpha_gfp)
+    
+myconcentrations %>% 
+  arrange(condition) %>% 
+  ungroup() %>% 
+  left_join(mydata_wells,by=c("promoter","condition")) %>%
+  mutate(ratio=mean_concentration_volume/alpha_gfp) %>%
+  ggplot()+
+  geom_point(aes(mean_concentration_volume,alpha_gfp,col=promoter),size=4)+
+  geom_errorbar(aes(x=mean_concentration_volume,ymax=alpha_gfp+sd_alpha_gfp,ymin=alpha_gfp-sd_alpha_gfp))+
+  geom_errorbarh(aes(y=alpha_gfp,xmax=mean_concentration_volume+sd_concentration_volume,xmin=mean_concentration_volume-sd_concentration_volume))+
+  stat_smooth(aes(mean_concentration_volume,alpha_gfp),formula=y~x+0,method="lm", fullrange=TRUE,col='blue',alpha=0.2)+
+    ggpubr::stat_cor(aes(mean_concentration_volume,alpha_gfp),method = "pearson",size=4, label.y.npc = 0.8,label.x.npc = 0)+
+    ggpubr::stat_regline_equation(aes(mean_concentration_volume,alpha_gfp),formula=y~x+0,size=4,label.y.npc = 1,label.x.npc = 0)+
+  facet_wrap(~condition,scale="free")+
+  scale_color_manual(values = mycolors)+
+  theme_cowplot()+
+  xlab("<Concentration>, mother Machine")+
+  ylab("<alpha GFP>, bulk")+
+  labs(subtitle=("Bulk (chromosome) vs Mother Machine (chromosome) "))
+```
+
+Now redo the previous plot by transforming all data with the corresponding factor.
+
+```{r message=FALSE,warning=FALSE}
+
+scaling_factor <- tibble(condition=c("acetate","glycerol","glucose","glucoseaa"),scaling_factor_chromosomal=c(0.29,0.22,0.18,0.23),scaling_factor_plasmid=c(1.5,0.99,0.67,0.91))
+
+mydata_wells <- mydata_inferred_all_control %>%
+  separate(strain,into=c("vector","promoter")) %>%
+  filter(promoter %in% promoters_of_interest) %>% 
+  filter(vector=="ch") %>% 
+  filter(promoter!="med2") %>% 
+  #group_by(promoter,condition) %>% 
+  #mutate(mean_alpha_gfp=mean(alpha_gfp,na.rm=TRUE)) %>% 
+  #mutate(sd_alpha_gfp_tot=sqrt(sum(sd_alpha_gfp**2))) %>%
+  ungroup() %>% 
+  distinct(promoter,condition,well,.keep_all = TRUE) %>% 
+  select(promoter,condition,well,alpha_gfp,sd_alpha_gfp)
+
+myconcentrations %>% 
+  arrange(condition) %>% 
+  ungroup() %>% 
+  left_join(gr_df,by=c("promoter","condition")) %>% 
+  left_join(mydata_wells,by=c("promoter","condition")) %>% 
+  left_join(scaling_factor,by=c("condition")) %>%
+  mutate(corrected_alpha_gfp=alpha_gfp/scaling_factor_chromosomal) %>%
+  mutate(corrected_sd_alpha_gfp=sd_alpha_gfp/scaling_factor_chromosomal) %>% 
+  ggplot()+
+  geom_point(aes(log(mean_doubling_time),log(corrected_alpha_gfp),col=promoter))+
+  geom_line(aes(log(mean_doubling_time),log(corrected_alpha_gfp),col=promoter))+
+  geom_errorbar(aes(x=log(mean_doubling_time),ymax=log(corrected_alpha_gfp+corrected_sd_alpha_gfp),ymin=log(corrected_alpha_gfp-corrected_sd_alpha_gfp)))+
+  #geom_line(aes(log(mean_doubling_time),log(mean_concentration_volume),col=promoter))+
+  #scale_fill_manual(values = mycolors) +
+  #facet_wrap(~promoter)+
+  scale_color_manual(values = mycolors) +
+  theme_cowplot()+
+  xlab("log(Doublings per hour)")+
+  ylab("log(Corrected alpha (GFP)), bulk")+
+  coord_cartesian(ylim=c(2,12))+
+  labs(subtitle="Chromosomal strains")
+
+myconcentrations %>% 
+  left_join(gr_df,by=c("promoter","condition")) %>% 
+  ggplot()+
+  geom_point(aes(log(mean_doubling_time),log(mean_concentration_volume),col=promoter))+
+  geom_line(aes(log(mean_doubling_time),log(mean_concentration_volume),col=promoter))+
+  geom_errorbar(aes(log(mean_doubling_time),ymax=log(mean_concentration_volume+sd_concentration_volume),ymin=log(mean_concentration_volume-sd_concentration_volume)))+
+  #geom_point(aes(log(mean_doubling_time),log(mean_concentration_volume),col=promoter))+
+  #geom_line(aes(log(mean_doubling_time),log(mean_concentration_volume),col=promoter))+
+  #scale_fill_manual(values = mycolors) +
+  #facet_wrap(~promoter)+
+  scale_color_manual(values = mycolors) +
+  theme_cowplot()+
+  xlab("Doublings per hour")+
+  ylab("Concentration (#GFP/um3), mother machine")+
+  coord_cartesian(ylim=c(2,12))
+
+```
+
+
+```{r message=FALSE,warning=FALSE}
+
+scaling_factor <- tibble(condition=c("acetate","glycerol","glucose","glucoseaa"),scaling_factor_chromosomal=c(0.29,0.22,0.18,0.23),scaling_factor_plasmid=c(1.5,0.99,0.67,0.91))
+
+#gr_df_cond <- gr_df %>% 
+#  group_by(condition) %>% 
+#  mutate(mean_mean_alpha=mean(mean_alpha,na.rm=TRUE)) %>% 
+#  mutate(mean_mean_doubling_time=mean(mean_doubling_time,na.rm=TRUE)) %>% 
+#  ungroup() %>% 
+#  distinct(condition,.keep_all = TRUE) %>% 
+#  select(condition,mean_mean_alpha,mean_mean_doubling_time)
+
+mydata_wells <- mydata_inferred_all_control %>%
+  separate(strain,into=c("vector","promoter")) %>%
+  filter(promoter %in% promoters_of_interest) %>% 
+  filter(vector=="pl") %>% 
+  #group_by(promoter,condition) %>% 
+  #mutate(mean_alpha_gfp=mean(alpha_gfp,na.rm=TRUE)) %>% 
+  #mutate(sd_alpha_gfp_tot=sqrt(sum(sd_alpha_gfp**2))) %>%
+  #ungroup() %>% 
+  distinct(promoter,condition,well,.keep_all = TRUE) %>%
+  select(promoter,condition,well,alpha_gfp,sd_alpha_gfp)
+
+myconcentrations %>% 
+  arrange(condition) %>% 
+  ungroup() %>% 
+  left_join(gr_df,by=c("promoter","condition")) %>% 
+  left_join(mydata_wells,by=c("promoter","condition")) %>% 
+  left_join(scaling_factor,by=c("condition")) %>%
+  mutate(corrected_alpha_gfp=alpha_gfp/scaling_factor_plasmid) %>%
+  mutate(corrected_sd_alpha_gfp=sd_alpha_gfp/scaling_factor_plasmid) %>% 
+  ggplot()+
+  geom_point(aes(log(mean_doubling_time),log(corrected_alpha_gfp),col=promoter))+
+  geom_line(aes(log(mean_doubling_time),log(corrected_alpha_gfp),col=promoter))+
+  geom_errorbar(aes(x=log(mean_doubling_time),ymax=log(corrected_alpha_gfp+corrected_sd_alpha_gfp),ymin=log(corrected_alpha_gfp-corrected_sd_alpha_gfp)))+
+  #geom_line(aes(log(mean_doubling_time),log(mean_concentration_volume),col=promoter))+
+  #scale_fill_manual(values = mycolors) +
+  #facet_wrap(~promoter)+
+  scale_color_manual(values = mycolors) +
+  theme_cowplot()+
+  xlab("log(Doublings per hour)")+
+  ylab("log(Corrected alpha (GFP)), bulk")+
+  coord_cartesian(ylim=c(2,12))+
+  labs(subtitle="Plasmid strains")
+
+myconcentrations %>% 
+  arrange(condition) %>% 
+  ungroup() %>% 
+  left_join(gr_df,by=c("promoter","condition")) %>% 
+  left_join(mydata_wells,by=c("promoter","condition")) %>% 
+  left_join(scaling_factor,by=c("condition")) %>%
+  mutate(corrected_alpha_gfp=alpha_gfp/scaling_factor_plasmid) %>%
+  mutate(corrected_sd_alpha_gfp=sd_alpha_gfp/scaling_factor_plasmid) %>% 
+  ggplot()+
+  geom_point(aes(log(mean_doubling_time),log(corrected_alpha_gfp),col=promoter))+
+  geom_line(aes(log(mean_doubling_time),log(corrected_alpha_gfp),col=promoter))+
+  geom_errorbar(aes(x=log(mean_doubling_time),ymax=log(corrected_alpha_gfp+corrected_sd_alpha_gfp),ymin=log(corrected_alpha_gfp-corrected_sd_alpha_gfp)))+
+  #geom_line(aes(log(mean_doubling_time),log(mean_concentration_volume),col=promoter))+
+  #scale_fill_manual(values = mycolors) +
+  facet_wrap(~promoter,scale="free")+
+  scale_color_manual(values = mycolors) +
+  theme_cowplot()+
+  xlab("log(Doublings per hour)")+
+  ylab("log(Corrected alpha (GFP)), bulk")+
+  #coord_cartesian(ylim=c(2,12))+
+  labs(subtitle="Plasmid strains")
+
+myconcentrations %>% 
+  left_join(gr_df,by=c("promoter","condition")) %>% 
+  ggplot()+
+  geom_point(aes(log(mean_doubling_time),log(mean_concentration_volume),col=promoter))+
+  geom_line(aes(log(mean_doubling_time),log(mean_concentration_volume),col=promoter))+
+  geom_errorbar(aes(log(mean_doubling_time),ymax=log(mean_concentration_volume+sd_concentration_volume),ymin=log(mean_concentration_volume-sd_concentration_volume)))+
+  #geom_point(aes(log(mean_doubling_time),log(mean_concentration_volume),col=promoter))+
+  #geom_line(aes(log(mean_doubling_time),log(mean_concentration_volume),col=promoter))+
+  #scale_fill_manual(values = mycolors) +
+  #facet_wrap(~promoter)+
+  scale_color_manual(values = mycolors) +
+  theme_cowplot()+
+  xlab("Doublings per hour")+
+  ylab("Concentration (#GFP/um3), mother machine")+
+  coord_cartesian(ylim=c(2,12))
+
+myconcentrations %>% 
+  left_join(gr_df,by=c("promoter","condition")) %>% 
+  ggplot()+
+  geom_point(aes(log(mean_doubling_time),log(mean_concentration_volume),col=promoter))+
+  geom_line(aes(log(mean_doubling_time),log(mean_concentration_volume),col=promoter))+
+  geom_errorbar(aes(log(mean_doubling_time),ymax=log(mean_concentration_volume+sd_concentration_volume),ymin=log(mean_concentration_volume-sd_concentration_volume)))+
+  #geom_point(aes(log(mean_doubling_time),log(mean_concentration_volume),col=promoter))+
+  #geom_line(aes(log(mean_doubling_time),log(mean_concentration_volume),col=promoter))+
+  #scale_fill_manual(values = mycolors) +
+  facet_wrap(~promoter,scale="free")+
+  scale_color_manual(values = mycolors) +
+  theme_cowplot()+
+  xlab("Doublings per hour")+
+  ylab("Concentration (#GFP/um3), mother machine")
+  #coord_cartesian(ylim=c(2,12))
+
+# Production
+
+myconcentrations %>% 
+  arrange(condition) %>% 
+  ungroup() %>% 
+  left_join(gr_df,by=c("promoter","condition")) %>% 
+  left_join(mydata_wells,by=c("promoter","condition")) %>% 
+  left_join(scaling_factor,by=c("condition")) %>%
+  mutate(corrected_alpha_gfp=alpha_gfp/scaling_factor_plasmid) %>%
+  mutate(corrected_sd_alpha_gfp=sd_alpha_gfp/scaling_factor_plasmid) %>% 
+  ggplot()+
+  geom_point(aes(log(mean_doubling_time),log(corrected_alpha_gfp*mean_doubling_time*log(2)/3600),col=promoter))+
+  geom_line(aes(log(mean_doubling_time),log(corrected_alpha_gfp*mean_doubling_time*log(2)/3600),col=promoter))+
+  geom_errorbar(aes(x=log(mean_doubling_time),ymax=log(corrected_alpha_gfp*mean_doubling_time*log(2)/3600+corrected_sd_alpha_gfp*mean_doubling_time*log(2)/3600),ymin=log(corrected_alpha_gfp*mean_doubling_time*log(2)/3600-corrected_sd_alpha_gfp*mean_doubling_time*log(2)/3600)))+
+  #geom_line(aes(log(mean_doubling_time),log(mean_concentration_volume),col=promoter))+
+  #scale_fill_manual(values = mycolors) +
+  #facet_wrap(~promoter)+
+  scale_color_manual(values = mycolors) +
+  theme_cowplot()+
+  xlab("log(Doublings per hour)")+
+  ylab("log(Production), bulk")+
+  #oord_cartesian(ylim=c(2,12))+
+  labs(subtitle="Plasmid strains")
+
+myconcentrations %>% 
+  arrange(condition) %>% 
+  ungroup() %>% 
+  left_join(gr_df,by=c("promoter","condition")) %>% 
+  left_join(mydata_wells,by=c("promoter","condition")) %>% 
+  left_join(scaling_factor,by=c("condition")) %>%
+  mutate(corrected_alpha_gfp=alpha_gfp/scaling_factor_plasmid) %>%
+  mutate(corrected_sd_alpha_gfp=sd_alpha_gfp/scaling_factor_plasmid) %>% 
+  ggplot()+
+  geom_point(aes(log(mean_doubling_time),log(corrected_alpha_gfp*mean_doubling_time*log(2)/3600),col=promoter))+
+  geom_line(aes(log(mean_doubling_time),log(corrected_alpha_gfp*mean_doubling_time*log(2)/3600),col=promoter))+
+  geom_errorbar(aes(x=log(mean_doubling_time),ymax=log(corrected_alpha_gfp*mean_doubling_time*log(2)/3600+corrected_sd_alpha_gfp*mean_doubling_time*log(2)/3600),ymin=log(corrected_alpha_gfp*mean_doubling_time*log(2)/3600-corrected_sd_alpha_gfp*mean_doubling_time*log(2)/3600)))+
+  #geom_line(aes(log(mean_doubling_time),log(mean_concentration_volume),col=promoter))+
+  #scale_fill_manual(values = mycolors) +
+  facet_wrap(~promoter,scale="free")+
+  scale_color_manual(values = mycolors) +
+  theme_cowplot()+
+  xlab("log(Doublings per hour)")+
+  ylab("log(Production), bulk")+
+  #coord_cartesian(ylim=c(2,12))+
+  labs(subtitle="Plasmid strains")
+
+myconcentrations %>% 
+  left_join(gr_df,by=c("promoter","condition")) %>% 
+  ggplot()+
+  geom_point(aes(log(mean_doubling_time),log(mean_concentration_volume*mean_doubling_time*log(2)/3600),col=promoter))+
+  geom_line(aes(log(mean_doubling_time),log(mean_concentration_volume*mean_doubling_time*log(2)/3600),col=promoter))+
+  geom_errorbar(aes(log(mean_doubling_time),ymax=log(mean_concentration_volume*mean_doubling_time*log(2)/3600+sd_concentration_volume*mean_doubling_time*log(2)/3600),ymin=log(mean_concentration_volume*mean_doubling_time*log(2)/3600-sd_concentration_volume*mean_doubling_time*log(2)/3600)))+
+  #geom_point(aes(log(mean_doubling_time),log(mean_concentration_volume),col=promoter))+
+  #geom_line(aes(log(mean_doubling_time),log(mean_concentration_volume),col=promoter))+
+  #scale_fill_manual(values = mycolors) +
+  #facet_wrap(~promoter)+
+  scale_color_manual(values = mycolors) +
+  theme_cowplot()+
+  xlab("log(Doublings per hour)")+
+  ylab("log(Production), mother machine")
+  #coord_cartesian(ylim=c(2,12))
+
+myconcentrations %>% 
+  left_join(gr_df,by=c("promoter","condition")) %>% 
+  ggplot()+
+  geom_point(aes(log(mean_doubling_time),log(mean_concentration_volume*mean_doubling_time*log(2)/3600),col=promoter))+
+  geom_line(aes(log(mean_doubling_time),log(mean_concentration_volume*mean_doubling_time*log(2)/3600),col=promoter))+
+  geom_errorbar(aes(log(mean_doubling_time),ymax=log(mean_concentration_volume*mean_doubling_time*log(2)/3600+sd_concentration_volume*mean_doubling_time*log(2)/3600),ymin=log(mean_concentration_volume*mean_doubling_time*log(2)/3600-sd_concentration_volume*mean_doubling_time*log(2)/3600)))+
+  #geom_point(aes(log(mean_doubling_time),log(mean_concentration_volume),col=promoter))+
+  #geom_line(aes(log(mean_doubling_time),log(mean_concentration_volume),col=promoter))+
+  #scale_fill_manual(values = mycolors) +
+  facet_wrap(~promoter,scale="free")+
+  scale_color_manual(values = mycolors) +
+  theme_cowplot()+
+  xlab("log(Doublings per hour)")+
+  ylab("log(Production), mother machine")
+  #coord_cartesian(ylim=c(2,12))
+
+
+
+myconcentrations %>% 
+  left_join(gr_df,by=c("promoter","condition")) %>% 
+  mutate(q=mean_concentration_volume*mean_doubling_time*log(2)/3600) %>% 
+  filter(promoter=="rrnB") %>% 
+  distinct(condition,q)
+```
+
+```{r}
+myconcentrations %>% 
+  arrange(condition) %>% 
+  ungroup() %>% 
+  left_join(gr_df,by=c("promoter","condition")) %>% 
+  left_join(mydata_wells,by=c("promoter","condition")) %>% 
+  left_join(scaling_factor,by=c("condition")) %>%
+  mutate(corrected_alpha_gfp=alpha_gfp/scaling_factor_plasmid) %>%
+  mutate(corrected_sd_alpha_gfp=sd_alpha_gfp/scaling_factor_plasmid) %>% 
+  ggplot()+
+  geom_point(aes(log(mean_doubling_time),log(corrected_alpha_gfp*mean_doubling_time*log(2)/3600),col="blue"))+
+  geom_line(aes(log(mean_doubling_time),log(corrected_alpha_gfp*mean_doubling_time*log(2)/3600),col="blue"))+
+  geom_errorbar(aes(x=log(mean_doubling_time),ymax=log(corrected_alpha_gfp*mean_doubling_time*log(2)/3600+corrected_sd_alpha_gfp*mean_doubling_time*log(2)/3600),ymin=log(corrected_alpha_gfp*mean_doubling_time*log(2)/3600-corrected_sd_alpha_gfp*mean_doubling_time*log(2)/3600)))+
+  #################################################
+  geom_point(aes(log(mean_doubling_time),log(mean_concentration_volume*mean_doubling_time*log(2)/3600),col="red"))+
+  geom_line(aes(log(mean_doubling_time),log(mean_concentration_volume*mean_doubling_time*log(2)/3600),col="red"))+
+  geom_errorbar(aes(log(mean_doubling_time),ymax=log(mean_concentration_volume*mean_doubling_time*log(2)/3600+sd_concentration_volume*mean_doubling_time*log(2)/3600),ymin=log(mean_concentration_volume*mean_doubling_time*log(2)/3600-sd_concentration_volume*mean_doubling_time*log(2)/3600)))+
+  facet_wrap(~promoter,scale="free")+
+  scale_color_manual(values = mycolors) +
+  theme_cowplot()+
+  xlab("log(Doublings per hour)")+
+  ylab("log(Production), bulk")+
+  #coord_cartesian(ylim=c(2,12))+
+  labs(subtitle="Plasmid strains")
+
+myconcentrations %>% 
+  left_join(gr_df,by=c("promoter","condition")) %>% 
+  ggplot()+
+  geom_point(aes(log(mean_doubling_time),log(mean_concentration_volume*mean_doubling_time*log(2)/3600),col=promoter))+
+  geom_line(aes(log(mean_doubling_time),log(mean_concentration_volume*mean_doubling_time*log(2)/3600),col=promoter))+
+  geom_errorbar(aes(log(mean_doubling_time),ymax=log(mean_concentration_volume*mean_doubling_time*log(2)/3600+sd_concentration_volume*mean_doubling_time*log(2)/3600),ymin=log(mean_concentration_volume*mean_doubling_time*log(2)/3600-sd_concentration_volume*mean_doubling_time*log(2)/3600)))+
+  #geom_point(aes(log(mean_doubling_time),log(mean_concentration_volume),col=promoter))+
+  #geom_line(aes(log(mean_doubling_time),log(mean_concentration_volume),col=promoter))+
+  #scale_fill_manual(values = mycolors) +
+  facet_wrap(~promoter,scale="free")+
+  scale_color_manual(values = mycolors) +
+  theme_cowplot()+
+  xlab("log(Doublings per hour)")+
+  ylab("log(Production), mother machine")
+  #coord_cartesian(ylim=c(2,12))
+```
+
+```{r}
+myconcentrations %>% 
+  arrange(condition) %>% 
+  ungroup() %>% 
+  left_join(gr_df,by=c("promoter","condition")) %>% 
+  left_join(mydata_wells,by=c("promoter","condition")) %>% 
+  left_join(scaling_factor,by=c("condition")) %>%
+  mutate(corrected_alpha_gfp=alpha_gfp/scaling_factor_plasmid) %>%
+  mutate(corrected_sd_alpha_gfp=sd_alpha_gfp/scaling_factor_plasmid) %>% 
+  ggplot()+
+  geom_point(aes(log(mean_doubling_time),log(corrected_alpha_gfp),col="blue"))+
+  geom_line(aes(log(mean_doubling_time),log(corrected_alpha_gfp),col="blue"))+
+  geom_errorbar(aes(x=log(mean_doubling_time),ymax=log(corrected_alpha_gfp+corrected_sd_alpha_gfp),ymin=log(corrected_alpha_gfp-corrected_sd_alpha_gfp)))+
+  ################################
+  geom_point(aes(log(mean_doubling_time),log(mean_concentration_volume),col="red"))+
+  geom_line(aes(log(mean_doubling_time),log(mean_concentration_volume),col="red"))+
+  geom_errorbar(aes(log(mean_doubling_time),ymax=log(mean_concentration_volume+sd_concentration_volume),ymin=log(mean_concentration_volume-sd_concentration_volume)))+
+  facet_wrap(~promoter,scale="free")+
+  scale_color_manual(values = mycolors) +
+  theme_cowplot()+
+  xlab("log(Doublings per hour)")+
+  ylab("log(Corrected alpha (GFP)), bulk")+
+  #coord_cartesian(ylim=c(2,12))+
+  labs(subtitle="Plasmid strains")
+```
+Ok, so that's pretty clear that it works...
+
+```{r}
+scaling_factor <- scaling_factor %>% 
+  mutate(ratio=scaling_factor_plasmid/scaling_factor_chromosomal)
+scaling_factor
+```
+
+So to me, all of this looks extremely casher.
+And somehow, the plasmid copy number is pretty stable accross conditions. It seems that the ratio chromosomal/plasmid is kept relatively constant. I am actually amazed that it works so well.
+
+Now can I also correct the others? And get back to production this way?
+
+```{r}
+gr_df_cond <- gr_df %>% 
+  group_by(condition) %>% 
+  mutate(mean_mean_alpha=mean(mean_alpha,na.rm=TRUE)) %>% 
+  mutate(mean_mean_doubling_time=mean(mean_doubling_time,na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  distinct(condition,.keep_all = TRUE) %>% 
+  select(condition,mean_mean_alpha,mean_mean_doubling_time)
+
+mydata_inferred_all_control %>%
+  filter(grepl("p2-|p3-|pl-",strain)) %>% 
+  left_join(gr_df_cond,by=c("condition")) %>% 
+  left_join(scaling_factor,by=c("condition")) %>% 
+  #group_by(strain,condition) %>% 
+  #mutate(alpha_gfp=mean(alpha_gfp,na.rm=TRUE)) %>% 
+  #mutate(sd_sd_alpha_gfp=sqrt(sum(sd_alpha_gfp**2))) %>%
+  #ungroup() %>% 
+  distinct(condition,strain,.keep_all=TRUE) %>% 
+  mutate(corrected_alpha_gfp=alpha_gfp/scaling_factor_plasmid) %>% 
+  mutate(corrected_sd_alpha_gfp=sd_alpha_gfp/scaling_factor_plasmid) %>% 
+  ggplot()+
+  geom_point(aes(log(mean_mean_doubling_time),log(corrected_alpha_gfp),col=condition),size=3)+
+  geom_errorbar(aes(x=log(mean_mean_doubling_time),ymin=log(corrected_alpha_gfp-corrected_sd_alpha_gfp),ymax=log(corrected_alpha_gfp+corrected_sd_alpha_gfp)))+
+  theme_cowplot()+
+  xlab("Doublings per hour")+
+  ylab("Concentration (#GFP/um3)")+
+  facet_wrap(~strain,scale="free")+
+  theme(strip.text = element_text(size = 20))+
+    ggsave("./all_concentration_free.pdf",width=12*5,height=7*5,limitsize = FALSE)
+```
+
+```{r message=FALSE, warning=FALSE}
+gr_df_cond <- gr_df %>% 
+  group_by(condition) %>% 
+  mutate(mean_mean_alpha=mean(mean_alpha,na.rm=TRUE)) %>% 
+  mutate(mean_mean_doubling_time=mean(mean_doubling_time,na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  distinct(condition,.keep_all = TRUE) %>% 
+  select(condition,mean_mean_alpha,mean_mean_doubling_time)
+
+mydata_inferred_all_control %>%
+  filter(grepl("p2-|p3-|pl-",strain)) %>% 
+  left_join(gr_df_cond,by=c("condition")) %>% 
+  left_join(scaling_factor,by=c("condition")) %>% 
+  #group_by(strain,condition) %>% 
+  #mutate(alpha_gfp=mean(alpha_gfp,na.rm=TRUE)) %>% 
+  #mutate(sd_sd_alpha_gfp_tot=sqrt(sum(sd_alpha_gfp**2))) %>%
+  #ungroup() %>% 
+  distinct(condition,strain,.keep_all=TRUE) %>% 
+  mutate(corrected_alpha_gfp=alpha_gfp/scaling_factor_plasmid) %>% 
+  mutate(corrected_sd_alpha_gfp=sd_alpha_gfp/scaling_factor_plasmid) %>% 
+  ggplot()+
+  geom_point(aes(log(mean_mean_doubling_time),log(corrected_alpha_gfp*mean_mean_alpha),col=condition),size=3)+
+  geom_errorbar(aes(x=log(mean_mean_doubling_time),ymin=log(corrected_alpha_gfp*mean_mean_alpha-corrected_sd_alpha_gfp*mean_mean_alpha),ymax=log(corrected_alpha_gfp*mean_mean_alpha+corrected_sd_alpha_gfp*mean_mean_alpha)))+
+  theme_cowplot()+
+  xlab("Doublings per hour")+
+  ylab("Production (#GFP/um3/s)")+
+  facet_wrap(~strain,scale="free")+
+  theme(strip.text = element_text(size = 20))+
+    ggsave("./all_production_free.pdf",width=12*5,height=7*5,limitsize = FALSE)
+```
+
+- I could define some kind of robustness?
+- All promoters test here are characterized by the same trend:
+- From acetate to glucose, keeps going up! But from glucose to glucoseaa, things become different...
+- Is there some kind of invariance that I can characterize?
+
+
+```{r message=FALSE, warning=FALSE}
+gr_df_cond <- gr_df %>% 
+  group_by(condition) %>% 
+  mutate(mean_mean_alpha=mean(mean_alpha,na.rm=TRUE)) %>% 
+  mutate(mean_mean_doubling_time=mean(mean_doubling_time,na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  distinct(condition,.keep_all = TRUE) %>% 
+  select(condition,mean_mean_alpha,mean_mean_doubling_time)
+
+hi_or_med_p2 <- tibble(pattern_pl="p2-",strength=rep(c("med","hi"),each=3),column=c(7,8,9,10,11,12))
+hi_or_med_p3 <- tibble(pattern_pl="p3-",strength=rep(rep(c("med","hi"),each=3),times=2),column=c(1,2,3,4,5,6,7,8,9,10,11,12))
+hi_or_med <- rbind(hi_or_med_p2,hi_or_med_p3)
+
+mydata_inferred_all_control %>%
+  filter(grepl("p2-|p3-",strain)) %>% 
+  mutate(pattern_pl=ifelse(grepl("p2-",strain),"p2-","p3-")) %>% 
+  left_join(hi_or_med_p2,by=c("column","pattern_pl")) %>%
+  filter(strength=="hi") %>% 
+  left_join(gr_df_cond,by=c("condition")) %>% 
+  left_join(scaling_factor,by=c("condition")) %>% 
+  #group_by(strain,condition) %>% 
+  #mutate(alpha_gfp=mean(alpha_gfp,na.rm=TRUE)) %>% 
+  #mutate(sd_sd_alpha_gfp_tot=sqrt(sum(sd_alpha_gfp**2))) %>%
+  #ungroup() %>% 
+  distinct(condition,strain,.keep_all=TRUE) %>% 
+  mutate(corrected_alpha_gfp=alpha_gfp/scaling_factor_plasmid) %>% 
+  mutate(corrected_sd_alpha_gfp=sd_alpha_gfp/scaling_factor_plasmid) %>% 
+  ggplot()+
+  geom_point(aes(log(mean_mean_doubling_time),log(corrected_alpha_gfp*mean_mean_alpha),col=condition),size=3)+
+  geom_errorbar(aes(x=log(mean_mean_doubling_time),ymin=log(corrected_alpha_gfp*mean_mean_alpha-corrected_sd_alpha_gfp*mean_mean_alpha),ymax=log(corrected_alpha_gfp*mean_mean_alpha+corrected_sd_alpha_gfp*mean_mean_alpha)))+
+  theme_cowplot()+
+  xlab("Doublings per hour")+
+  ylab("Production (#GFP/um3/s)")
+
+mydata_inferred_all_control %>%
+  filter(grepl("p2-|p3-",strain)) %>% 
+  mutate(pattern_pl=ifelse(grepl("p2-",strain),"p2-","p3-")) %>% 
+  left_join(hi_or_med_p2,by=c("column","pattern_pl")) %>%
+  filter(is.na(strength)==FALSE) %>% 
+  left_join(gr_df_cond,by=c("condition")) %>% 
+  left_join(scaling_factor,by=c("condition")) %>% 
+  #group_by(strain,condition) %>% 
+  #mutate(alpha_gfp=mean(alpha_gfp,na.rm=TRUE)) %>% 
+  #mutate(sd_sd_alpha_gfp_tot=sqrt(sum(sd_alpha_gfp**2))) %>%
+  #ungroup() %>% 
+  distinct(condition,strain,.keep_all=TRUE) %>% 
+  mutate(corrected_alpha_gfp=alpha_gfp/scaling_factor_plasmid) %>% 
+  mutate(corrected_sd_alpha_gfp=sd_alpha_gfp/scaling_factor_plasmid) %>% 
+  ggplot()+
+  geom_boxplot(aes(x=log(mean_mean_doubling_time),y=log(corrected_alpha_gfp*mean_mean_alpha),group=interaction(strength,condition),col=condition),width=10)+
+  #geom_point(aes(log(mean_mean_doubling_time),log(corrected_alpha_gfp*mean_mean_alpha),col=condition),size=3)+
+  #geom_errorbar(aes(x=log(mean_mean_doubling_time),ymin=log(corrected_alpha_gfp*mean_mean_alpha-corrected_sd_alpha_gfp*mean_mean_alpha),ymax=log(corrected_alpha_gfp*mean_mean_alpha+corrected_sd_alpha_gfp*mean_mean_alpha)))+
+  theme_cowplot()+
+  xlab("Doublings per hour")+
+  ylab("Production (#GFP/um3/s)")
+```
+I could for instance, normalize everything by rrnB... or normalize everything by level in acetate.
+
+```{r message=FALSE, warning=FALSE}
+gr_df_cond <- gr_df %>% 
+  group_by(condition) %>% 
+  mutate(mean_mean_alpha=mean(mean_alpha,na.rm=TRUE)) %>% 
+  mutate(mean_mean_doubling_time=mean(mean_doubling_time,na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  distinct(condition,.keep_all = TRUE) %>% 
+  select(condition,mean_mean_alpha,mean_mean_doubling_time)
+
+conditionX <- "glucoseaa"
+
+mydata_inferred_all_control %>%
+  filter(grepl("p2-|p3-|pl-",strain)) %>% 
+  left_join(gr_df_cond,by=c("condition")) %>% 
+  left_join(scaling_factor,by=c("condition")) %>% 
+  group_by(strain,condition) %>% 
+  mutate(alpha_gfp=mean(alpha_gfp,na.rm=TRUE)) %>% 
+  mutate(sd_sd_alpha_gfp_tot=sqrt(sum(sd_alpha_gfp**2))) %>%
+  ungroup() %>% 
+  group_by(strain) %>% 
+  mutate(x=ifelse(condition==conditionX,alpha_gfp,NA)) %>% 
+  fill(x,.direction = "downup") %>% 
+  ungroup() %>% 
+  distinct(condition,strain,.keep_all=TRUE) %>% 
+  mutate(corrected_alpha_gfp=alpha_gfp/scaling_factor_plasmid) %>% 
+  mutate(corrected_sd_alpha_gfp=sd_sd_alpha_gfp_tot/scaling_factor_plasmid) %>% 
+  ggplot()+
+  geom_point(aes(log(mean_mean_doubling_time),log(corrected_alpha_gfp*mean_mean_alpha/x),col=condition),size=3)+
+  #geom_errorbar(aes(x=log(mean_mean_doubling_time),ymin=log(corrected_alpha_gfp*mean_mean_alpha-corrected_sd_alpha_gfp*mean_mean_alpha),ymax=log(corrected_alpha_gfp*mean_mean_alpha+corrected_sd_alpha_gfp*mean_mean_alpha)))+
+  theme_cowplot()+
+  xlab("Doublings per hour")+
+  ylab("Production (#GFP/um3/s)")
+```
+I can define robustness, which is in essence, how production increases, together with the growth rate between two conditions.
+I define it as: delta Q / delta alpha.
+And I can plot again the three different robustness scores.
+
+```{r message=FALSE, warning=FALSE}
+gr_df_cond <- gr_df %>% 
+  group_by(condition) %>% 
+  mutate(mean_mean_alpha=mean(mean_alpha,na.rm=TRUE)) %>% 
+  mutate(mean_mean_doubling_time=mean(mean_doubling_time,na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  distinct(condition,.keep_all = TRUE) %>% 
+  select(condition,mean_mean_alpha,mean_mean_doubling_time)
+
+
+mydata_inferred_all_control %>%
+  filter(grepl("p2-|p3-|pl-",strain)) %>% 
+  left_join(gr_df_cond,by=c("condition")) %>% 
+  left_join(scaling_factor,by=c("condition")) %>% 
+  #group_by(strain,condition) %>% 
+  #mutate(alpha_gfp=mean(alpha_gfp,na.rm=TRUE)) %>% 
+  #mutate(sd_sd_alpha_gfp_tot=sqrt(sum(sd_alpha_gfp**2))) %>%
+  #ungroup() %>% 
+  distinct(strain,condition,.keep_all = TRUE) %>% 
+  mutate(corrected_alpha_gfp=alpha_gfp/scaling_factor_plasmid) %>% 
+  mutate(corrected_sd_alpha_gfp=sd_alpha_gfp/scaling_factor_plasmid) %>% 
+  group_by(strain) %>% 
+  arrange(mean_mean_alpha) %>% 
+  mutate(d_mean_mean_alpha=mean_mean_alpha-lag(mean_mean_alpha)) %>%
+  mutate(q=corrected_alpha_gfp*mean_mean_alpha) %>% 
+  mutate(d_q=q-lag(q)) %>% 
+  mutate(d_q_d_gr=d_q/d_mean_mean_alpha) %>% 
+  ungroup() %>% 
+  ggplot()+
+  geom_point(aes(log(mean_mean_doubling_time),d_q_d_gr,col=condition),size=3)+
+  #geom_errorbar(aes(x=log(mean_mean_doubling_time),ymin=log(corrected_alpha_gfp*mean_mean_alpha-corrected_sd_alpha_gfp*mean_mean_alpha),ymax=log(corrected_alpha_gfp*mean_mean_alpha+corrected_sd_alpha_gfp*mean_mean_alpha)))+
+  theme_cowplot()+
+  xlab("Doublings per hour")+
+  ylab("Production robustness")
+
+mydata_inferred_all_control %>%
+  filter(grepl("p2-|p3-|pl-",strain)) %>% 
+  left_join(gr_df_cond,by=c("condition")) %>% 
+  left_join(scaling_factor,by=c("condition")) %>% 
+  group_by(strain,condition) %>% 
+  mutate(alpha_gfp=mean(alpha_gfp,na.rm=TRUE)) %>% 
+  mutate(sd_sd_alpha_gfp_tot=sqrt(sum(sd_alpha_gfp**2))) %>%
+  ungroup() %>% 
+  distinct(strain,condition,.keep_all = TRUE) %>% 
+  mutate(corrected_alpha_gfp=alpha_gfp/scaling_factor_plasmid) %>% 
+  mutate(corrected_sd_alpha_gfp=sd_sd_alpha_gfp_tot/scaling_factor_plasmid) %>% 
+  group_by(strain) %>% 
+  arrange(mean_mean_alpha) %>% 
+  mutate(d_mean_mean_alpha=mean_mean_alpha-lag(mean_mean_alpha)) %>%
+  mutate(d_mean_mean_alpha_x=lag(mean_mean_alpha)+d_mean_mean_alpha/2) %>% 
+  mutate(q=corrected_alpha_gfp*mean_mean_alpha) %>% 
+  mutate(d_q=q-lag(q)) %>% 
+  mutate(d_q_d_gr=d_q/d_mean_mean_alpha) %>% 
+  mutate(condition=sprintf("%s to %s",lag(condition),condition)) %>% 
+  ungroup() %>% 
+  filter(condition %in% list("acetate to glycerol","glycerol to glucose", "glucose to glucoseaa")) %>% 
+  ggplot()+
+  geom_boxplot(aes(d_mean_mean_alpha_x*3600/log(2),d_q_d_gr,col=condition),size=1)+
+  geom_hline(aes(yintercept=0))+
+  #geom_errorbar(aes(x=log(mean_mean_doubling_time),ymin=log(corrected_alpha_gfp*mean_mean_alpha-corrected_sd_alpha_gfp*mean_mean_alpha),ymax=log(corrected_alpha_gfp*mean_mean_alpha+corrected_sd_alpha_gfp*mean_mean_alpha)))+
+  theme_cowplot()+
+  xlab("Doublings per hour")+
+  ylab("Production robustness")
+```
+
+In other words, MOST of the promoters are characterized by decreasing production, from glucose to glucose aa.
+Who are the winners that are very robust?
+What is making them different from the others?
+
+# How to proceed further?
+
+- Normalize by a given condition: no invariance
+
+```{r message=FALSE, warning=FALSE}
+gr_df_cond <- gr_df %>% 
+  group_by(condition) %>% 
+  mutate(mean_mean_alpha=mean(mean_alpha,na.rm=TRUE)) %>% 
+  mutate(mean_mean_doubling_time=mean(mean_doubling_time,na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  distinct(condition,.keep_all = TRUE) %>% 
+  select(condition,mean_mean_alpha,mean_mean_doubling_time)
+
+hi_or_med_p2 <- tibble(pattern_pl="p2-",strength=rep(c("med","hi"),each=3),column=c(7,8,9,10,11,12))
+hi_or_med_p3 <- tibble(pattern_pl="p3-",strength=rep(rep(c("med","hi"),each=3),times=2),column=c(1,2,3,4,5,6,7,8,9,10,11,12))
+hi_or_med <- rbind(hi_or_med_p2,hi_or_med_p3)
+
+mydata_inferred_all_control %>%
+  filter(grepl("p2-|p3-",strain)) %>% 
+  mutate(pattern_pl=ifelse(grepl("p2-",strain),"p2-","p3-")) %>% 
+  left_join(hi_or_med_p2,by=c("column","pattern_pl")) %>%
+  filter(strength=="hi") %>% 
+  left_join(gr_df_cond,by=c("condition")) %>% 
+  left_join(scaling_factor,by=c("condition")) %>% 
+  #group_by(strain,condition) %>% 
+  #mutate(alpha_gfp=mean(alpha_gfp,na.rm=TRUE)) %>% 
+  #mutate(sd_sd_alpha_gfp_tot=sqrt(sum(sd_alpha_gfp**2))) %>%
+  #ungroup() %>% 
+  distinct(condition,strain,.keep_all=TRUE) %>% 
+  mutate(corrected_alpha_gfp=alpha_gfp/scaling_factor_plasmid) %>% 
+  mutate(corrected_sd_alpha_gfp=sd_alpha_gfp/scaling_factor_plasmid) %>% 
+  ggplot()+
+  geom_point(aes(log(mean_mean_doubling_time),log(corrected_alpha_gfp*mean_mean_alpha),col=condition),size=3)+
+  geom_errorbar(aes(x=log(mean_mean_doubling_time),ymin=log(corrected_alpha_gfp*mean_mean_alpha-corrected_sd_alpha_gfp*mean_mean_alpha),ymax=log(corrected_alpha_gfp*mean_mean_alpha+corrected_sd_alpha_gfp*mean_mean_alpha)))+
+  theme_cowplot()+
+  xlab("Doublings per hour")+
+  ylab("Production (#GFP/um3/s)")
+
+mydata_inferred_all_control %>%
+  filter(rowcol!="C11") %>% 
+  filter(grepl("p2-|p3-",strain)) %>% 
+  mutate(pattern_pl=ifelse(grepl("p2-",strain),"p2-","p3-")) %>% 
+  left_join(hi_or_med_p2,by=c("column","pattern_pl")) %>%
+  filter(is.na(strength)==FALSE) %>% 
+  filter(strength=="hi") %>% 
+  left_join(gr_df_cond,by=c("condition")) %>% 
+  left_join(scaling_factor,by=c("condition")) %>% 
+  #group_by(strain,condition) %>% 
+  #mutate(alpha_gfp=mean(alpha_gfp,na.rm=TRUE)) %>% 
+  #mutate(sd_sd_alpha_gfp_tot=sqrt(sum(sd_alpha_gfp**2))) %>%
+  #ungroup() %>% 
+  distinct(condition,strain,.keep_all=TRUE) %>% 
+  mutate(corrected_alpha_gfp=alpha_gfp/scaling_factor_plasmid) %>% 
+  mutate(corrected_sd_alpha_gfp=sd_alpha_gfp/scaling_factor_plasmid) %>% 
+  filter(corrected_alpha_gfp) %>% 
+  ggplot()+
+  geom_boxplot(aes(x=log(mean_mean_doubling_time),y=log(corrected_alpha_gfp*mean_mean_alpha),group=interaction(strength,condition),col=condition),width=10)+
+  #geom_point(aes(log(mean_mean_doubling_time),log(corrected_alpha_gfp*mean_mean_alpha),col=condition),size=3)+
+  #geom_errorbar(aes(x=log(mean_mean_doubling_time),ymin=log(corrected_alpha_gfp*mean_mean_alpha-corrected_sd_alpha_gfp*mean_mean_alpha),ymax=log(corrected_alpha_gfp*mean_mean_alpha+corrected_sd_alpha_gfp*mean_mean_alpha)))+
+  theme_cowplot()+
+  xlab("Doublings per hour")+
+  ylab("Production (#GFP/um3/s)")
+```
+
+```{r}
+mydata_inferred_all_control %>%
+  filter(rowcol!="C11") %>% 
+  filter(grepl("p2-|p3-",strain)) %>% 
+  mutate(pattern_pl=ifelse(grepl("p2-",strain),"p2-","p3-")) %>% 
+  left_join(hi_or_med_p2,by=c("column","pattern_pl")) %>%
+  filter(is.na(strength)==FALSE) %>% 
+  filter(strength=="hi") %>% 
+  left_join(gr_df_cond,by=c("condition")) %>% 
+  left_join(scaling_factor,by=c("condition")) %>% 
+  #group_by(strain,condition) %>% 
+  #mutate(alpha_gfp=mean(alpha_gfp,na.rm=TRUE)) %>% 
+  #mutate(sd_sd_alpha_gfp_tot=sqrt(sum(sd_alpha_gfp**2))) %>%
+  #ungroup() %>% 
+  distinct(condition,strain,.keep_all=TRUE) %>% 
+  mutate(corrected_alpha_gfp=alpha_gfp/scaling_factor_plasmid) %>% 
+  mutate(corrected_sd_alpha_gfp=sd_alpha_gfp/scaling_factor_plasmid) %>% 
+  ggplot()+
+  geom_boxplot(aes(x=log(mean_mean_doubling_time),y=log(corrected_alpha_gfp*mean_mean_alpha),group=interaction(strength,condition),col=condition),width=10)+
+  #geom_point(aes(log(mean_mean_doubling_time),log(corrected_alpha_gfp*mean_mean_alpha),col=condition),size=3)+
+  #geom_errorbar(aes(x=log(mean_mean_doubling_time),ymin=log(corrected_alpha_gfp*mean_mean_alpha-corrected_sd_alpha_gfp*mean_mean_alpha),ymax=log(corrected_alpha_gfp*mean_mean_alpha+corrected_sd_alpha_gfp*mean_mean_alpha)))+
+  theme_cowplot()+
+  xlab("Doublings per hour")+
+  ylab("Production (#GFP/um3/s)")
+
+mydata_inferred_all_control %>%
+  filter(rowcol!="C11") %>% 
+  filter(grepl("p2-|p3-",strain)) %>% 
+  mutate(pattern_pl=ifelse(grepl("p2-",strain),"p2-","p3-")) %>% 
+  left_join(hi_or_med_p2,by=c("column","pattern_pl")) %>%
+  filter(is.na(strength)==FALSE) %>% 
+  filter(strength=="med") %>% 
+  left_join(gr_df_cond,by=c("condition")) %>% 
+  left_join(scaling_factor,by=c("condition")) %>% 
+  #group_by(strain,condition) %>% 
+  #mutate(alpha_gfp=mean(alpha_gfp,na.rm=TRUE)) %>% 
+  #mutate(sd_sd_alpha_gfp_tot=sqrt(sum(sd_alpha_gfp**2))) %>%
+  #ungroup() %>% 
+  distinct(condition,strain,.keep_all=TRUE) %>% 
+  mutate(corrected_alpha_gfp=alpha_gfp/scaling_factor_plasmid) %>% 
+  mutate(corrected_sd_alpha_gfp=sd_alpha_gfp/scaling_factor_plasmid) %>% 
+  ggplot()+
+  geom_boxplot(aes(x=log(mean_mean_doubling_time),y=log(corrected_alpha_gfp*mean_mean_alpha),group=interaction(strength,condition),col=condition),width=10)+
+  #geom_point(aes(log(mean_mean_doubling_time),log(corrected_alpha_gfp*mean_mean_alpha),col=condition),size=3)+
+  #geom_errorbar(aes(x=log(mean_mean_doubling_time),ymin=log(corrected_alpha_gfp*mean_mean_alpha-corrected_sd_alpha_gfp*mean_mean_alpha),ymax=log(corrected_alpha_gfp*mean_mean_alpha+corrected_sd_alpha_gfp*mean_mean_alpha)))+
+  theme_cowplot()+
+  xlab("Doublings per hour")+
+  ylab("Production (#GFP/um3/s)")
+```
+

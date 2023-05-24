@@ -1,0 +1,3757 @@
+---
+title: "Concentration and production of synthetic promoters in 96 well plates experiments"
+author: "Dany Chauvin"
+date: "4/1/2021"
+output: html_document
+---
+
+# PREPARING MOTHER MACHINE DATA
+
+Importing data.
+
+```{r message=FALSE,warning=FALSE}
+source("/scicore/home/nimwegen/rocasu25/Documents/Projects/biozentrum/constitExprImportCodes/loadFunctionsAndPackages.R")
+path_to_MM_data_summary <- "/scicore/home/nimwegen/rocasu25/Documents/Projects/biozentrum/constitExprImportCodes/constitexprData.csv"
+source("/scicore/home/nimwegen/rocasu25/Documents/Projects/biozentrum/constitExprImportCodes/readMMData.R")
+source("/scicore/home/nimwegen/rocasu25/Documents/Projects/biozentrum/constitExprImportCodes/transformMMData.R")
+path_to_bulk_data_summary <- "//scicore/home/nimwegen/rocasu25/Documents/Projects/biozentrum/constitExprImportCodes/dataList.csv"
+source("/scicore/home/nimwegen/rocasu25/Documents/Projects/biozentrum/constitExprImportCodes/readBulkData.R")
+source("/scicore/home/nimwegen/rocasu25/Documents/Projects/biozentrum/constitExprImportCodes/transformBulkData.R")
+```
+
+# CHECKING DIFFERENCE BETWEEN ALPHA BASED ON VOLUME AND ALPHA BASED ON LENGTH
+
+```{r}
+mycells %>%
+  ggplot()+
+  stat_ecdf(aes(alpha*3600/log(2),col=condition))+
+  #facet_wrap(~condition)+
+  theme_cowplot()+
+  coord_cartesian(xlim=c(0,5))+
+  labs(subtitle="Volume based, fit")+
+  xlab("Growth-rate (h-1)")+
+  ylab("Fraction")
+```
+Comparison with growth rates inferred from division time?
+
+```{r}
+mycells %>%
+  ggplot()+
+  stat_ecdf(aes(1/(div_time/3600),col=condition))+
+  #facet_wrap(~condition)+
+  theme_cowplot()+
+  coord_cartesian(xlim=c(0,5))+
+  labs(subtitle="Based on division time")+
+  xlab("Growth-rate (h-1)")+
+  ylab("Fraction")
+```
+
+# COMPUTING PSEUDO-BULK AND PSEUDO BULK ERROR BARS
+
+With generation times, the growth rate appears sensibly smaller! Let's compute pseudo-bulk growth rates.
+I use the following function for dichotomic search.
+
+NB, two possible options: using distribution of generation times or single cell doubling time.
+
+```{r}
+mycells %>% 
+  group_by(condition) %>% 
+  mutate(gr_elongation=mean(alpha*3600/log(2)),
+         gr_generation=1/mean(div_time/3600,na.rm = TRUE),
+         pred_gr_div=dichotomic_search_growth_rate(div_time,"div_time")*3600/log(2),
+         pred_gr_alpha=dichotomic_search_growth_rate(alpha,"alpha")*3600/log(2)) %>% 
+  ungroup() %>% 
+  distinct(condition,gr_elongation,gr_generation,pred_gr_div,pred_gr_alpha) %>% 
+  arrange(gr_elongation)
+```
+
+These values seem to be satisfying. Let's add that to mycells.
+How to compute error bars? I propose to take div_time - deltat and div_time + delta, then look at the error bars that I am getting.
+
+```{r}
+time_interval_df <- myframes_to_mycells %>% 
+  mutate(t_interval=t_interval*60) %>% 
+  distinct(condition,t_interval)
+
+#Old version
+#mycells <- mycells %>% 
+#  left_join(time_interval_df,by=c("condition")) %>% 
+#  mutate(upper_div_time=div_time+t_interval) %>% 
+#  mutate(lower_div_time=div_time-t_interval) %>% 
+#  group_by(condition,strain) %>% 
+#  mutate(gr_elongation=mean(alpha*3600/log(2)),
+#         gr_generation=1/mean(div_time/3600,na.rm = TRUE),
+#         pred_gr=dichotomic_search_growth_rate(div_time)*3600/log(2),
+#         upper_pred_gr=dichotomic_search_growth_rate(upper_div_time)*3600/log(2),
+#         lower_pred_gr=dichotomic_search_growth_rate(lower_div_time)*3600/log(2)) %>% 
+#  mutate(sd_pred_gr=1/2*(lower_pred_gr-upper_pred_gr)) %>%
+#  ungroup()
+
+mycells <- mycells %>% 
+  group_by(condition,strain) %>% 
+  mutate(gr_elongation=mean(alpha*3600/log(2)),
+         gr_generation=1/mean(div_time/3600,na.rm = TRUE),
+         pred_gr=dichotomic_search_growth_rate(alpha,"alpha")*3600/log(2)) %>% 
+  mutate(sd_pred_gr=mean(sd_alpha,na.rm=TRUE)) %>%
+  ungroup()
+
+```
+
+I could also compute the standard error on the div time... My intuition is that this is going to be small compared to the error bar I defined above...
+
+# COMPUTING PSEUDO CONCENTRATION 
+
+I am assuming here that, the concentration in constant during a single cell cycle.
+Therefore I first compute the mean concentration during one cell cycle. And then I compute the mean concentration overall cells.
+Each cell gets an error bar which is the sd computed over all frames.
+
+```{r}
+myconcentrations <- myframes_to_mycells %>% 
+  group_by(cell) %>% 
+  mutate(mean_concentration=mean(gfp_nb/volume_um),
+         sd_concentration=sd(gfp_nb/volume_um)) %>% 
+  ungroup() %>% 
+  distinct(cell,mean_concentration,sd_concentration)
+
+mycells <- mycells %>% 
+  left_join(myconcentrations,by=c("cell"))
+
+mycells <- mycells %>% 
+  group_by(condition,promoter,vector) %>% 
+  mutate(mean_concentration_condition=mean(mean_concentration)) %>% 
+  mutate(sd_concentration_condition=sd(mean_concentration)/n()) %>% 
+  ungroup()
+```
+
+Let's look at the results now, for each promoter, for chromosomal strains, and plasmid strains
+
+```{r}
+library(RColorBrewer)
+# Définissez le nombre de couleurs que vous voulez
+nb.cols <- 4
+mycolors <- colorRampPalette(brewer.pal(4, "Set1"))(nb.cols)
+
+mycells %>% 
+  ggplot(aes(log(mean_concentration),col=condition))+
+  stat_ecdf()+
+  facet_wrap(~interaction(vector,promoter))+
+  scale_color_manual(values = mycolors)+
+  xlab("Mean GFP concentration (#GFP/um3)")+
+  ylab("CDF")+
+  labs(subtitle="Mother Machine Data")+
+  coord_cartesian(xlim=c(2.5,14))
+
+mycells %>% 
+  distinct(condition,promoter,vector,.keep_all=TRUE) %>% 
+  ggplot()+
+  geom_point(aes(log(pred_gr),log(mean_concentration_condition),col=condition))+
+  geom_linerange(aes(x=log(pred_gr),ymin=log(mean_concentration_condition-sd_concentration_condition),ymax=log(mean_concentration_condition+sd_concentration_condition)))+
+  geom_errorbarh(aes(y=log(mean_concentration_condition),xmin=log(pred_gr-sd_pred_gr),xmax=log(pred_gr+sd_pred_gr)))+
+  facet_wrap(~interaction(vector,promoter),scale="free")+
+  scale_color_manual(values = mycolors)+
+  xlab("log(Pseudo bulk growth rate)")+
+  ylab("log(mean GFP concentration)")+
+  labs(subtitle="Mother Machine Data")
+  #coord_cartesian(xlim=c(2.5,14))
+
+mycells %>% 
+  distinct(condition,promoter,vector,.keep_all=TRUE) %>% 
+  ggplot()+
+  geom_point(aes(pred_gr,log(mean_concentration_condition),col=condition))+
+  geom_linerange(aes(x=pred_gr,ymin=log(mean_concentration_condition-sd_concentration_condition),ymax=log(mean_concentration_condition+sd_concentration_condition)))+
+  geom_errorbarh(aes(y=log(mean_concentration_condition),xmin=pred_gr-sd_pred_gr,xmax=pred_gr+sd_pred_gr))+
+  facet_wrap(~interaction(vector,promoter),scale="free")+
+  scale_color_manual(values = mycolors)+
+  xlab("Pseudo bulk growth rate")+
+  ylab("log(mean GFP concentration)")+
+  labs(subtitle="Mother Machine Data")
+  #coord_cartesian(xlim=c(2.5,14))
+```
+
+# CALIBRATION
+
+Finally here we are: the goal of this part is to focus on the calibration of the data.
+We'll focus on single conditions. And from there, we'll establish the relationship between mother machine data and the bulk data.
+First, we need to load the 96 well plates data.
+
+# IMPORTING BULK DATA
+
+We assume manual curation has already been done.
+
+# LOADING PACKAGES AND FUNCTIONS
+
+```{r message=FALSE, warning=FALSE}
+source("./code/load_packages_functions.R")
+source("./code/modeling_functions.R")
+source("./code/inference_functions.R")
+```
+
+# IMPORTING DATA FROM BULK EXPERIMENTS
+
+```{r message=FALSE, warning=FALSE}
+path_to_data_list <- "./dataList.csv"
+source("./code/import_data.R")
+
+mydata <- mydata %>% 
+  mutate(valid=NA) %>% 
+  mutate(well=paste(plate,row,column,strain,sep="_"))
+
+mean_blank_od <- 0.03840125 #Determined in a previous experiment where we looked ad OD of empty wells for entire plates
+mydata <- mydata %>% 
+  mutate(corrected_od=od-mean_blank_od)
+
+mean_blank_fluo <- 35.3075 #Idem
+mydata <- mydata %>% 
+  mutate(corrected_fluo=fluo-mean_blank_fluo) %>% 
+  filter(!grepl("H_7",well)) #Discarding this well which was problematic anyway
+
+mydata_bad <- readr::read_csv("./manualCuration.csv") #Wells with obviously wrong results (cells not growing, or outliers)
+mydata <- mydata %>% 
+  mutate(rowcol=paste(row,column,sep=""))
+
+replica_df <- tibble(description=c("20210312constitexpr3.0","20210316constitexpr3.1","20210204Testrun2",
+                                   "20210430constitexpr3.2",
+                                   "20210504constitexpr3.3",
+                                   "20210507constitexpr3.4",
+                                   "20210512constitexpr3.5"),
+                     replica=c(2,3,1,4,5,6,7))
+promoters_of_interest <- list("hi1","hi3","med2","med3","rpsB","rpmB","rplN","rrnB")
+
+mydata_curated <-mydata %>% 
+  anti_join(mydata_bad,by=c("description","plate","rowcol")) %>% 
+  left_join(replica_df,by=c("description")) %>% 
+  mutate(well_rep=paste(well,replica,sep="-"))
+
+mydata_curated <- rbind(
+  mydata_curated %>% 
+    filter((strain %in% c("MG1655","empty"))) %>% 
+    mutate(promoter="nopromoter") %>% 
+    mutate(vector="novector"),
+  
+  mydata_curated %>% 
+    filter(!(strain %in% c("MG1655","empty"))) %>% 
+    group_by(strain) %>% 
+    mutate(prom_part1=stringr::str_split(strain,"-")[[1]][[1]],
+         prom_part2=stringr::str_split(strain,"-")[[1]][[2]]) %>% 
+  mutate(promoter=ifelse(prom_part2 %in% promoters_of_interest,prom_part2,paste(prom_part1,prom_part2,sep=""))) %>% 
+  mutate(vector=ifelse(prom_part2 %in% promoters_of_interest,prom_part1,"pl")) %>%
+  select(-c(prom_part1,prom_part2,strain)) %>% 
+  mutate(strain=paste(vector,promoter,sep="-")) %>% 
+    ungroup())
+```
+
+# INFERRING SLOPES AND INTERCEPT OF FLUO VS OD
+
+We have defined arbitrarily corrected OD ranges where we fit a linear model (two parameters, slope: $\alpha_{tot}$ and intercept" $\beta$). $\alpha_{tot}$ takes into account the contribution of both GFP and autofluorescence.
+
+```{r}
+od_range_df <- tibble(condition=c("acetate","glycerol","glucose","glucoseaa"),
+                      min_corrected_od=c(0.05,0.05,0.05,0.05),
+                      max_corrected_od=c(0.15,0.2,0.4,0.6))
+```
+
+Different wells are characterized by different promoter strength, high ("hi") and medium ("med").
+
+```{r}
+hi_or_med_p2 <- tibble(plate=rep(c("pl1","pl3","pl5","pl7"),each=6),strength=rep(rep(c("med","hi"),each=3),times=4),column=rep(c(7,8,9,10,11,12),times=4))
+hi_or_med_p3 <- tibble(plate=rep(c("pl2","pl4","pl6","pl8"),each=12),strength=rep(rep(c("med","hi"),each=3),times=8),column=rep(c(1,2,3,4,5,6,7,8,9,10,11,12),times=4))
+hi_or_med <- rbind(hi_or_med_p2,hi_or_med_p3)
+```
+
+Inferring slopes and intercepts. Output: data_frame with condition,strain (id est, promoter and vector), replica, well, alpha_tot, sd_alpha, beta, strength. One line per well.
+
+Now we can properly infer the slopes of the fluo vs od relationships. We assume some noise both on:
+- od measurement
+- fluo measurement
+
+```{r}
+mydata_summary_od <- mydata_curated %>% 
+    ungroup() %>%
+    left_join(hi_or_med,by=c("plate","column")) %>% 
+    filter(!grepl("empty",strain)) %>% #filter out empty wells
+    left_join(od_range_df,by=c("condition")) %>%
+    filter(max(corrected_od)>min_corrected_od) %>% #to get rid of wells in which there are no growth at all
+    group_by(description,plate,well) %>%
+    arrange(time_min) %>% 
+    mutate(above_max_time=ifelse(corrected_od>=max_corrected_od,time_min,NA)) %>% 
+    mutate(time_limit=min(c(above_max_time,Inf),na.rm=TRUE)) %>% 
+    filter(time_min<time_limit) %>% 
+    mutate(below_min_time=ifelse(corrected_od<=min_corrected_od,time_min,NA)) %>% 
+    mutate(time_limit=max(c(below_min_time,-Inf),na.rm=TRUE)) %>% 
+    filter(time_min>time_limit) %>% 
+    ungroup() %>% 
+    select(-c(above_max_time,time_limit,below_min_time)) %>%
+    group_by(description,well) %>%
+    mutate(p=n(),
+           mean_od=mean(corrected_od),
+           var_od=1/p*sum((corrected_od-mean_od)**2),
+           mean_fluo=mean(fluo),
+           var_fluo=1/p*sum((fluo-mean_fluo)**2),
+           covar_od_fluo=1/p*sum(corrected_od*fluo-mean_od*mean_fluo),
+           alpha_tot=(var_fluo-var_od)/(2*covar_od_fluo)+sqrt(1+((var_fluo-var_od)/(2*covar_od_fluo))**2),#assuming that this is the best slope
+           sd_alpha=compute_error(alpha_tot,var_od,var_fluo,covar_od_fluo),
+           beta=1/p*sum(fluo-alpha_tot*corrected_od))%>%
+    ungroup() %>% 
+    distinct(strain, replica, well,.keep_all=TRUE) %>% 
+  select(condition,strain,replica,well,alpha_tot,sd_alpha,beta,strength,plate)
+```
+
+# COMPUTING GROWTH-RATES IN SINGLE WELLS
+
+Here I fit log(corrected_od) vs time_min.
+I am considering here that there is measurement noise only according in the y axis. Which enables me to use the functions to compute the slope of the "classical" linear regression as well as error bars on the growth rate, similarly to what I am using for single cells in mother machine data.
+
+```{r}
+mydata_growthrates_summary <- mydata_curated %>% 
+    ungroup() %>%
+    left_join(hi_or_med,by=c("plate","column")) %>% 
+    filter(!grepl("empty",strain)) %>% #filter out empty wells
+    left_join(od_range_df,by=c("condition")) %>%
+    filter(max(corrected_od)>min_corrected_od) %>% #to get rid of wells in which there are no growth at all
+    group_by(description,plate,well) %>%
+    arrange(time_min) %>% 
+    mutate(above_max_time=ifelse(corrected_od>=max_corrected_od,time_min,NA)) %>% 
+    mutate(time_limit=min(c(above_max_time,Inf),na.rm=TRUE)) %>% 
+    filter(time_min<time_limit) %>% 
+    mutate(below_min_time=ifelse(corrected_od<=min_corrected_od,time_min,NA)) %>% 
+    mutate(time_limit=max(c(below_min_time,-Inf),na.rm=TRUE)) %>% 
+    filter(time_min>time_limit) %>% 
+    ungroup() %>% 
+    select(-c(above_max_time,time_limit,below_min_time)) %>%
+    filter(corrected_od>0) %>% 
+    group_by(description,well) %>%
+    mutate(
+      well_gr=fit_exp_elongation_slope(time_min,corrected_od)*60/log(2), 
+      sd_well_gr=fit_exp_elongation_sd_slope(time_min,corrected_od)*60/log(2)) %>%
+  ungroup() %>% 
+  distinct(strain, replica, well,.keep_all=TRUE) %>% 
+  select(condition,strain,replica,well,well_gr,sd_well_gr,strength,plate)
+```
+
+```{r}
+mydata_growthrates_summary %>% 
+  distinct(condition,replica,well,.keep_all = TRUE) %>% 
+  filter(!((condition=="acetate") & (replica %in% c(5,6,7)))) %>% 
+  filter(!((condition=="glucoseaa") & (replica %in% c(4)))) %>% 
+  group_by(condition) %>% 
+  mutate(p=n()) %>% 
+  mutate(mean_doubling=mean(well_gr,na.rm=TRUE)) %>% 
+  mutate(sd_doubling=sd(well_gr,na.rm=TRUE)) %>% 
+  mutate(mean_error_fit=mean(sd_well_gr,na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  distinct(condition,.keep_all = TRUE) %>% 
+  select(condition,mean_doubling,sd_doubling,mean_error_fit) %>% 
+  arrange(mean_doubling,condition)
+```
+
+Again, error bars on single slopes are small compared to fluctuations from well to well.
+
+Now, several things are possible: I can directly compare the fluo vs OD slopes, without taking out the auto-fluorescence dependency (which is after all, not taken into account, deferentially, in my mother machine measurement...). What do I get, if I forget about this step, and if I forget about different growth rates?
+
+# DIRECTLY COMPARING FLUO VS OD TO CONCENTRATION
+
+I am comparing results by conditions. And using these calibration curves, to infer "fluorescence concentration" (taking into account both autofluorescence and gfp fluorescence).
+
+```{r}
+myconcentrations_condition <- mycells %>% 
+  distinct(condition,strain,mean_concentration_condition,sd_concentration_condition)
+
+#Set strains to select for the comparison, for which I have data both in mother machine and spectro.
+selected_strains_df <- mycells %>% 
+  distinct(strain,condition)
+
+library(RColorBrewer)
+# Définissez le nombre de couleurs que vous voulez
+nb.cols <- 15
+mycolors <- colorRampPalette(brewer.pal(15, "Set1"))(nb.cols)
+
+mydata_summary_od %>%
+  left_join(mydata_growthrates_summary,by=c("condition","strain","replica","well","strength","plate")) %>% 
+  semi_join(selected_strains_df,by=c("strain","condition")) %>% 
+  filter(log(well_gr)>-2) %>% 
+  left_join(myconcentrations_condition,by=c("condition","strain")) %>% 
+  ggplot()+
+  geom_point(aes(log(mean_concentration_condition),log(alpha_tot),col=strain),size=3)+
+  geom_errorbar(aes(x=log(mean_concentration_condition),ymin=log(alpha_tot-sd_alpha),ymax=log(alpha_tot+sd_alpha)))+
+  geom_errorbar(aes(y=log(alpha_tot),xmin=log(mean_concentration_condition-sd_concentration_condition),xmax=log(mean_concentration_condition+sd_concentration_condition)))+
+  facet_wrap(~condition)+
+  #theme_cowplot()+
+  scale_color_manual(values = mycolors)
+
+nb.cols <- 4
+mycolors <- colorRampPalette(brewer.pal(4, "Set1"))(nb.cols)
+
+mydata_summary_od %>%
+  left_join(mydata_growthrates_summary,by=c("condition","strain","replica","well","strength","plate")) %>% 
+  semi_join(selected_strains_df,by=c("strain","condition")) %>% 
+  filter(log(well_gr)>-2) %>% 
+  left_join(myconcentrations_condition,by=c("condition","strain")) %>% 
+  ggplot()+
+  geom_point(aes(log(mean_concentration_condition),log(alpha_tot),col=condition),size=3)+
+  geom_errorbar(aes(x=log(mean_concentration_condition),ymin=log(alpha_tot-sd_alpha),ymax=log(alpha_tot+sd_alpha)),alpha=.5)+
+  geom_errorbar(aes(y=log(alpha_tot),xmin=log(mean_concentration_condition-sd_concentration_condition),xmax=log(mean_concentration_condition+sd_concentration_condition)),alpha=.5)+
+geom_smooth(aes(log(mean_concentration_condition),log(alpha_tot)),method="lm") +
+  stat_regline_equation(aes(log(mean_concentration_condition),log(alpha_tot)))+
+  scale_color_manual(values = mycolors)
+```
+
+Now these scatters are not really nice. First, we can get rid of the autofluorescence coming from the 96 well plates experiments.
+
+# SUBSTRACTING AUTOFLUORESCENCE AND PROPAGATING THE ERROR
+
+```{r}
+mydata_summary_od$replica <- factor(mydata_summary_od$replica,levels = c(1,2,3,4,5,6,7))
+mydata_growthrates_summary$replica <- factor(mydata_growthrates_summary$replica,levels = c(1,2,3,4,5,6,7))
+
+mydata_curated_cond_for_plot <- mydata_summary_od %>% 
+  distinct(replica,condition,well,alpha_tot,sd_alpha,strain,plate)
+
+mydata_curated_gr_for_plot <- mydata_growthrates_summary %>% 
+  distinct(replica,condition,well,well_gr,sd_well_gr,strain,plate)
+
+conditions <- c("acetate","glycerol","glucose","glucoseaa")
+
+for(c in conditions){print(
+mydata_gr_autofluo <- left_join(mydata_curated_cond_for_plot,mydata_curated_gr_for_plot ,by=c("replica","condition","well","strain","plate")) %>% 
+  filter(strain=="MG1655") %>% 
+  filter(alpha_tot>0) %>% 
+  filter(well_gr>0.2) %>% 
+  filter(!((condition=="acetate") & (alpha_tot<1000))) %>% 
+  filter(condition==c) %>% 
+  ggplot()+
+  geom_point(aes(well_gr,alpha_tot,col=replica))+
+  geom_errorbar(aes(x=well_gr,ymax=alpha_tot+sd_alpha,ymin=alpha_tot-sd_alpha,col=replica))+
+  geom_errorbar(aes(y=alpha_tot,xmin=(well_gr-sd_well_gr),xmax=(well_gr+sd_well_gr),col=replica))+
+  labs(subtitle=c)+
+  theme_cowplot()
+)}
+
+left_join(mydata_curated_cond_for_plot,mydata_curated_gr_for_plot ,by=c("replica","condition","well","strain")) %>% 
+  filter(strain=="MG1655") %>% 
+  filter(alpha_tot>0) %>% 
+  filter(well_gr>0.2) %>% 
+  filter(!((condition=="acetate") & (alpha_tot<1000))) %>% 
+  #filter(condition==c) %>% 
+  ggplot()+
+  geom_point(aes(well_gr,alpha_tot,col=replica))+
+  geom_errorbar(aes(x=well_gr,ymax=alpha_tot+sd_alpha,ymin=alpha_tot-sd_alpha,col=replica))+
+  geom_errorbar(aes(y=alpha_tot,xmin=(well_gr-sd_well_gr),xmax=(well_gr+sd_well_gr),col=replica))+
+  labs(subtitle="all")+
+  theme_cowplot()+
+  xlab("Doublings per hour")+
+  ylab("autofluorescence alpha")
+
+left_join(mydata_curated_cond_for_plot,mydata_curated_gr_for_plot ,by=c("replica","condition","well","strain")) %>% 
+  filter(strain=="MG1655") %>% 
+  filter(alpha_tot>0) %>% 
+  filter(well_gr>0.2) %>% 
+  filter(!((condition=="acetate") & (alpha_tot<1000))) %>% 
+  #filter(condition==c) %>% 
+  ggplot()+
+  geom_point(aes(log(well_gr),log(alpha_tot),col=replica))+
+  geom_errorbar(aes(x=log(well_gr),ymax=log(alpha_tot+sd_alpha),ymin=log(alpha_tot-sd_alpha),col=replica))+
+  geom_errorbar(aes(y=log(alpha_tot),xmin=log((well_gr-sd_well_gr)),xmax=log((well_gr+sd_well_gr)),col=replica))+
+  labs(subtitle="all")+
+  theme_cowplot()+
+  xlab("log(Doublings per hour)")+
+  ylab("log(autofluorescence alpha)")
+```
+
+# OD: COMPUTING RELEVANT QUANTITIES TO COMPUTE THE AUTOFLUORESCENCE IN DIFFERENT WELLS
+
+Using Erik's notes, section 4., I should compute:
+- mean of log(autofluorescence) and log(exponential growth rates)
+- standard deviation of log(autofluorescence) and log(exponential growth rate)
+- covariance of log(autofluorescence) and log(exponential growth rate)
+
+```{r}
+# Given what is seen above, I set a filter to get rid of unwanted data
+
+exp_vs_gr_results_df <- left_join(mydata_curated_cond_for_plot,mydata_curated_gr_for_plot ,by=c("replica","condition","well","strain","plate")) %>% filter(strain=="MG1655") %>% 
+  filter(alpha_tot>0) %>% 
+  filter(well_gr>0.2) %>% 
+  filter(!((condition=="acetate") & (alpha_tot<1000))) %>% 
+  mutate(l_gr=log(well_gr)) %>% #here growth rate is in doublings per hour, which is more intuitive
+  mutate(l_exp=log(alpha_tot)) %>% 
+  drop_na() %>% 
+  mutate(p=n(),
+         m_l_gr=mean(l_gr,na.rm=TRUE),
+         m_l_exp=mean(l_exp,na.rm=TRUE),
+         var_l_gr=var(l_gr,na.rm=TRUE),
+         var_l_exp=var(l_exp,na.rm=TRUE),
+         cov_l_gr_l_exp=1/p*sum(l_exp*l_gr-m_l_gr*m_l_exp,na.rm=TRUE)) %>% 
+  filter(row_number()==1) %>% 
+  select(m_l_gr,m_l_exp,var_l_gr,var_l_exp,cov_l_gr_l_exp,p)
+
+exp_vs_gr_results_df
+```
+# OD: SUBSTRACTING AUTOFLUORESCENCE AND COMPUTING GFP CONTRIBUTION, FOLLOWING ERIK'S NOTES
+
+```{r}
+mydata_gr_exp_summary <- left_join(mydata_curated_cond_for_plot,mydata_curated_gr_for_plot ,by=c("replica","condition","well","strain","plate")) %>%
+  filter(!(strain %in% c("MG1655","empty"))) %>% 
+  mutate(l_x=log(well_gr),
+         var_l_x=((sd_well_gr)**2)/((well_gr)**2)) %>%
+  mutate(m_l_gr=unique(exp_vs_gr_results_df$m_l_gr),
+         var_l_gr=unique(exp_vs_gr_results_df$var_l_gr),
+         m_l_exp=unique(exp_vs_gr_results_df$m_l_exp),
+         var_l_exp=unique(exp_vs_gr_results_df$var_l_exp),
+         cov_l_gr_l_exp=unique(exp_vs_gr_results_df$cov_l_gr_l_exp),
+         p=unique(exp_vs_gr_results_df$p)) %>% 
+  mutate(l_y=m_l_exp+cov_l_gr_l_exp/(var_l_gr)*(l_x-m_l_gr),
+         r=cov_l_gr_l_exp/(sqrt(var_l_gr*var_l_exp)),
+         var_l_y=var_l_x*(cov_l_gr_l_exp**2/(var_l_gr**2))+var_l_exp*(1-r**2)*(1+(var_l_x+(l_x-m_l_gr)**2)/p))
+```
+
+```{r}
+mydata_gr_exp_summary<- mydata_gr_exp_summary %>%
+  mutate(alpha_gfp=alpha_tot-exp(l_y),
+         sd_alpha_autofluo=sqrt(l_y**2*var_l_y),
+         sd_alpha_gfp=sqrt(sd_alpha_autofluo**2+sd_alpha**2)) %>% 
+  filter(alpha_gfp>3*sd_alpha_autofluo)
+```
+
+# NOW COMPARING GFP FLUO IN BLUK VERSUS MOTHER MACHINE
+
+The fit is performed, considering error both on x and y. We assume that we can discard error bars, which are small anyway.
+We want to check that the slope is indeed close to 1 (it seems to be the case).
+
+Naive fit.
+
+```{r}
+nb.cols <- 15
+mycolors <- colorRampPalette(brewer.pal(15, "Set1"))(nb.cols)
+
+mydata_gr_exp_summary %>%
+  #filter(replica==1) %>% 
+  semi_join(selected_strains_df,by=c("strain","condition")) %>% 
+  filter(log(well_gr)>-2) %>% 
+  left_join(myconcentrations_condition,by=c("condition","strain")) %>% 
+  ggplot()+
+  geom_point(aes(log(mean_concentration_condition),log(alpha_gfp),col=replica),size=3)+
+  geom_errorbar(aes(x=log(mean_concentration_condition),ymin=log(alpha_gfp-sd_alpha_gfp),ymax=log(alpha_tot+sd_alpha_gfp)))+
+  geom_errorbar(aes(y=log(alpha_gfp),xmin=log(mean_concentration_condition-sd_concentration_condition),xmax=log(mean_concentration_condition+sd_concentration_condition)))+
+  geom_smooth(aes(log(mean_concentration_condition),log(alpha_gfp)),method="lm") +
+  stat_regline_equation(aes(log(mean_concentration_condition),log(alpha_gfp)))+
+  facet_wrap(~condition)+
+  #theme_cowplot()+
+  scale_color_manual(values = mycolors)+
+  theme_cowplot()
+```
+Fit taking into account errors both in y and x.
+
+```{r}
+nb.cols <- 15
+mycolors <- colorRampPalette(brewer.pal(15, "Set1"))(nb.cols)
+
+mydata_gr_exp_summary %>%
+  semi_join(selected_strains_df,by=c("strain","condition")) %>% 
+  filter(log(well_gr)>-2) %>% 
+  left_join(myconcentrations_condition,by=c("condition","strain")) %>% 
+  group_by(condition) %>% 
+  mutate(calibration_slope=compute_slope_errxy(log(mean_concentration_condition),log(alpha_gfp))) %>% 
+  mutate(calibration_intercept=compute_intercept_errxy(log(mean_concentration_condition),log(alpha_gfp))) %>% 
+  mutate(calibration_sd_slope=compute_sdslope_errxy(log(mean_concentration_condition),log(alpha_gfp))) %>%
+  mutate(calibration_factor=exp(calibration_intercept)) %>% 
+  ungroup() %>% 
+  distinct(condition,calibration_slope,calibration_sd_slope,calibration_intercept,calibration_factor)
+
+myslopes <- mydata_gr_exp_summary %>%
+  semi_join(selected_strains_df,by=c("strain","condition")) %>% 
+  filter(log(well_gr)>-2) %>% 
+  left_join(myconcentrations_condition,by=c("condition","strain")) %>% 
+  group_by(condition) %>% 
+  mutate(calibration_slope=compute_slope_errxy(log(mean_concentration_condition),log(alpha_gfp))) %>% 
+  mutate(calibration_intercept=compute_intercept_errxy(log(mean_concentration_condition),log(alpha_gfp))) %>% 
+  mutate(calibration_sd_slope=compute_sdslope_errxy(log(mean_concentration_condition),log(alpha_gfp))) %>%
+  mutate(calibration_factor=exp(calibration_intercept)) %>% 
+  ungroup() %>% 
+  distinct(condition,calibration_slope,calibration_sd_slope,calibration_intercept,calibration_factor)
+
+# Representing the correct slopes
+
+mydata_gr_exp_summary %>%
+  left_join(myslopes,by=c("condition")) %>% 
+  #filter(replica==1) %>% 
+  semi_join(selected_strains_df,by=c("strain","condition")) %>% 
+  filter(log(well_gr)>-2) %>% 
+  left_join(myconcentrations_condition,by=c("condition","strain")) %>% 
+  ggplot()+
+  geom_point(aes(log(mean_concentration_condition),log(alpha_gfp),col=strain),size=3)+
+  geom_errorbar(aes(x=log(mean_concentration_condition),ymin=log(alpha_gfp-sd_alpha_gfp),ymax=log(alpha_tot+sd_alpha_gfp)))+
+  geom_errorbar(aes(y=log(alpha_gfp),xmin=log(mean_concentration_condition-sd_concentration_condition),xmax=log(mean_concentration_condition+sd_concentration_condition)))+
+  geom_line(aes(x=log(mean_concentration_condition),y=log(mean_concentration_condition)*calibration_slope+calibration_intercept))+
+  #geom_smooth(aes(log(mean_concentration_condition),log(alpha_gfp)),method="lm") +
+  #stat_regline_equation(aes(log(mean_concentration_condition),log(alpha_gfp)))+
+  facet_wrap(~condition)+
+  #theme_cowplot()+
+  scale_color_manual(values = mycolors)+
+  theme_cowplot()+
+  xlab("Mean concentration (Mother machine) #GFP/um3")+
+  ylab("Bulk results (GFU/OD)")
+
+```
+
+# FITTING THESE SLOPES TO 1 AND FINDING THE CORRESPONDING CALIBRATION CONSTANT
+
+For a slope of 1, the best intercept is:
+b=<log(concentration_mm)>-<log(bulk)>
+
+```{r}
+mycalibrations <- mydata_gr_exp_summary %>%
+  semi_join(selected_strains_df,by=c("strain","condition")) %>% 
+  filter(log(well_gr)>-2) %>% 
+  left_join(myconcentrations_condition,by=c("condition","strain")) %>% 
+  group_by(condition) %>% 
+  mutate(intercept=mean(log(mean_concentration_condition))-mean(log(alpha_gfp))) %>% 
+  ungroup() %>% 
+  distinct(condition,intercept)
+```
+
+```{r}
+mydata_gr_exp_summary %>%
+  left_join(mycalibrations,by=c("condition")) %>% 
+  #filter(replica==1) %>% 
+  semi_join(selected_strains_df,by=c("strain","condition")) %>% 
+  filter(log(well_gr)>-2) %>% 
+  left_join(myconcentrations_condition,by=c("condition","strain")) %>% 
+  ggplot()+
+  geom_point(aes(log(alpha_gfp),log(mean_concentration_condition),col=strain),size=3)+
+  geom_errorbar(aes(y=log(mean_concentration_condition),xmin=log(alpha_gfp-sd_alpha_gfp),xmax=log(alpha_tot+sd_alpha_gfp)))+
+  geom_errorbar(aes(x=log(alpha_gfp),ymin=log(mean_concentration_condition-sd_concentration_condition),ymax=log(mean_concentration_condition+sd_concentration_condition)))+
+  geom_abline(aes(slope=1,intercept=intercept))+
+  #geom_smooth(aes(log(mean_concentration_condition),log(alpha_gfp)),method="lm") +
+  #stat_regline_equation(aes(log(mean_concentration_condition),log(alpha_gfp)))+
+  facet_wrap(~condition)+
+  #theme_cowplot()+
+  scale_color_manual(values = mycolors)+
+  theme_cowplot()+
+  ylab("Mean concentration (Mother machine) #GFP/um3")+
+  xlab("Bulk results (GFU/OD)")
+```
+Now, based on this, it should be possible to determine from single bulk measurements: what is the concentration in bulk data. And what is the corresponding error bar.
+
+```{r}
+mycalibrations$condition <- factor(mycalibrations$condition, levels=c("acetate","glycerol","glucose","glucoseaa"))
+mycalibrations %>% 
+  arrange(condition) %>% 
+  mutate(calibration_constant=exp(intercept))
+```
+
+
+# COMPARE WITH FACS DATA: ARE THESE CALIBRATION CONSTANT MAKING ANY SENSE
+
+Not really...
+In the course of his internship, David came up with the following:
+
+```{r}
+facs_data <- tibble(condition=c("acetate","glycerol","glucose","glucoseaa"),cell_od_vol=c(3627818.95
+,3799952.88333333,2520796.42,1141007.03333333), sd_cell_od_vol=c(274582.37825445,359164.817083692,229239.014060831,80156.1520883041))
+
+mean_birth_volume <- mycells %>%
+  group_by(condition) %>% 
+  mutate(m_birth_volume=mean(v_birth)) %>% 
+  mutate(m_div_volume=mean(v_div)) %>% 
+  mutate(sd_m_birth_volume=sd(v_birth)) %>% 
+  mutate(sd_m_div_volume=sd(v_div)) %>% 
+  mutate(p=n()) %>% 
+  ungroup() %>% 
+  distinct(condition,m_birth_volume,m_div_volume,sd_m_div_volume,sd_m_birth_volume,p)
+
+# We can now compute calibration constant for the concentration. These should be:
+vol_data <- left_join(facs_data,mean_birth_volume,by=c("condition")) %>% 
+  left_join(mycalibrations,by=c("condition")) %>% 
+  mutate(cal_constant_birth=1/(cell_od_vol*m_birth_volume),
+         cal_constant_div=1/(cell_od_vol*m_div_volume),
+         sd_cal_constant_birth=abs(-(1/cell_od_vol**2)*sd_cell_od_vol*(1/m_birth_volume)-(1/m_birth_volume**2)*sd_m_birth_volume*(1/cell_od_vol)),
+         sd_cal_constant_div=abs(-(1/cell_od_vol**2)*sd_cell_od_vol*(1/m_div_volume)-(1/m_div_volume**2)*sd_m_div_volume*(1/cell_od_vol)))
+
+vol_data$condition <- factor(vol_data$condition,levels=c("acetate","glycerol","glucose","glucoseaa"))
+
+vol_data %>% 
+  ggplot()+
+  geom_point(aes(condition,cell_od_vol,col=condition))+
+  geom_errorbar(aes(x=condition,ymin=cell_od_vol-sd_cell_od_vol,ymax=cell_od_vol+sd_cell_od_vol))
+
+vol_data %>% 
+  ggplot()+
+  geom_point(aes(condition,m_birth_volume,col=condition))+
+  geom_errorbar(aes(x=condition,ymin=m_birth_volume-sd_m_birth_volume,ymax=m_birth_volume+sd_m_birth_volume))
+
+vol_data %>% 
+  ggplot()+
+  geom_point(aes(log(m_div_volume),cell_od_vol,col=condition))+
+  geom_errorbar(aes(x=log(m_div_volume),ymin=cell_od_vol-sd_cell_od_vol,ymax=cell_od_vol+sd_cell_od_vol))
+
+vol_data %>% 
+  ggplot()+
+  geom_point(aes(log(m_div_volume),exp(intercept),col=condition))
+  #geom_errorbar(aes(x=log(m_div_volume),ymin=cell_od_vol-sd_cell_od_vol,ymax=cell_od_vol+sd_cell_od_vol))
+
+vol_data %>% 
+  mutate(sd_prod=sd_cal_constant_div) %>% 
+  ggplot()+
+  geom_point(aes(condition,cal_constant_div,col=condition))+
+  geom_errorbar(aes(x=condition,ymin=cal_constant_div-sd_prod,
+                    ymax=cal_constant_div+sd_prod))
+
+vol_data %>% 
+  mutate(sd_prod=sd_cal_constant_div) %>% 
+  ggplot()+
+  geom_point(aes(exp(intercept),cal_constant_div,col=condition))+
+  geom_errorbar(aes(x=exp(intercept),ymin=cal_constant_div-sd_prod,
+                    ymax=cal_constant_div+sd_prod))
+
+vol_data %>% 
+  mutate(sd_prod=sd_cal_constant_birth) %>% 
+  ggplot()+
+  geom_point(aes(exp(intercept),cal_constant_birth,col=condition))+
+  geom_errorbar(aes(x=exp(intercept),ymin=cal_constant_birth-sd_prod,
+                    ymax=cal_constant_birth+sd_prod))
+
+```
+If I am only looking at sd... this is supporting the idea of a single relationship for all conditions.
+And that by chance essentially, the OD really represents the biomass. The, why is it that we have different calibration constant in the data up there? 
+
+What happens, if we consider all conditions together? What happens if we add more data to glycerol and acetate conditions?
+
+# CONSIDERING ALL CONDITIONS TOGETHER
+
+```{r}
+mycalibrations_all <- mydata_gr_exp_summary %>%
+  semi_join(selected_strains_df,by=c("strain","condition")) %>% 
+  filter(log(well_gr)>-2) %>% 
+  left_join(myconcentrations_condition,by=c("condition","strain")) %>% 
+  filter(log(mean_concentration_condition)>6) %>% 
+  #group_by(condition) %>% 
+  mutate(intercept=mean(log(mean_concentration_condition))-mean(log(alpha_gfp))) %>% 
+  #ungroup() %>% 
+  distinct(intercept)
+```
+
+```{r}
+mydata_gr_exp_summary %>%
+  mutate(intercept=unique(mycalibrations_all$intercept)) %>% 
+  #filter(replica==1) %>% 
+  semi_join(selected_strains_df,by=c("strain","condition")) %>% 
+  filter(log(well_gr)>-2) %>% 
+  left_join(myconcentrations_condition,by=c("condition","strain")) %>% 
+  filter(log(mean_concentration_condition)>6) %>% 
+  ggplot()+
+  geom_point(aes(log(alpha_gfp),log(mean_concentration_condition),col=strain),size=3)+
+  geom_errorbar(aes(y=log(mean_concentration_condition),xmin=log(alpha_gfp-sd_alpha_gfp),xmax=log(alpha_tot+sd_alpha_gfp)))+
+  geom_errorbar(aes(x=log(alpha_gfp),ymin=log(mean_concentration_condition-sd_concentration_condition),ymax=log(mean_concentration_condition+sd_concentration_condition)))+
+  geom_abline(aes(slope=1,intercept=intercept))+
+  #geom_smooth(aes(log(mean_concentration_condition),log(alpha_gfp)),method="lm") +
+  #stat_regline_equation(aes(log(mean_concentration_condition),log(alpha_gfp)))+
+  #facet_wrap(~condition)+
+  #theme_cowplot()+
+  scale_color_manual(values = mycolors)+
+  theme_cowplot()+
+  ylab("Mean concentration (Mother machine) #GFP/um3")+
+  xlab("Bulk results (GFU/OD)")
+```
+
+# PREDICTING CONCENTRATION IN BULK DATA
+
+```{r}
+mydata_results <- mydata_gr_exp_summary %>% 
+  filter(log(well_gr)>-2) %>% 
+  left_join(mycalibrations,by=c("condition")) %>% 
+  mutate(l_pred_concentration=log(alpha_gfp)+intercept,
+         max_l_pred_concentration=log(alpha_gfp+sd_alpha)+intercept,
+         min_l_pred_concentration=log(alpha_gfp-sd_alpha)+intercept)
+```
+# NOW LET'S PLOT THEM ALL
+
+```{r}
+mydata_results %>% 
+  ggplot()+
+  geom_point(aes(well_gr,l_pred_concentration,col=condition))+
+  theme_cowplot()+
+  xlab("Well growth-rate")+
+  ylab("Predicted log-concentration")
+
+mydata_results %>% 
+  ggplot()+
+  geom_point(aes(well_gr,exp(l_pred_concentration),col=condition))+
+  theme_cowplot()+
+  xlab("Well growth-rate")+
+  ylab("Predicted log-concentration")
+```
+```{r}
+hi_or_med_p2 <- tibble(plate=rep(c("pl1","pl3","pl5","pl7"),each=6),strength=rep(rep(c("med","hi"),each=3),times=4),column=rep(c(7,8,9,10,11,12),times=4))
+hi_or_med_p3 <- tibble(plate=rep(c("pl2","pl4","pl6","pl8"),each=12),strength=rep(rep(c("med","hi"),each=3),times=8),column=rep(c(1,2,3,4,5,6,7,8,9,10,11,12),times=4))
+hi_or_med <- rbind(hi_or_med_p2,hi_or_med_p3)
+
+
+
+mydata_results %>% 
+  separate(well,c("well_1","well_2"),sep="-") %>% 
+  tidyr::extract(well_1,"column","^pl[1-8]{1}_[A-H]{1}_([0-9]{1,})_[0-9a-z]{1,}$",remove=FALSE,convert=TRUE) %>% 
+  left_join(hi_or_med,by=c("plate","column")) %>% 
+  filter(!is.na(strength)) %>% 
+  ggplot()+
+  geom_point(aes(well_gr,l_pred_concentration,col=strength))+
+  theme_cowplot()+
+  xlab("Well growth-rate")+
+  ylab("Predicted log-concentration")
+
+mydata_results %>% 
+  separate(well,c("well_1","well_2"),sep="-") %>% 
+  tidyr::extract(well_1,"column","^pl[1-8]{1}_[A-H]{1}_([0-9]{1,})_[0-9a-z]{1,}$",remove=FALSE,convert=TRUE) %>% 
+  left_join(hi_or_med,by=c("plate","column")) %>% 
+  filter(!is.na(strength)) %>% 
+  ggplot()+
+  geom_point(aes(well_gr,log(exp(l_pred_concentration)*well_gr*log(2)),col=strength))+
+  theme_cowplot()+
+  xlab("Well growth-rate")+
+  ylab("Predicted log-production")
+```
+Now let's plot them all in a large PDF
+
+
+```{r}
+mydata_results %>% 
+  ggplot()+
+  geom_point(aes(well_gr,l_pred_concentration,col=condition))+
+  geom_errorbar(aes(x=well_gr,ymin=min_l_pred_concentration,ymax=max_l_pred_concentration))+
+  geom_errorbar(aes(y=l_pred_concentration,xmin=well_gr-sd_well_gr,xmax=well_gr+sd_well_gr))+
+  facet_wrap(~strain,scale="free")+
+  theme_cowplot()+
+  ggsave("./all_promoters.pdf",width=30,height=20)
+```
+
+# LOOKING AT THE PRODUCTION
+
+The question we would like to ask now:
+What is happening there? Are these synthetic promoters seeing the same things or not?
+First maybe... how does that relate to the production?
+Production which is supposed to be at equilibrium: concentration * lambda?
+Which also means that errors should multiply.
+
+```{r}
+mydata_results %>% 
+  mutate(sd_l_concentration=1/2*((max_l_pred_concentration-l_pred_concentration)+(l_pred_concentration-min_l_pred_concentration))) %>% 
+  mutate(sd_concentration=sd_l_concentration*l_pred_concentration) %>% 
+  mutate(sd_production=sd_concentration*well_gr*log(2)+sd_well_gr*log(2)*exp(l_pred_concentration)) %>% 
+  ggplot()+
+  geom_point(aes(well_gr,log(exp(l_pred_concentration)*well_gr*log(2)),col=condition))+
+  geom_errorbar(aes(x=well_gr,ymin=log(exp(l_pred_concentration)*well_gr*log(2)-sd_production),ymax=log(exp(l_pred_concentration)*well_gr*log(2)+sd_production)))+
+  geom_errorbar(aes(y=log(exp(l_pred_concentration)*well_gr*log(2)),xmin=well_gr-sd_well_gr,xmax=well_gr+sd_well_gr))+
+  facet_wrap(~strain,scale="free")+
+  theme_cowplot()+
+  ggsave("./all_promoters_production.pdf",width=30,height=20)
+```
+
+First, let's look only at the hi ones.
+
+# Hi promoters
+
+```{r}
+mydata_results_hi1 <- mydata_results %>% 
+  separate(well,c("well_1","well_2"),sep="-") %>% 
+  tidyr::extract(well_1,"column","^pl[1-8]{1}_[A-H]{1}_([0-9]{1,})_[0-9a-z]{1,}$",remove=FALSE,convert=TRUE) %>% 
+  left_join(hi_or_med,by=c("plate","column")) %>% 
+  filter((strength=="hi")|grepl("pl-hi",strain)) %>% 
+  mutate(sd_l_concentration=1/2*((max_l_pred_concentration-l_pred_concentration)+(l_pred_concentration-min_l_pred_concentration))) %>% 
+  mutate(sd_concentration=sd_l_concentration*l_pred_concentration) %>% 
+  mutate(sd_production=sd_concentration*well_gr*log(2)+sd_well_gr*log(2)*exp(l_pred_concentration)) %>% 
+  mutate(production=exp(l_pred_concentration)*well_gr*log(2))
+```
+
+```{r}
+mydata_results_hi1 %>% 
+  filter(log(production)>8) %>% 
+  group_by(strain) %>% 
+  mutate(max_production=max(production)) %>% 
+  ungroup() %>% 
+  mutate(production_norm=production/max_production) %>% 
+  ggplot()+
+  geom_line(aes(log(well_gr),log(production_norm),group=strain))
+
+mydata_results_hi1 %>% 
+  filter(log(production)>8) %>% 
+  group_by(strain) %>% 
+  mutate(production_factor=mean(production)) %>% 
+  ungroup() %>% 
+  mutate(production_norm=production/production_factor) %>% 
+  ggplot()+
+  geom_point(aes(log(well_gr),log(production_norm),col=condition))+
+  theme_cowplot()+
+  coord_cartesian(xlim=c(-2,1.5),ylim=c(-3,1))
+```
+# Med promoters
+
+```{r}
+mydata_results_med1 <- mydata_results %>% 
+  separate(well,c("well_1","well_2"),sep="-") %>% 
+  tidyr::extract(well_1,"column","^pl[1-8]{1}_[A-H]{1}_([0-9]{1,})_[0-9a-z]{1,}$",remove=FALSE,convert=TRUE) %>% 
+  left_join(hi_or_med,by=c("plate","column")) %>% 
+  filter((strength=="med")|grepl("pl-med",strain)) %>% 
+  mutate(sd_l_concentration=1/2*((max_l_pred_concentration-l_pred_concentration)+(l_pred_concentration-min_l_pred_concentration))) %>% 
+  mutate(sd_concentration=sd_l_concentration*l_pred_concentration) %>% 
+  mutate(sd_production=sd_concentration*well_gr*log(2)+sd_well_gr*log(2)*exp(l_pred_concentration)) %>% 
+  mutate(production=exp(l_pred_concentration)*well_gr*log(2))
+```
+
+
+```{r}
+mydata_results_med1 %>% 
+  filter(log(production)>4) %>% 
+  group_by(strain) %>% 
+  mutate(max_production=max(production)) %>% 
+  ungroup() %>% 
+  mutate(production_norm=production/max_production) %>% 
+  ggplot()+
+  geom_line(aes(log(well_gr),log(production),group=strain))
+
+mydata_results_med1 %>% 
+  filter(log(production)>4) %>% 
+  group_by(strain) %>% 
+  mutate(production_factor=mean(production)) %>% 
+  ungroup() %>% 
+  mutate(production_norm=production/production_factor) %>% 
+  ggplot()+
+  geom_point(aes(log(well_gr),log(production_norm),col=condition))+
+  theme_cowplot()+
+  coord_cartesian(xlim=c(-2,1.5),ylim=c(-3,1))
+```
+
+# LOOKING AT HI AND MED
+
+```{r}
+med_to_plot <- mydata_results_med1 %>% 
+  filter(log(production)>4) %>% 
+  group_by(strain) %>% 
+  mutate(production_factor=mean(production)) %>% 
+  ungroup() %>% 
+  mutate(production_norm=production/production_factor) %>% 
+  mutate(sd_production_norm=sd_production/production_factor)
+
+hi_to_plot <- mydata_results_hi1 %>% 
+  filter(log(production)>8) %>% 
+  group_by(strain) %>% 
+  mutate(production_factor=mean(production)) %>% 
+  ungroup() %>% 
+  mutate(production_norm=production/production_factor) %>% 
+  mutate(sd_production_norm=sd_production/production_factor)
+
+med_to_plot %>% 
+  ggplot()+
+  geom_point(aes(log(well_gr),log(production_norm)),col="blue",alpha=0.2)+
+  geom_point(data=hi_to_plot,aes(log(well_gr),log(production_norm)),col="red",alpha=0.2)+
+  theme_cowplot()
+
+all_normalized <- rbind(
+  hi_to_plot,
+  med_to_plot) %>% 
+  group_by(condition) %>% 
+  mutate(m_production_norm=mean(production_norm)) %>% 
+  mutate(m_well_gr=mean(well_gr)) %>% 
+  ungroup() %>% 
+  distinct(condition,m_production_norm,m_well_gr)
+
+all_data <- rbind(
+  hi_to_plot,
+  med_to_plot)
+
+med_to_plot %>% 
+  ggplot()+
+  geom_point(aes(log(well_gr),log(production_norm)),col="blue",alpha=0.2)+
+  geom_point(data=hi_to_plot,aes(log(well_gr),log(production_norm)),col="red",alpha=0.2)+
+  geom_point(data=all_normalized,aes(log(m_well_gr),log(m_production_norm)),shape="+",col="black",size=10)+
+  theme_cowplot()
+
+med_to_plot %>% 
+  ggplot()+
+  geom_point(aes(well_gr,production_norm),col="blue",alpha=0.2)+
+  geom_point(data=hi_to_plot,aes(well_gr,production_norm),col="red",alpha=0.2)+
+  geom_point(data=all_normalized,aes(m_well_gr,m_production_norm),shape="+",col="black",size=10)+
+  theme_cowplot()+
+  coord_cartesian(ylim=c(0,2.5))
+```
+Adding a model.
+Let's try to fit the model I came up with before.
+The least square method does not work. I will try a maximum likelihood estimation.
+
+```{r}
+# Here is my function
+prod <- function(pars,g){
+  #extract parameters
+  .p0 <- pars[1]
+  .a <- pars[2]
+  .g0 <-pars[3]
+  .n <- pars[4]
+  #prediction
+  p <- .p0*g^(1.4)/(2600+7*.a*(1/(1+(.g0/g)**.n)))
+  return(p)
+}
+```
+
+```{r}
+x_data <- all_data$well_gr
+y_data <- all_data$production_norm
+plot(x_data,y_data)
+curve(prod(c(.p0=4500,.a = 4000 , .g0 = 3, .n = 3), x), 0, 2.5,add=TRUE)
+```
+
+Ok now we can proceed with the log-likelihood maximization. We are going to assume some gaussian noise...
+
+```{r}
+data <- data.frame(g=x_data,p=y_data)
+
+NLL = function(pars, data) {
+  # Values predicted by the model
+  prod_pred = prod(pars, data$g)
+  # Negative log-likelihood 
+  -sum(dnorm(x = data$p, mean = prod_pred, sd = pars[5], log = TRUE))
+}
+
+par0 <- c(.p=4500,.a=4000,.g0=3,.n=3,.sd=0.3)
+fit = optim(par = par0, fn = NLL, data = data, control = list(parscale = abs(par0)), 
+            hessian = TRUE)
+
+final_pars <- fit$par
+```
+
+Let's plot the results
+
+```{r}
+# Using ggplot
+prod_optim <- function(.x){
+  return(prod(final_pars,.x))
+}
+
+pred_prod <- sapply(x_data,prod_optim)
+result_df <- tibble(well_gr=x_data,production_norm=y_data,production_norm_pred=pred_prod)
+
+result_df %>% 
+  ggplot()+
+  geom_point(aes(well_gr,production_norm),alpha=0.1)+
+  geom_line(aes(well_gr,production_norm_pred),col="red")+
+  coord_cartesian(xlim=c(0,2.5),ylim=c(-0.1,3))+
+  theme_cowplot()+
+  xlab("Growth rate h-1")+
+  ylab("Normalized production")
+```
+
+```{r}
+all_data_residual <- all_data%>% 
+  mutate(production_norm_pred=prod(final_pars,well_gr),
+         residual_production=production_norm-production_norm_pred)
+
+all_data_residual %>% 
+  ggplot()+
+  geom_point(aes(well_gr,residual_production),alpha=0.1)+
+  #geom_line(aes(well_gr,residual_production),col="red")+
+  #coord_cartesian(xlim=c(0,2.5),ylim=c(-0.1,3))+
+  theme_cowplot()+
+  xlab("Growth rate h-1")+
+  ylab("Residual production")
+
+```
+So the higher you grow... the noisier it gets.
+
+```{r}
+all_data_residual %>% 
+  ggplot()+
+  geom_point(aes(well_gr,residual_production,col=condition))+
+  #geom_errorbar(aes(x=well_gr,ymin=log(exp(l_pred_concentration)*well_gr*log(2)-sd_production),ymax=log(exp(l_pred_concentration)*well_gr*log(2)+sd_production)))+
+  #geom_errorbar(aes(y=log(exp(l_pred_concentration)*well_gr*log(2)),xmin=well_gr-sd_well_gr,xmax=well_gr+sd_well_gr))+
+  facet_wrap(~strain,scale="free")+
+  theme_cowplot()+
+  ggsave("./all_promoters_residual_production.pdf",width=30,height=20)
+```
+
+# DISCUSSING THE PARAMETERS
+
+```{r}
+final_pars
+
+prod <- function(pars,g){
+  #extract parameters
+  .p0 <- pars[1]
+  .a <- pars[2]
+  .g0 <-pars[3]
+  .n <- pars[4]
+  #prediction
+  p <- .p0*g^(1.4)/(2600+7*.a*(1/(1+(.g0/g)**.n)))
+  return(p)
+}
+```
+Where (.p)*(well_gr)^1.4 is supposed to be how free concentration of RNA pol changes with the growth rate.
+
+
+# FINDING DESCRIPTIVE VARIABLES OF THE DATA SET
+
+Slope of the increase in concentration with the growth rate from acetate to glucose.
+Fold change from glucose to gluose aa.
+Average level of expression.
+
+What I am going to do first:
+- Replot the plots, with lines.
+
+```{r}
+library(RColorBrewer)
+# Définissez le nombre de couleurs que vous voulez
+nb.cols <- 70
+mycolors <- colorRampPalette(brewer.pal(9, "Set1"))(nb.cols)
+
+mydata_results %>% 
+  separate(well,c("well_1","well_2"),sep="-") %>% 
+  tidyr::extract(well_1,"column","^pl[1-8]{1}_[A-H]{1}_([0-9]{1,})_[0-9a-z]{1,}$",remove=FALSE,convert=TRUE) %>% 
+  left_join(hi_or_med,by=c("plate","column")) %>% 
+  filter(!is.na(strength)) %>% 
+  filter(strength=="med") %>% 
+  ggplot()+
+  geom_line(aes(well_gr,log(exp(l_pred_concentration)*well_gr*log(2)),col=strain),alpha=0.5)+
+  theme_cowplot()+
+  scale_color_manual(values = mycolors)+
+  xlab("Well growth-rate")+
+  ylab("Predicted log-production")+
+  theme(legend.position = "none")
+```
+
+```{r}
+library(RColorBrewer)
+# Définissez le nombre de couleurs que vous voulez
+nb.cols <- 72
+mycolors <- colorRampPalette(brewer.pal(9, "Set1"))(nb.cols)
+
+mydata_results %>% 
+  separate(well,c("well_1","well_2"),sep="-") %>% 
+  tidyr::extract(well_1,"column","^pl[1-8]{1}_[A-H]{1}_([0-9]{1,})_[0-9a-z]{1,}$",remove=FALSE,convert=TRUE) %>% 
+  left_join(hi_or_med,by=c("plate","column")) %>% 
+  filter(!is.na(strength)) %>% 
+  filter(strength=="hi") %>% 
+  ggplot()+
+  geom_line(aes(well_gr,log(exp(l_pred_concentration)*well_gr*log(2)),col=strain),alpha=0.5)+
+  theme_cowplot()+
+  scale_color_manual(values = mycolors)+
+  xlab("Well growth-rate")+
+  ylab("Predicted log-production")+
+  theme(legend.position = "none")
+```
+
+
+Hard to see anything there, I will instead try to see something frome normalized values.
+
+```{r}
+library(RColorBrewer)
+# Définissez le nombre de couleurs que vous voulez
+nb.cols <- 72
+mycolors <- colorRampPalette(brewer.pal(9, "Set1"))(nb.cols)
+
+mydata_results_med1 %>% 
+  filter(log(production)>4) %>% 
+  group_by(strain) %>% 
+  mutate(production_factor=mean(production)) %>% 
+  ungroup() %>% 
+  mutate(production_norm=production/production_factor) %>% 
+  ggplot()+
+  geom_line(aes(log(well_gr),log(production_norm),col=strain,group=strain),alpha=0.4)+
+  theme_cowplot()+
+  scale_color_manual(values = mycolors)+
+  coord_cartesian(xlim=c(-2,1.5),ylim=c(-3,1))+
+  theme(legend.position = "none")+
+  xlab("log(growth-rate)")+
+  ylab("log(normalized production)")
+```
+Impossible to say anything like this.
+So I should prepare some code that takes as an argument, a function to model all these curves. Either with linear, or other more complex functions.
+
+Using the code wrote in the past. We write three functions according to which, the production can increase of decrease with the growth rate.
+
+```{r}
+# Here is my function
+prod_relieved_repression <- function(pars,.x){
+  #extract parameters
+  .p0 <- pars[1]
+  .a <- pars[2]
+  .g0 <-pars[3]
+  .n <- pars[4]
+  #prediction
+  .y <- .p0*.x^(1.4)/(2600+7*.a*(1/(1+(.g0/.x)**.n)))
+  return(.y)
+}
+
+prod_linear <- function(pars,.x){
+  #.y=.s.x+.i
+  .s <- pars[1]
+  .i <- pars[2]
+  .y <- .s*.x+.i
+  return(.y)
+}
+
+prod_mm <- function(pars,.x){
+  #.y=.y_max*(.x)**(.n)/((.x)**(.n)+.k)
+  .n <- 1.4
+  .ymax <- pars[1]
+  .k <- pars[2]
+  
+  .y <- .y_max*(.x)**(.n)/((.x)**(.n)+.k)
+  return(.y)
+}
+
+```
+
+Now, let's focus on prod_mm for a start. We want to determine likeable initial parameters.
+.ymax can be approached by taking the mean value in glucose.
+.k, can be approached using the point where, y ~ .ymax/2
+
+
+# APPLYING MLE FOR MULTIPLE MODELS
+
+# Linear model for production
+
+```{r}
+# First we declare the function that predicts the results
+model <- function(pars,.x){
+  #.y=.s.x+.i
+  .s <- pars[1]
+  .i <- pars[2]
+  .y <- .s*.x+.i
+  return(.y)
+}
+
+# Then we declare the log likelihood function that is to be minimized
+NLL <-  function(.pars, data) {
+  # Values predicted by the model
+  pred = model(.pars, data$well_gr)
+  # Negative log-likelihood 
+  -sum(dnorm(x = data$production_norm, mean = pred, sd = .pars[3], log = TRUE))
+}
+
+#From acetate to glucose only
+modeled_data <- all_data %>%
+  filter(condition != "glucoseaa") %>% 
+  group_by(strain) %>% 
+  do((function(.df){
+    
+     .new_df <- .df %>% 
+       mutate(s=compute_slope_errxy(well_gr,production_norm),
+              i=compute_intercept_errxy(well_gr,production_norm),
+              production_norm_pred=s*well_gr+i)
+    return(.new_df)})(.)) %>% 
+    ungroup()
+```
+
+Comparing the results and the data!
+How many of them were correctly modelled?
+```{r}
+all_data %>% 
+  distinct(strain) %>% 
+  count()
+
+modeled_data %>% 
+  distinct(strain) %>% 
+  count()
+
+#One strain is posing problems...
+```
+
+```{r}
+modeled_data %>% 
+  ggplot()+
+  geom_line(aes(well_gr,production_norm_pred),col="red")+
+  geom_point(aes(well_gr,production_norm,col=condition))+
+  geom_errorbarh(aes(y=production_norm,xmin=well_gr-sd_well_gr,xmax=well_gr+sd_well_gr))+
+  geom_errorbar(aes(x=well_gr,ymin=production_norm-sd_production_norm,ymax=production_norm+sd_production_norm))+
+  facet_wrap(~strain,scale="free")+
+  theme_cowplot()+
+  ggsave("./all_promoters_norm_production_prediction_linear.pdf",width=30,height=20)
+```
+
+Let's now compute the what extent promoters are going down between glucose and glucose aa. The best way is simply to take all data again and compute the difference between the mean values.
+
+```{r}
+glu_gluaa_data <- all_data %>% 
+  filter(condition %in% c("glucose","glucoseaa")) %>% 
+  group_by(strain,condition) %>% 
+  mutate(m_production_norm=mean(production_norm,na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  select(strain,condition,m_production_norm) %>% 
+  distinct(strain,condition,.keep_all = TRUE) %>% 
+  arrange(strain) %>% 
+  pivot_wider(names_from = condition,values_from=m_production_norm) %>% 
+  mutate(delta=glucoseaa-glucose) %>% 
+  select(strain,delta)
+```
+
+Third variable, would be the average production
+
+```{r}
+average_data <- all_data %>% 
+  filter(condition %in% c("acetate","glycerol","glucose")) %>% 
+  group_by(strain) %>% 
+  mutate(m_production_all=mean(production)) %>% 
+  ungroup() %>% 
+  distinct(strain,strength,m_production_all)
+```
+
+Now let's take a look at these all together
+
+```{r}
+corr_analysis_df <- modeled_data %>% 
+  distinct(strain,s) %>% 
+  left_join(glu_gluaa_data,by=c("strain")) %>% 
+  left_join(average_data,by=c("strain"))
+```
+
+What is the structure of the correlations there?
+
+```{r}
+corr_analysis_df %>% 
+  filter(strength %in% c("med","hi")) %>% 
+  ggplot()+
+  geom_point(aes(s,delta,col=strength))+
+  ggpubr::stat_cor(aes(s,delta))+
+  geom_hline(aes(yintercept=0))+
+  theme_cowplot()+
+  xlab("Production slope from acetate to glucose")+
+  ylab("Production difference glucose aa - glucose")
+
+corr_analysis_df %>% 
+  filter(strength %in% c("med","hi")) %>% 
+  ggplot()+
+  geom_point(aes(s,delta,col=strength))+
+  ggpubr::stat_cor(aes(s,delta))+
+  geom_hline(aes(yintercept=0))+
+  facet_wrap(~strength,scale="free")+
+  theme_cowplot()+
+  xlab("Production slope from acetate to glucose")+
+  ylab("Production difference glucose aa - glucose")
+```
+
+So the faster the slope, relative to your average level, the more important the decrease between glucose aa and glucose. Which also makes sense and it is probably driven by the amount of production in glucose. The higher you are going to be in glucose, the higher you are likely to fall, after glucose. So I do not know if this is something really interesting in the end.
+
+```{r}
+corr_analysis_df %>% 
+  filter(strength %in% c("med","hi")) %>% 
+  filter(!((m_production_all>10000) & (strength=="med"))) %>% 
+  ggplot()+
+  geom_point(aes(m_production_all,s))+
+  ggpubr::stat_cor(aes(m_production_all,s))+
+  facet_wrap(~strength,scale="free")+
+  #geom_hline(aes(yintercept=0))+
+  theme_cowplot()+
+  xlab("Mean production level")+
+  ylab("Production slope from acetate to glucose")
+```
+
+It also appears clearly that the higher is your production level, the slower your production increases.
+
+```{r}
+corr_analysis_df %>% 
+  filter(strength %in% c("med","hi")) %>% 
+  filter(!((m_production_all>10000) & (strength=="med"))) %>% 
+  ggplot()+
+  geom_point(aes(m_production_all,delta,col=strength))+
+  ggpubr::stat_cor(aes(m_production_all,delta))+
+  #facet_wrap(~strength,scale="free")+
+  #geom_hline(aes(yintercept=0))+
+  theme_cowplot()+
+  xlab("Mean production level")+
+  ylab("Production difference glucose aa - glucose")
+
+corr_analysis_df %>% 
+  filter(strength %in% c("med","hi")) %>% 
+  filter(!((m_production_all>10000) & (strength=="med"))) %>% 
+  ggplot()+
+  geom_point(aes(m_production_all,delta,col=strength))+
+  ggpubr::stat_cor(aes(m_production_all,delta))+
+  facet_wrap(~strength,scale="free")+
+  #geom_hline(aes(yintercept=0))+
+  theme_cowplot()+
+  xlab("Mean production level")+
+  ylab("Production difference glucose aa - glucose")
+```
+
+Quite interestingly, the production difference, does not depend on the production level. You can be high or low... it does now change the scaled difference. In other words. If things were not normalized, they would certainly scale...
+
+Maybe the most interesting there, is that we can easily fit all promoters with a line bewteen acetate and glucose, reasonably well.
+
+Now, maybe I should not scale anything. The same analysis can be performed, by simply looking at the values.
+
+# LINEAR MODEL ON RAW PRODUCTION
+
+```{r}
+# First we declare the function that predicts the results
+model <- function(pars,.x){
+  #.y=.s.x+.i
+  .s <- pars[1]
+  .i <- pars[2]
+  .y <- .s*.x+.i
+  return(.y)
+}
+
+# Then we declare the log likelihood function that is to be minimized
+NLL <-  function(.pars, data) {
+  # Values predicted by the model
+  pred = model(.pars, data$well_gr)
+  # Negative log-likelihood 
+  -sum(dnorm(x = data$production, mean = pred, sd = .pars[3], log = TRUE))
+}
+
+#From acetate to glucose only
+modeled_data <- all_data %>%
+  filter(condition != "glucoseaa") %>% 
+  group_by(strain) %>% 
+  do((function(.df){
+    
+     .new_df <- .df %>% 
+       mutate(s=compute_slope_errxy(well_gr,production),
+              i=compute_intercept_errxy(well_gr,production),
+              production_pred=s*well_gr+i)
+    return(.new_df)})(.)) %>% 
+    ungroup()
+```
+
+Comparing the results and the data!
+How many of them were correctly modelled?
+```{r}
+all_data %>% 
+  distinct(strain) %>% 
+  count()
+
+modeled_data %>% 
+  distinct(strain) %>% 
+  count()
+
+#One strain is posing problems...
+```
+
+```{r}
+modeled_data %>% 
+  ggplot()+
+  geom_line(aes(well_gr,production_pred),col="red")+
+  geom_point(aes(well_gr,production,col=condition))+
+  geom_errorbarh(aes(y=production,xmin=well_gr-sd_well_gr,xmax=well_gr+sd_well_gr))+
+  geom_errorbar(aes(x=well_gr,ymin=production-sd_production,ymax=production+sd_production))+
+  facet_wrap(~strain,scale="free")+
+  theme_cowplot()+
+  ggsave("./all_promoters_production_prediction_linear.pdf",width=30,height=20)
+```
+
+Let's now compute the what extent promoters are going down between glucose and glucose aa. The best way is simply to take all data again and compute the difference between the mean values.
+
+```{r}
+glu_gluaa_data <- all_data %>% 
+  filter(condition %in% c("glucose","glucoseaa")) %>% 
+  group_by(strain,condition) %>% 
+  mutate(m_production=mean(production,na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  select(strain,condition,m_production) %>% 
+  distinct(strain,condition,.keep_all = TRUE) %>% 
+  arrange(strain) %>% 
+  pivot_wider(names_from = condition,values_from=m_production) %>% 
+  mutate(delta=glucoseaa-glucose) %>% 
+  select(strain,delta)
+```
+
+Third variable, would be the average production
+
+```{r}
+average_data <- all_data %>% 
+  filter(condition %in% c("acetate","glycerol","glucose")) %>% 
+  group_by(strain) %>% 
+  mutate(m_production_all=mean(production)) %>% 
+  ungroup() %>% 
+  distinct(strain,strength,m_production_all)
+```
+
+Now let's take a look at these all together
+
+```{r}
+corr_analysis_df <- modeled_data %>% 
+  distinct(strain,s) %>% 
+  left_join(glu_gluaa_data,by=c("strain")) %>% 
+  left_join(average_data,by=c("strain"))
+```
+
+What is the structure of the correlations there?
+
+```{r}
+corr_analysis_df %>% 
+  filter(strength %in% c("med","hi")) %>% 
+  ggplot()+
+  geom_point(aes(s,delta,col=strength))+
+  ggpubr::stat_cor(aes(s,delta))+
+  geom_hline(aes(yintercept=0))+
+  theme_cowplot()+
+  xlab("Production slope from acetate to glucose")+
+  ylab("Production difference glucose aa - glucose")
+
+corr_analysis_df %>% 
+  filter(strength %in% c("med","hi")) %>% 
+  ggplot()+
+  geom_point(aes(s,delta,col=strength))+
+  ggpubr::stat_cor(aes(s,delta))+
+  geom_hline(aes(yintercept=0))+
+  facet_wrap(~strength,scale="free")+
+  theme_cowplot()+
+  xlab("Production slope from acetate to glucose")+
+  ylab("Production difference glucose aa - glucose")
+```
+
+So the faster the slope, relative to your average level, the more important the decrease between glucose aa and glucose. Which also makes sense and it is probably driven by the amount of production in glucose. The higher you are going to be in glucose, the higher you are likely to fall, after glucose. So I do not know if this is something really interesting in the end.
+
+```{r}
+corr_analysis_df %>% 
+  filter(strength %in% c("med","hi")) %>% 
+  ggplot()+
+  geom_point(aes(m_production_all,s))+
+  ggpubr::stat_cor(aes(m_production_all,s))+
+  facet_wrap(~strength,scale="free")+
+  #geom_hline(aes(yintercept=0))+
+  theme_cowplot()+
+  xlab("Mean production level")+
+  ylab("Production slope from acetate to glucose")
+```
+
+The production slope correlates very well, with the mean production level. Meaning that the more you produce in general, the better you are going to be at increasing the amount you produce with the growth rate. But that could be due to one condition, that's much higher than the others. is it varying all together.
+
+```{r}
+corr_analysis_df %>% 
+  filter(strength %in% c("med","hi")) %>% 
+  ggplot()+
+  geom_point(aes(m_production_all,s,col=strength))+
+  ggpubr::stat_cor(aes(m_production_all,s))+
+  #facet_wrap(~strength,scale="free")+
+  #geom_hline(aes(yintercept=0))+
+  theme_cowplot()+
+  xlab("Mean production level")+
+  ylab("Production slope from acetate to glucose")
+
+corr_analysis_df %>% 
+  filter(strength %in% c("med","hi")) %>% 
+  ggplot()+
+  geom_point(aes(log(m_production_all),log(s),col=strength))+
+  ggpubr::stat_cor(aes(log(m_production_all),log(s)))+
+  #facet_wrap(~strength,scale="free")+
+  #geom_hline(aes(yintercept=0))+
+  theme_cowplot()+
+  xlab("Mean production level (log)")+
+  ylab("Production slope from acetate to glucose (log)")
+
+unique(compute_slope_errxy(log(corr_analysis_df$m_production_all),log(corr_analysis_df$s)))
+unique(compute_sdslope_errxy(log(corr_analysis_df$m_production_all),log(corr_analysis_df$s)))
+```
+
+There is, clearly, a linear relationship, between the production slope and the mean production level.
+
+```{r}
+corr_analysis_df %>% 
+  filter(strength %in% c("med","hi")) %>% 
+  ggplot()+
+  geom_point(aes(m_production_all,delta,col=strength))+
+  ggpubr::stat_cor(aes(m_production_all,delta))+
+  #facet_wrap(~strength,scale="free")+
+  #geom_hline(aes(yintercept=0))+
+  theme_cowplot()+
+  xlab("Mean production level")+
+  ylab("Production difference glucose aa - glucose")
+
+corr_analysis_df %>% 
+  filter(strength %in% c("med","hi")) %>% 
+  ggplot()+
+  geom_point(aes(m_production_all,delta,col=strength))+
+  ggpubr::stat_cor(aes(m_production_all,delta))+
+  facet_wrap(~strength,scale="free")+
+  #geom_hline(aes(yintercept=0))+
+  theme_cowplot()+
+  xlab("Mean production level")+
+  ylab("Production difference glucose aa - glucose")
+```
+
+But... the decrease in glucose amino-acid production does not correlate with anything.
+Why? What is hapenning?
+
+First maybe, would be interesting. What is happening in terms of mean expression. The slope is higher with higher mean. Is it driven by: a) glycerol and glucose values which are simply higher? b) a combination of everything goes higher and the difference is bigger? Let's plot, acetate, glycerol and glucose results, as a function of mean expression level.
+
+If everything can be fitted to a straight line, we can use mean values in acetate and glucose. And plot delta versus mean_production.
+
+```{r}
+ace_glu_data <- all_data %>% 
+  filter(condition %in% c("acetate","glycerol","glucose")) %>% 
+  group_by(strain,condition) %>% 
+  mutate(m_production_cond=mean(production,na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  select(strain,strength,condition,m_production_cond)
+```
+
+```{r}
+average_data <- all_data %>%
+  filter(condition %in% c("acetate","glycerol","glucose")) %>% 
+  group_by(strain) %>% 
+  mutate(m_production=mean(production,na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  distinct(strain,strength,m_production)
+```
+
+```{r}
+list_of_strains <- average_data %>% 
+  arrange(m_production) %>% 
+  mutate(i=row_number()) %>% 
+  distinct(strain,i)
+
+ace_glu_data %>% 
+  left_join(list_of_strains,by=c("strain")) %>% 
+  filter(strength %in% c("med","hi")) %>% 
+  ggplot() +
+  geom_point(aes(i,m_production_cond,col=condition))+
+  theme_cowplot()+
+  xlab("Ranking (mean production)")+
+  ylab("Production")
+
+ace_glu_data %>% 
+  left_join(list_of_strains,by=c("strain")) %>% 
+  filter(strength %in% c("med","hi")) %>% 
+  ggplot() +
+  geom_point(aes(i,log(m_production_cond),col=condition))+
+  theme_cowplot()+
+  xlab("Ranking (mean production)")+
+  ylab("Production")
+```
+
+```{r}
+average_data <- all_data %>%
+  filter(condition %in% c("acetate","glycerol","glucose")) %>% 
+  group_by(strain) %>% 
+  mutate(m_production=mean(production,na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  distinct(strain,strength,m_production)
+```
+
+```{r}
+list_of_strains <- average_data %>% 
+  arrange(m_production) %>% 
+  mutate(i=row_number()) %>% 
+  distinct(strain,i)
+
+ace_glu_data <- all_data %>% 
+  filter(condition %in% c("acetate","glycerol","glucose","glucoseaa")) %>% 
+  group_by(strain,condition) %>% 
+  mutate(m_production_cond=mean(production,na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  select(strain,strength,condition,m_production_cond)
+
+ace_glu_data %>% 
+  left_join(list_of_strains,by=c("strain")) %>% 
+  filter(strength %in% c("med","hi")) %>% 
+  ggplot() +
+  geom_point(aes(i,m_production_cond,col=condition))+
+  theme_cowplot()
+
+ace_glu_data %>% 
+  left_join(list_of_strains,by=c("strain")) %>% 
+  filter(strength %in% c("med","hi")) %>% 
+  ggplot() +
+  geom_point(aes(i,log(m_production_cond),col=condition))+
+  theme_cowplot()
+```
+
+
+So both are increasing, but glucose is increasing faster. Which explains this overall trend.
+Now... what we would need to explain is: why are there on this exponential trend?
+
+Now, let's look at the correlation between the mean level in glucose/glycerol/acetate. My idea being: knowing the magnitude in a given condition, is all you need, to know how promoter production is changing with respect to different growth rates.
+
+```{r}
+average_data <- all_data %>%
+  filter(condition %in% c("acetate","glycerol","glucose")) %>% 
+  group_by(strain) %>% 
+  mutate(m_production_all=mean(production,na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  distinct(strain,strength,m_production_all)
+
+average_data_cond <- all_data %>%
+  filter(condition %in% c("acetate","glycerol","glucose")) %>% 
+  group_by(strain,condition) %>% 
+  mutate(m_production_cond=mean(production,na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  distinct(strain,condition,strength,m_production_cond)
+
+average_data_cond %>%
+  left_join(average_data,by=c("strain","strength")) %>% 
+  ggplot()+
+  geom_point(aes(m_production_all,m_production_cond))+
+  ggpubr::stat_cor(aes(m_production_all,m_production_cond))+
+  facet_wrap(~condition,scale="free")+
+  theme_cowplot()
+```
+
+So clearly, if one knows, your production in glucose or glycerol. Then the amount of increase in production from acetate to glucose is also known. And this increase is, to large extent linear.
+
+If, the production is increasing linearly with the growth rate... I would expect the concentration to be constant with the growth rate too. Is it the case?
+
+
+# LOOKING AT THE CONCENTRATION FROM ACETATE TO GLUCOSE
+
+```{r}
+all_data <- rbind(
+  hi_to_plot,
+  med_to_plot)
+
+all_data <- all_data %>% 
+  mutate(concentration=exp(l_pred_concentration))
+```
+
+Modeling how concentration is changing from acetate to glucose
+
+```{r}
+#From acetate to glucose only
+modeled_data <- all_data %>%
+  filter(condition != "glucoseaa") %>% 
+  group_by(strain) %>% 
+  do((function(.df){
+     .new_df <- .df %>% 
+       mutate(s=compute_slope_errxy_robust(well_gr,concentration),
+              i=compute_intercept_errxy_robust(well_gr,concentration),
+              concentration_pred=s*well_gr+i)
+    return(.new_df)})(.)) %>% 
+    ungroup()
+```
+
+Comparing the results and the data!
+How many of them were correctly modeled?
+
+```{r}
+all_data %>% 
+  distinct(strain) %>% 
+  count()
+
+modeled_data %>% 
+  distinct(strain) %>% 
+  count()
+
+#One strain is posing problems...
+```
+
+```{r}
+modeled_data %>% 
+  ggplot()+
+  geom_point(aes(well_gr,concentration_pred),col="red")+
+  geom_point(aes(well_gr,concentration),col="black")+
+  facet_wrap(~strain,scale="free")+
+  theme_cowplot()+
+  ggsave("./all_promoters_concentration_prediction_linear.pdf",width=30,height=20)
+```
+
+Ok... so the problem is that depending on the sign of the best slope, I have two different formulas... This is a problem. I can keep both... and then check which one is giving me the best RMSD I guess. 
+
+# INVESTIGATING CORRELATION BETWEEN CONCENTRATION AND GROWTH RATE
+For instance, glucose
+
+```{r}
+mydata_results %>% 
+  filter(condition=="glucose") %>% 
+  filter(strain %in% c("pl-hi1","pl-rrnB","ch-hi1","ch-rrnB")) %>%
+  ggplot()+
+  geom_point(aes(log(well_gr),l_pred_concentration))+
+  ggpubr::stat_cor(aes(log(well_gr),l_pred_concentration))+
+  facet_wrap(~strain,scale="free")
+```
+
+The fact is that we are seeing quite different correlation patterns depending on if we are in... chromosome or plasmid. And we do not have so many data points.
+
+# LOOKING AT THE RANKING
+
+```{r}
+average_data <- all_data %>%
+  filter(condition %in% c("acetate","glycerol","glucose","glucoseaa")) %>% 
+  group_by(strain,condition) %>% 
+  mutate(m_production=mean(production,na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  distinct(strain,strength,m_production,condition) %>% 
+  pivot_wider(values_from=m_production,names_from=condition) %>% 
+  arrange(glucose) %>% 
+  mutate(glu=row_number()) %>% 
+  arrange(glycerol) %>% 
+  mutate(gly=row_number()) %>% 
+  arrange(glucoseaa) %>% 
+  mutate(gluaa=row_number()) %>% 
+  arrange(acetate) %>% 
+  mutate(ace=row_number())
+
+average_data %>% 
+  ggplot()+
+  geom_point(aes(glu,gly,col=strength))
+
+average_data %>% 
+  ggplot()+
+  geom_point(aes(gly,ace,col=strength))
+
+average_data %>% 
+  ggplot()+
+  geom_point(aes(glu,ace,col=strength))
+
+average_data %>% 
+  ggplot()+
+  geom_point(aes(gluaa,glu,col=strength))
+
+average_data %>% 
+  ggplot()+
+  geom_point(aes(gluaa,gly,col=strength))
+
+average_data %>% 
+  ggplot()+
+  geom_point(aes(gluaa,ace,col=strength))
+
+```
+# LINEAR MODELING, AND LOOKING AT THE LOG INSTEAD OF RAW PRODUCTION
+
+Just to be sure, importing the data again, including all promoters (ribosomal too).
+
+```{r}
+hi_or_med_p2 <- tibble(plate=rep(c("pl1","pl3","pl5","pl7"),each=6),strength=rep(rep(c("med","hi"),each=3),times=4),column=rep(c(7,8,9,10,11,12),times=4))
+hi_or_med_p3 <- tibble(plate=rep(c("pl2","pl4","pl6","pl8"),each=12),strength=rep(rep(c("med","hi"),each=3),times=8),column=rep(c(1,2,3,4,5,6,7,8,9,10,11,12),times=4))
+hi_or_med <- rbind(hi_or_med_p2,hi_or_med_p3)
+type_rib_df <- tibble(strain=c("pl-rplN","pl-rpmB","pl-rrnB","pl-rpsB","ch-rrnB","ch-rplN","ch-rpmB","ch-rpsB"),type=rep(c("rib"),times=8))
+
+mydata_results %>% 
+  ungroup() %>% 
+  separate(well,c("well_1","well_2"),sep="-") %>% 
+  tidyr::extract(well_1,"column","^pl[1-8]{1}_[A-H]{1}_([0-9]{1,})_[0-9a-z]{1,}$",remove=FALSE,convert=TRUE) %>% 
+  left_join(hi_or_med,by=c("plate","column")) %>% 
+  left_join(type_rib_df,by=c("strain")) %>%
+  mutate(strength=ifelse(grepl("med",strain)==TRUE,"med",strength)) %>% 
+  mutate(strength=ifelse(grepl("hi",strain)==TRUE,"hi",strength)) %>%
+  mutate(type=ifelse(is.na(type)==TRUE,strength,type)) %>% 
+  ggplot()+
+  geom_point(aes(well_gr,l_pred_concentration,col=type))+
+  theme_cowplot()+
+  xlab("Well growth-rate")+
+  ylab("Predicted log-concentration")
+```
+
+```{r}
+mydata_results %>% 
+  ungroup() %>% 
+  separate(well,c("well_1","well_2"),sep="-") %>% 
+  tidyr::extract(well_1,"column","^pl[1-8]{1}_[A-H]{1}_([0-9]{1,})_[0-9a-z]{1,}$",remove=FALSE,convert=TRUE) %>% 
+  left_join(hi_or_med,by=c("plate","column")) %>% 
+  left_join(type_rib_df,by=c("strain")) %>%
+  mutate(strength=ifelse(grepl("med",strain)==TRUE,"med",strength)) %>% 
+  mutate(strength=ifelse(grepl("hi",strain)==TRUE,"hi",strength)) %>% 
+  mutate(type=ifelse(is.na(type)==TRUE,strength,type)) %>% 
+  ggplot()+
+  geom_point(aes(well_gr,log(exp(l_pred_concentration)*well_gr*log(2)),col=type))+
+  theme_cowplot()+
+  xlab("Well growth-rate")+
+  ylab("Predicted log-production")
+```
+
+After meeting of the 29th of June 2021.
+
+```{r}
+mydata_results_all <- mydata_results %>% 
+  ungroup() %>% 
+  separate(well,c("well_1","well_2"),sep="-") %>% 
+  tidyr::extract(well_1,"column","^pl[1-8]{1}_[A-H]{1}_([0-9]{1,})_[0-9a-z]{1,}$",remove=FALSE,convert=TRUE) %>% 
+  left_join(hi_or_med,by=c("plate","column")) %>% 
+  left_join(type_rib_df,by=c("strain")) %>%
+  mutate(strength=ifelse(grepl("med",strain)==TRUE,"med",strength)) %>% 
+  mutate(strength=ifelse(grepl("hi",strain)==TRUE,"hi",strength)) %>% 
+  mutate(type=ifelse(is.na(type)==TRUE,strength,type)) %>% 
+  mutate(sd_l_concentration=1/2*((max_l_pred_concentration-l_pred_concentration)+(l_pred_concentration-min_l_pred_concentration))) %>% 
+  mutate(sd_concentration=sd_l_concentration*l_pred_concentration) %>% 
+  mutate(sd_production=sd_concentration*well_gr*log(2)+sd_well_gr*log(2)*exp(l_pred_concentration)) %>% 
+  mutate(production=exp(l_pred_concentration)*well_gr*log(2)) %>% 
+  filter(!((log(production)<4)&(strength=="med"))) %>% 
+  filter(!((log(production)<8)&(strength=="hi")))
+```
+
+```{r}
+#From acetate to glucose only
+modeled_data_ace_glu <- mydata_results_all %>%
+  filter(condition != "glucoseaa") %>% 
+  mutate(l_production=log(production)) %>% 
+  mutate(sd_l_production=sd_production/production) %>% 
+  group_by(strain) %>% 
+  do((function(.df){
+     .new_df <- .df %>% 
+       mutate(s=compute_slope_errxy_robust(well_gr,l_production),
+              e=compute_sdslope_errxy_robust(well_gr,l_production),
+              i=mean(l_production)-s*mean(well_gr),
+              i_min=mean(l_production)-(s+e)*mean(well_gr),
+              i_max=mean(l_production)-(s-e)*mean(well_gr),
+              l_production_pred=s*well_gr+i,
+              l_production_pred_min=(s+e)*well_gr+i_min,
+              l_production_pred_max=(s-e)*well_gr+i_max)
+    return(.new_df)})(.)) %>% 
+    ungroup()
+
+modeled_data_glu_gluaa <- mydata_results_all %>%
+  filter(condition %in% c("glucose","glucoseaa")) %>% 
+  mutate(l_production=log(production)) %>% 
+  mutate(sd_l_production=sd_production/production) %>% 
+  group_by(strain) %>% 
+  do((function(.df){
+     .new_df <- .df %>% 
+       mutate(s=compute_slope_errxy_robust(well_gr,l_production),
+              e=compute_sdslope_errxy_robust(well_gr,l_production),
+              i=mean(l_production)-s*mean(well_gr),
+              i_min=mean(l_production)-(s+e)*mean(well_gr),
+              i_max=mean(l_production)-(s-e)*mean(well_gr),
+              l_production_pred=s*well_gr+i,
+              l_production_pred_min=(s+e)*well_gr+i_min,
+              l_production_pred_max=(s-e)*well_gr+i_max)
+    return(.new_df)})(.)) %>% 
+    ungroup()
+```
+
+Comparing the results and the data!
+How many of them were correctly modeled?
+
+```{r}
+mydata_results_all %>% 
+  distinct(strain) %>% 
+  count()
+
+mydata_results_all %>% 
+  distinct(strain) %>% 
+  count()
+
+#One strain is posing problems...
+```
+
+```{r}
+modeled_data_ace_glu %>% 
+  ggplot()+
+  geom_line(aes(well_gr,l_production_pred),col="red")+
+  geom_line(aes(well_gr,l_production_pred_min),col="green")+
+  geom_line(aes(well_gr,l_production_pred_max),col="blue")+
+  geom_point(aes(well_gr,l_production,col=condition))+
+  geom_errorbarh(aes(y=l_production,xmin=well_gr-sd_well_gr,xmax=well_gr+sd_well_gr))+
+  geom_errorbar(aes(x=well_gr,ymin=l_production-sd_l_production,ymax=l_production+sd_l_production))+
+  facet_wrap(~strain,scale="free")+
+  theme_cowplot()+
+  ggsave("./all_promoters_l_production_prediction_linear_ace_glu.pdf",width=30,height=20)
+
+modeled_data_glu_gluaa %>% 
+  ggplot()+
+  geom_line(aes(well_gr,l_production_pred),col="red")+
+  geom_line(aes(well_gr,l_production_pred_min),col="green")+
+  geom_line(aes(well_gr,l_production_pred_max),col="blue")+
+  geom_point(aes(well_gr,l_production,col=condition))+
+  geom_errorbarh(aes(y=l_production,xmin=well_gr-sd_well_gr,xmax=well_gr+sd_well_gr))+
+  geom_errorbar(aes(x=well_gr,ymin=l_production-sd_l_production,ymax=l_production+sd_l_production))+
+  facet_wrap(~strain,scale="free")+
+  theme_cowplot()+
+  ggsave("./all_promoters_l_production_prediction_linear_glu_gluaa.pdf",width=30,height=20)
+```
+
+
+Let's discard obvious outliers. Best method:
+- replica_column
+```{r}
+#Get rid of outliers
+modeled_data_ace_glu %>% 
+  ggplot()+
+  geom_line(aes(well_gr,l_production_pred),col="red")+
+  geom_line(aes(well_gr,l_production_pred_min),col="green")+
+  geom_line(aes(well_gr,l_production_pred_max),col="blue")+
+  geom_point(aes(well_gr,l_production,col=replica))+
+  geom_errorbarh(aes(y=l_production,xmin=well_gr-sd_well_gr,xmax=well_gr+sd_well_gr))+
+  geom_errorbar(aes(x=well_gr,ymin=l_production-sd_l_production,ymax=l_production+sd_l_production))+
+  facet_wrap(~strain,scale="free")+
+  theme_cowplot()+
+  ggsave("./all_promoters_l_production_prediction_linear_ace_glu_for_outliers.pdf",width=30,height=20)
+
+modeled_data_glu_gluaa %>% 
+  ggplot()+
+  geom_line(aes(well_gr,l_production_pred),col="red")+
+  geom_line(aes(well_gr,l_production_pred_min),col="green")+
+  geom_line(aes(well_gr,l_production_pred_max),col="blue")+
+  geom_point(aes(well_gr,l_production,col=interaction(replica)))+
+  geom_errorbarh(aes(y=l_production,xmin=well_gr-sd_well_gr,xmax=well_gr+sd_well_gr))+
+  geom_errorbar(aes(x=well_gr,ymin=l_production-sd_l_production,ymax=l_production+sd_l_production))+
+  facet_wrap(~strain,scale="free")+
+  theme_cowplot()+
+  ggsave("./all_promoters_l_production_prediction_linear_glu_gluaa_for_outliers.pdf",width=30,height=20)
+
+```
+
+Now that we have all the results with correct error bars, we can plot these things together.
+First we modify, modeled_data_glu_gluaa, and modeled_data_ace_glu and keep only the strain, the slope and the sd_slope.
+Rename all of that also.
+
+```{r}
+ace_glu <- modeled_data_ace_glu %>% 
+  distinct(strain,s,e,type) %>% 
+  rename(s_ace_glu=s,
+         sd_s_ace_glu=e)
+
+glu_gluaa <- modeled_data_glu_gluaa %>% 
+  distinct(strain,s,e,type) %>% 
+  rename(s_glu_gluaa=s,
+         sd_s_glu_gluaa=e)
+
+compare_slopes <- left_join(ace_glu,glu_gluaa,by=c("strain","type"))
+```
+
+Now let's plot the results.
+
+```{r}
+compare_slopes %>% 
+  ggplot()+
+  geom_point(aes(s_ace_glu,s_glu_gluaa,col=type))+
+  geom_errorbar(aes(x=s_ace_glu,ymin=s_glu_gluaa-sd_s_glu_gluaa,ymax=s_glu_gluaa+sd_s_glu_gluaa,col=type),alpha=0.1,width=0)+
+  geom_errorbarh(aes(xmin=s_ace_glu-sd_s_ace_glu,xmax=s_ace_glu+sd_s_ace_glu,y=s_glu_gluaa),alpha=0.1)+
+  theme_cowplot()+
+  xlab("Slope from acetate to glucose")+
+  ylab("Slope from glucose to glucoseaa")
+
+compare_slopes %>% 
+  ggplot()+
+  geom_point(aes(s_ace_glu,s_glu_gluaa,col=type))+
+  geom_errorbar(aes(x=s_ace_glu,ymin=s_glu_gluaa-sd_s_glu_gluaa,ymax=s_glu_gluaa+sd_s_glu_gluaa,col=type),alpha=0.1,width=0)+
+  geom_errorbarh(aes(xmin=s_ace_glu-sd_s_ace_glu,xmax=s_ace_glu+sd_s_ace_glu,y=s_glu_gluaa),alpha=0.1)+
+  facet_grid(.~type)+
+  theme_cowplot()+
+  xlab("Slope from acetate to glucose")+
+  ylab("Slope from glucose to glucoseaa")
+
+
+compare_slopes %>% 
+  ggplot()+
+  geom_point(aes(s_ace_glu,s_glu_gluaa,col=type),alpha=1)+
+  geom_errorbar(aes(x=s_ace_glu,ymin=s_glu_gluaa-sd_s_glu_gluaa,ymax=s_glu_gluaa+sd_s_glu_gluaa,col=type),alpha=0.1,width=0)+
+  geom_errorbarh(aes(xmin=s_ace_glu-sd_s_ace_glu,xmax=s_ace_glu+sd_s_ace_glu,y=s_glu_gluaa,col=type),alpha=0.1)+
+  #geom_point(data=compare_slopes %>% filter(strain %in% c("pl-rrnB","ch-rrnB","ch-med3","pl-med3","ch-hi1","pl-hi1","pl-hi3","ch-hi3","ch-med2","pl-med2")),
+               #aes(s_ace_glu,s_glu_gluaa,col=strain))+
+  geom_hline(aes(yintercept=0),alpha=0.1)+
+  facet_grid(type~.)+
+  #scale_color_manual(values=mycolors)+
+  theme_cowplot()+
+  xlab("Slope from acetate to glucose")+
+  ylab("Slope from glucose to glucoseaa")
+
+
+library(RColorBrewer)
+# Définissez le nombre de couleurs que vous voulez
+nb.cols <- 10
+mycolors <- colorRampPalette(brewer.pal(8, "Set1"))(nb.cols)
+
+compare_slopes %>% 
+  ggplot()+
+  geom_point(aes(s_ace_glu,s_glu_gluaa),alpha=0.1)+
+  geom_errorbar(aes(x=s_ace_glu,ymin=s_glu_gluaa-sd_s_glu_gluaa,ymax=s_glu_gluaa+sd_s_glu_gluaa),alpha=0.05,width=0)+
+  geom_errorbarh(aes(xmin=s_ace_glu-sd_s_ace_glu,xmax=s_ace_glu+sd_s_ace_glu,y=s_glu_gluaa),alpha=0.05)+
+  geom_point(data=compare_slopes %>% filter(strain %in% c("pl-rrnB","ch-rrnB","ch-med3","pl-med3","ch-hi1","pl-hi1","pl-hi3","ch-hi3","ch-med2","pl-med2")),
+               aes(s_ace_glu,s_glu_gluaa,col=strain))+
+  geom_hline(aes(yintercept=0),alpha=0.1)+
+  facet_grid(type~.)+
+  scale_color_manual(values=mycolors)+
+  theme_cowplot()+
+  xlab("Slope from acetate to glucose")+
+  ylab("Slope from glucose to glucoseaa")
+```
+
+Looking at the outliers.
+
+```{r}
+compare_slopes %>% 
+  ggplot()+
+  geom_point(aes(s_ace_glu,s_glu_gluaa))+
+  geom_point(data=compare_slopes %>% 
+               filter(type=="hi") %>% 
+               filter(s_glu_gluaa<(-0.5))
+               ,aes(s_ace_glu,s_glu_gluaa,col=strain))+
+  #geom_errorbar(aes(x=s_ace_glu,ymin=s_glu_gluaa-sd_s_glu_gluaa,ymax=s_glu_gluaa+sd_s_glu_gluaa,col=type),alpha=0.1,width=0)+
+  #geom_errorbarh(aes(xmin=s_ace_glu-sd_s_ace_glu,xmax=s_ace_glu+sd_s_ace_glu,y=s_glu_gluaa),alpha=0.1)+
+  facet_grid(.~type)+
+  theme_cowplot()+
+  xlab("Slope from acetate to glucose")+
+  ylab("Slope from glucose to glucoseaa")
+```
+```{r}
+library(RColorBrewer)
+# Définissez le nombre de couleurs que vous voulez
+nb.cols <- 17
+mycolors <- colorRampPalette(brewer.pal(9, "Set1"))(nb.cols)
+
+compare_slopes %>% 
+  ggplot()+
+  geom_point(aes(s_ace_glu,s_glu_gluaa))+
+  geom_point(data=compare_slopes %>% 
+               filter(type=="med") %>% 
+               filter(s_glu_gluaa<(-0.7))
+               ,aes(s_ace_glu,s_glu_gluaa,col=strain))+
+  #geom_errorbar(aes(x=s_ace_glu,ymin=s_glu_gluaa-sd_s_glu_gluaa,ymax=s_glu_gluaa+sd_s_glu_gluaa,col=type),alpha=0.1,width=0)+
+  #geom_errorbarh(aes(xmin=s_ace_glu-sd_s_ace_glu,xmax=s_ace_glu+sd_s_ace_glu,y=s_glu_gluaa),alpha=0.1)+
+  facet_grid(.~type)+
+  scale_color_manual(values=mycolors)+
+  theme_cowplot()+
+  xlab("Slope from acetate to glucose")+
+  ylab("Slope from glucose to glucoseaa")
+```
+Outliers sent to David.
+How should we analyze these type of data?
+
+Now, what's left to plot is:
+- dlogp/dg versus log(<p>) for all
+
+```{r}
+average_data <- mydata_results_all %>% 
+  #mutate(l_production=log(production)) %>% 
+  #mutate(sd_l_production=sd_production/production) %>% 
+  filter(condition %in% c("acetate","glycerol","glucose")) %>% 
+  group_by(strain) %>% 
+  mutate(m_production_all=mean(production)) %>% 
+  mutate(sd_production_all=sqrt(1/3*sum(sd_production**2))) %>% 
+  ungroup() %>% 
+  distinct(strain,type,m_production_all,sd_production_all)
+
+corr_data <- ace_glu %>% 
+  left_join(average_data,by=c("strain","type"))
+
+corr_data %>% 
+  ggplot()+
+  geom_point(aes(log(m_production_all),s_ace_glu,col=type))+
+  geom_errorbar(aes(x=log(m_production_all),ymax=s_ace_glu+sd_s_ace_glu,
+                    ymin=s_ace_glu-sd_s_ace_glu),alpha=0.1,width=0)+
+  geom_errorbarh(aes(y=s_ace_glu,xmin=log(m_production_all-sd_production_all),
+                     xmax=log(m_production_all+sd_production_all)),alpha=0.1)+
+  #ggpubr::stat_cor(aes(log(m_production_all),s_ace_glu))+
+  #geom_hline(aes(yintercept=0))+
+  #facet_grid(.~type)+
+  theme_cowplot()+
+  xlab("log(<p>)")+
+  ylab("d(log(p))/dg ace to glu")
+
+corr_data <- glu_gluaa %>% 
+  left_join(average_data,by=c("strain","type"))
+
+corr_data %>% 
+  ggplot()+
+  geom_point(aes(log(m_production_all),s_glu_gluaa,col=type))+
+  geom_errorbar(aes(x=log(m_production_all),ymax=s_glu_gluaa+sd_s_glu_gluaa,
+                    ymin=s_glu_gluaa-sd_s_glu_gluaa),alpha=0.1,width=0)+
+  geom_errorbarh(aes(y=s_glu_gluaa,xmin=log(m_production_all-sd_production_all),
+                     xmax=log(m_production_all+sd_production_all)),alpha=0.1)+
+  #ggpubr::stat_cor(aes(log(m_production_all),s_ace_glu))+
+  #geom_hline(aes(yintercept=0))+
+  #facet_grid(.~type)+
+  theme_cowplot()+
+  xlab("log(<p>)")+
+  ylab("d(log(p))/dg glu to gluaa")
+
+```
+
+```{r}
+compare_slopes %>% 
+  filter(type=="hi") %>% 
+  ggplot()+
+  geom_point(aes(s_ace_glu,s_glu_gluaa,col=type),alpha=1)+
+  geom_errorbar(aes(x=s_ace_glu,ymin=s_glu_gluaa-sd_s_glu_gluaa,ymax=s_glu_gluaa+sd_s_glu_gluaa,col=type),alpha=0.5,width=0)+
+  geom_errorbarh(aes(xmin=s_ace_glu-sd_s_ace_glu,xmax=s_ace_glu+sd_s_ace_glu,y=s_glu_gluaa,col=type),alpha=0.5)+
+  #geom_point(data=compare_slopes %>% filter(strain %in% c("pl-rrnB","ch-rrnB","ch-med3","pl-med3","ch-hi1","pl-hi1","pl-hi3","ch-hi3","ch-med2","pl-med2")),
+               #aes(s_ace_glu,s_glu_gluaa,col=strain))+
+  #geom_hline(aes(yintercept=0),alpha=0.1)+
+  facet_grid(type~.)+
+  #scale_color_manual(values=mycolors)+
+  theme_cowplot()+
+  xlab("Slope from acetate to glucose")+
+  ylab("Slope from glucose to glucoseaa")
+```
+
+```{r}
+compare_slopes %>% 
+  filter(type=="hi") %>% 
+  arrange(desc(s_ace_glu)) %>% 
+  mutate(rank=row_number()) %>% 
+  mutate(m_s=mean(s_ace_glu,na.rm=TRUE)) %>% 
+  ggplot()+
+  geom_point(aes(rank,s_ace_glu,col=type),alpha=1)+
+  #geom_errorbar(aes(x=s_ace_glu,ymin=s_glu_gluaa-sd_s_glu_gluaa,ymax=s_glu_gluaa+sd_s_glu_gluaa,col=type),alpha=0.5,width=0)+
+  geom_errorbar(aes(ymin=s_ace_glu-sd_s_ace_glu,ymax=s_ace_glu+sd_s_ace_glu,x=rank,col=type),alpha=0.5)+
+  #geom_point(data=compare_slopes %>% filter(strain %in% c("pl-rrnB","ch-rrnB","ch-med3","pl-med3","ch-hi1","pl-hi1","pl-hi3","ch-hi3","ch-med2","pl-med2")),
+               #aes(s_ace_glu,s_glu_gluaa,col=strain))+
+  geom_hline(aes(yintercept=m_s),alpha=1)+
+  facet_grid(type~.)+
+  #scale_color_manual(values=mycolors)+
+  theme_cowplot()+
+  xlab("Rank")+
+  ylab("Slope from acetate to glucose")
+
+```
+
+```{r}
+compare_slopes %>% 
+  filter(type=="med") %>% 
+  arrange(desc(s_ace_glu)) %>% 
+  mutate(rank=row_number()) %>% 
+  mutate(m_s=mean(s_ace_glu,na.rm=TRUE)) %>% 
+  ggplot()+
+  geom_point(aes(rank,s_ace_glu,col=type),alpha=1)+
+  #geom_errorbar(aes(x=s_ace_glu,ymin=s_glu_gluaa-sd_s_glu_gluaa,ymax=s_glu_gluaa+sd_s_glu_gluaa,col=type),alpha=0.5,width=0)+
+  geom_errorbar(aes(ymin=s_ace_glu-sd_s_ace_glu,ymax=s_ace_glu+sd_s_ace_glu,x=rank,col=type),alpha=0.5)+
+  #geom_point(data=compare_slopes %>% filter(strain %in% c("pl-rrnB","ch-rrnB","ch-med3","pl-med3","ch-hi1","pl-hi1","pl-hi3","ch-hi3","ch-med2","pl-med2")),
+               #aes(s_ace_glu,s_glu_gluaa,col=strain))+
+  geom_hline(aes(yintercept=m_s),alpha=1)+
+  facet_grid(type~.)+
+  #scale_color_manual(values=mycolors)+
+  theme_cowplot()+
+  xlab("Rank")+
+  ylab("Slope from acetate to glucose")
+
+```
+```{r}
+compare_slopes %>% 
+  filter(type=="rib") %>% 
+  arrange(desc(s_ace_glu)) %>% 
+  mutate(rank=row_number()) %>% 
+  mutate(m_s=mean(s_ace_glu,na.rm=TRUE)) %>% 
+  ggplot()+
+  geom_point(aes(rank,s_ace_glu,col=type),alpha=1)+
+  #geom_errorbar(aes(x=s_ace_glu,ymin=s_glu_gluaa-sd_s_glu_gluaa,ymax=s_glu_gluaa+sd_s_glu_gluaa,col=type),alpha=0.5,width=0)+
+  geom_errorbar(aes(ymin=s_ace_glu-sd_s_ace_glu,ymax=s_ace_glu+sd_s_ace_glu,x=rank,col=type),alpha=0.5)+
+  #geom_point(data=compare_slopes %>% filter(strain %in% c("pl-rrnB","ch-rrnB","ch-med3","pl-med3","ch-hi1","pl-hi1","pl-hi3","ch-hi3","ch-med2","pl-med2")),
+               #aes(s_ace_glu,s_glu_gluaa,col=strain))+
+  geom_hline(aes(yintercept=m_s),alpha=1)+
+  facet_grid(type~.)+
+  #scale_color_manual(values=mycolors)+
+  theme_cowplot()+
+  xlab("Rank")+
+  ylab("Slope from acetate to glucose")
+
+```
+
+
+# GAUSSIAN MODELING WIT FITDISTRPLUS
+
+Ok... so clearly there is a problem with the way this distribution is fitted...
+But I can also fit the distribution with other means/R statistical tools.
+
+```{r}
+# hi promoters
+df <- phenotypes %>% 
+  filter(type=="hi") %>% 
+  dplyr::select(strain,type,s_ace_glu,sd_s_ace_glu) %>% 
+  rename(s=s_ace_glu,
+         sd=sd_s_ace_glu)
+
+fit_hi <- fitdist(df$s,"norm")
+class(fit_hi)
+plot(fit_hi)
+
+# med promoters
+df <- phenotypes %>% 
+  filter(type=="med") %>% 
+  dplyr::select(strain,type,s_ace_glu,sd_s_ace_glu) %>% 
+  rename(s=s_ace_glu,
+         sd=sd_s_ace_glu)
+
+fit_med <- fitdist(df$s,"norm")
+class(fit_med)
+plot(fit_med)
+
+# rib promoters
+df <- phenotypes %>% 
+  filter(type=="rib") %>% 
+  dplyr::select(strain,type,s_ace_glu,sd_s_ace_glu) %>% 
+  rename(s=s_ace_glu,
+         sd=sd_s_ace_glu)
+
+fit_rib <- fitdist(df$s,"norm")
+class(fit_rib)
+plot(fit_rib)
+
+fit_df <- tibble(type=c("hi","med","rib"),
+                 mean=c(fit_hi[1][[1]][[1]],fit_med[1][[1]][[1]],fit_rib[1][[1]][[1]]),
+                 sd=c(fit_hi[1][[1]][[2]],fit_med[1][[1]][[2]],fit_rib[1][[1]][[2]]),
+                 sd_mean=c(fit_hi[3][1][[1]][[1]],fit_med[3][1][[1]][[1]],fit_rib[3][1][[1]][[1]]),
+                 sd_sd=c(fit_hi[3][1][[1]][[2]],fit_med[3][1][[1]][[2]],fit_rib[3][1][[1]][[2]]))
+```
+
+If this computation is correct, it is clear that hi and med promoters are characterized by different mean. Medium are sensibly higher. Med are also characterized by higher variance, in acetate to glucose, as far as acetate to glucose increase is concerned.
+
+Let's look at the other phenotypic dimensions.
+
+```{r}
+# hi promoters
+df <- phenotypes %>% 
+  filter(type=="hi") %>% 
+  dplyr::select(strain,type,s_glu_gluaa,sd_s_glu_gluaa) %>% 
+  rename(s=s_glu_gluaa,
+         sd=sd_s_glu_gluaa)
+
+fit_hi <- fitdist(df$s,"norm")
+class(fit_hi)
+plot(fit_hi)
+
+# med promoters
+df <- phenotypes %>% 
+  filter(type=="med") %>% 
+  dplyr::select(strain,type,s_glu_gluaa,sd_s_glu_gluaa) %>% 
+  rename(s=s_glu_gluaa,
+         sd=sd_s_glu_gluaa)
+
+fit_med <- fitdist(df$s,"norm")
+class(fit_med)
+plot(fit_med)
+
+# rib promoters
+df <- phenotypes %>% 
+  filter(type=="rib") %>% 
+  dplyr::select(strain,type,s_glu_gluaa,sd_s_glu_gluaa) %>% 
+  rename(s=s_glu_gluaa,
+         sd=sd_s_glu_gluaa)
+
+fit_rib <- fitdist(df$s,"norm")
+class(fit_rib)
+plot(fit_rib)
+
+fit_df <- tibble(type=c("hi","med","rib"),
+                 mean=c(fit_hi[1][[1]][[1]],fit_med[1][[1]][[1]],fit_rib[1][[1]][[1]]),
+                 sd=c(fit_hi[1][[1]][[2]],fit_med[1][[1]][[2]],fit_rib[1][[1]][[2]]),
+                 sd_mean=c(fit_hi[3][1][[1]][[1]],fit_med[3][1][[1]][[1]],fit_rib[3][1][[1]][[1]]),
+                 sd_sd=c(fit_hi[3][1][[1]][[2]],fit_med[3][1][[1]][[2]],fit_rib[3][1][[1]][[2]]))
+
+fit_df
+```
+
+Distribution seems to be clearly asymmetric in the case of medium promoters and hi promoters. Which causes medium promoters to be characterized by a lower mean. NB: also more variance for medium in that respect. Ribosomal are much higher... But also less numerous.
+
+Last phenotypic dimension.
+
+```{r}
+# hi promoters
+df <- phenotypes %>% 
+  filter(type=="hi") %>% 
+  dplyr::select(strain,type,m_production_all,sd_production_all) %>% 
+  mutate(s=log(m_production_all),
+         sd=sd_production_all/m_production_all)
+
+fit_hi <- fitdist(df$s,"norm")
+class(fit_hi)
+plot(fit_hi)
+
+# med promoters
+df <- phenotypes %>% 
+  filter(type=="med") %>% 
+  dplyr::select(strain,type,m_production_all,sd_production_all) %>% 
+  mutate(s=log(m_production_all),
+         sd=sd_production_all/m_production_all)
+
+fit_med <- fitdist(df$s,"norm")
+class(fit_med)
+plot(fit_med)
+
+# rib promoters
+df <- phenotypes %>% 
+  filter(type=="rib") %>% 
+  dplyr::select(strain,type,m_production_all,sd_production_all) %>% 
+  mutate(s=log(m_production_all),
+         sd=sd_production_all/m_production_all)
+
+fit_rib <- fitdist(df$s,"norm")
+class(fit_rib)
+plot(fit_rib)
+
+fit_df <- tibble(type=c("hi","med","rib"),
+                 mean=c(fit_hi[1][[1]][[1]],fit_med[1][[1]][[1]],fit_rib[1][[1]][[1]]),
+                 sd=c(fit_hi[1][[1]][[2]],fit_med[1][[1]][[2]],fit_rib[1][[1]][[2]]),
+                 sd_mean=c(fit_hi[3][1][[1]][[1]],fit_med[3][1][[1]][[1]],fit_rib[3][1][[1]][[1]]),
+                 sd_sd=c(fit_hi[3][1][[1]][[2]],fit_med[3][1][[1]][[2]],fit_rib[3][1][[1]][[2]]))
+
+fit_df
+```
+
+So, unsurprisingly, the mean is higher for medium. But variance on mean level is the same.
+
+Problem now: this method are NOT taking into account any of the errors bars I am already working with. That's why I was trying to use Erik's method there. But it does not seem to work to way it is intended.
+
+# GAUSSIAN MODELING WITH ERIK'S METHOD
+
+```{r}
+# The phenotype of each promoter is described in:
+
+average_data <- mydata_results_all %>% 
+  #mutate(l_production=log(production)) %>% 
+  #mutate(sd_l_production=sd_production/production) %>% 
+  filter(condition %in% c("acetate","glycerol","glucose")) %>% 
+  group_by(strain) %>% 
+  mutate(m_production_all=mean(production)) %>% 
+  mutate(sd_production_all=sqrt(1/3*sum(sd_production**2))) %>% 
+  ungroup() %>% 
+  distinct(strain,type,m_production_all,sd_production_all)
+
+#From acetate to glucose only
+modeled_data_ace_glu <- mydata_results_all %>%
+  filter(condition != "glucoseaa") %>% 
+  mutate(l_production=log(production)) %>% 
+  mutate(sd_l_production=sd_production/production) %>% 
+  group_by(strain) %>% 
+  do((function(.df){
+     .new_df <- .df %>% 
+       mutate(s=compute_slope_errxy_robust(well_gr,l_production),
+              e=compute_sdslope_errxy_robust(well_gr,l_production),
+              i=mean(l_production)-s*mean(well_gr),
+              i_min=mean(l_production)-(s+e)*mean(well_gr),
+              i_max=mean(l_production)-(s-e)*mean(well_gr),
+              l_production_pred=s*well_gr+i,
+              l_production_pred_min=(s+e)*well_gr+i_min,
+              l_production_pred_max=(s-e)*well_gr+i_max)
+    return(.new_df)})(.)) %>% 
+    ungroup()
+
+modeled_data_glu_gluaa <- mydata_results_all %>%
+  filter(condition %in% c("glucose","glucoseaa")) %>% 
+  mutate(l_production=log(production)) %>% 
+  mutate(sd_l_production=sd_production/production) %>% 
+  group_by(strain) %>% 
+  do((function(.df){
+     .new_df <- .df %>% 
+       mutate(s=compute_slope_errxy_robust(well_gr,l_production),
+              e=compute_sdslope_errxy_robust(well_gr,l_production),
+              i=mean(l_production)-s*mean(well_gr),
+              i_min=mean(l_production)-(s+e)*mean(well_gr),
+              i_max=mean(l_production)-(s-e)*mean(well_gr),
+              l_production_pred=s*well_gr+i,
+              l_production_pred_min=(s+e)*well_gr+i_min,
+              l_production_pred_max=(s-e)*well_gr+i_max)
+    return(.new_df)})(.)) %>% 
+    ungroup()
+
+
+ace_glu <- modeled_data_ace_glu %>% 
+  distinct(strain,s,e,type) %>% 
+  rename(s_ace_glu=s,
+         sd_s_ace_glu=e)
+
+glu_gluaa <- modeled_data_glu_gluaa %>% 
+  distinct(strain,s,e,type) %>% 
+  rename(s_glu_gluaa=s,
+         sd_s_glu_gluaa=e)
+
+phenotypes <- left_join(ace_glu,glu_gluaa,by=c("strain","type")) %>% 
+  left_join(average_data,by=c("strain","type")) %>% 
+  filter(s_ace_glu>0) #discard obvious outliers
+```
+
+I write now a function that compute the log likelihood. Then maximize it to find the best sigma (using cobyla from the nls package.), then using that to find the best mean. But does not work. Let's assume now, sd is 0 every where.
+
+```{r}
+#First we write a function that computes it from the data frame "phenotypes", as function of the parameter .sigma
+
+df <- phenotypes %>% 
+  filter(type=="hi") %>% 
+  dplyr::select(strain,type,s_ace_glu,sd_s_ace_glu) %>% 
+  rename(s=s_ace_glu,
+         sd=sd_s_ace_glu)
+
+df %>% 
+  ggplot()+
+  geom_point(aes(s,sd))
+
+compute_ll <- function(.sigma){
+  .df <- df %>% 
+    #mutate(wp=1/(.sigma**2+sd**2),
+    mutate(wp=1/(.sigma**2+sd**2),
+           sum_wp=sum(wp),
+           weighed_s=wp*s/sum_wp)
+  .u <- sum(.df$weighed_s)
+  #ll <- -1/2*sum(.df$wp*(.df$s**2-.u**2))-log(.sigma)+1/2*sum(log(.df$wp))-1/2*log(sum(.df$wp))
+  ll <- -(-1/2*sum(.df$wp*(.df$s**2-.u**2))-log(.sigma)+1/2*sum(log(.df$wp))-1/2*log(sum(.df$wp)))
+  #ll <- -1/2*sum(.df$wp*(.df$s**2-.u**2))+1/2*sum(log(.df$wp))-1/2*log(sum(.df$wp))
+  return(ll)
+}
+
+.sigmas <- seq(0.1,1,by=0.01)
+lls <- lapply(.sigmas,compute_ll)
+plot(.sigmas,lls)
+
+sigma <- nloptr::cobyla(x0=0.1,compute_ll)$par
+sigma
+
+compute_mu <- function(.sigma){
+  .df <- df %>% 
+    mutate(wp=1/(.sigma**2),
+           sum_wp=sum(wp),
+           weighed_s=wp*s/sum_wp)
+  .u <- sum(.df$weighed_s)
+  return(.u)}
+
+mu <- compute_mu(sigma)
+mu
+```
+Which the same as what I have with the R routine.
+
+```{r}
+#First we write a function that computes it from the data frame "phenotypes", as function of the parameter .sigma
+
+df <- phenotypes %>% 
+  filter(type=="med") %>% 
+  dplyr::select(strain,type,s_ace_glu,sd_s_ace_glu) %>% 
+  rename(s=s_ace_glu,
+         sd=sd_s_ace_glu)
+
+df %>% 
+  ggplot()+
+  geom_point(aes(s,sd))
+
+compute_ll <- function(.sigma){
+  .df <- df %>% 
+    #mutate(wp=1/(.sigma**2+sd**2),
+    mutate(wp=1/(.sigma**2),
+           sum_wp=sum(wp),
+           weighed_s=wp*s/sum_wp)
+  .u <- sum(.df$weighed_s)
+  #ll <- -1/2*sum(.df$wp*(.df$s**2-.u**2))-log(.sigma)+1/2*sum(log(.df$wp))-1/2*log(sum(.df$wp))
+  ll <- -(-1/2*sum(.df$wp*(.df$s**2-.u**2))-log(.sigma)+1/2*sum(log(.df$wp))-1/2*log(sum(.df$wp)))
+  #ll <- -1/2*sum(.df$wp*(.df$s**2-.u**2))+1/2*sum(log(.df$wp))-1/2*log(sum(.df$wp))
+  return(ll)
+}
+
+.sigmas <- seq(0.1,1,by=0.01)
+lls <- lapply(.sigmas,compute_ll)
+plot(.sigmas,lls)
+
+sigma <- nloptr::cobyla(x0=0.1,compute_ll)$par
+sigma
+
+compute_mu <- function(.sigma){
+  .df <- df %>% 
+    mutate(wp=1/(.sigma**2),
+           sum_wp=sum(wp),
+           weighed_s=wp*s/sum_wp)
+  .u <- sum(.df$weighed_s)
+  return(.u)}
+
+mu <- compute_mu(sigma)
+mu
+```
+
+```{r}
+#First we write a function that computes it from the data frame "phenotypes", as function of the parameter .sigma
+
+df <- phenotypes %>% 
+  filter(type=="rib") %>% 
+  dplyr::select(strain,type,s_ace_glu,sd_s_ace_glu) %>% 
+  rename(s=s_ace_glu,
+         sd=sd_s_ace_glu)
+
+df %>% 
+  ggplot()+
+  geom_point(aes(s,sd))
+
+compute_ll <- function(.sigma){
+  .df <- df %>% 
+    #mutate(wp=1/(.sigma**2+sd**2),
+    mutate(wp=1/(.sigma**2),
+           sum_wp=sum(wp),
+           weighed_s=wp*s/sum_wp)
+  .u <- sum(.df$weighed_s)
+  #ll <- -1/2*sum(.df$wp*(.df$s**2-.u**2))-log(.sigma)+1/2*sum(log(.df$wp))-1/2*log(sum(.df$wp))
+  ll <- -(-1/2*sum(.df$wp*(.df$s**2-.u**2))-log(.sigma)+1/2*sum(log(.df$wp))-1/2*log(sum(.df$wp)))
+  #ll <- -1/2*sum(.df$wp*(.df$s**2-.u**2))+1/2*sum(log(.df$wp))-1/2*log(sum(.df$wp))
+  return(ll)
+}
+
+.sigmas <- seq(0.1,1,by=0.01)
+lls <- lapply(.sigmas,compute_ll)
+plot(.sigmas,lls)
+
+sigma <- nloptr::cobyla(x0=0.1,compute_ll)$par
+sigma
+
+compute_mu <- function(.sigma){
+  .df <- df %>% 
+    mutate(wp=1/(.sigma**2),
+           sum_wp=sum(wp),
+           weighed_s=wp*s/sum_wp)
+  .u <- sum(.df$weighed_s)
+  return(.u)}
+
+mu <- compute_mu(sigma)
+mu
+```
+
+# ACE TO GLU: APPLYING ERIK'S MODEL WITH ERROR BARS
+
+In a nutshell, the error bars that I have are not negligible with the standard deviation inferred from the maximum likelihood maximization...
+And it seems that it screws the inference somehow, in a way that I do not understand.
+
+```{r}
+# The phenotype of each promoter is described in:
+
+average_data <- mydata_results_all %>% 
+  #mutate(l_production=log(production)) %>% 
+  #mutate(sd_l_production=sd_production/production) %>% 
+  filter(condition %in% c("acetate","glycerol","glucose")) %>% 
+  group_by(strain) %>% 
+  mutate(m_production_all=mean(production)) %>% 
+  mutate(sd_production_all=sqrt(1/3*sum(sd_production**2))) %>% 
+  ungroup() %>% 
+  distinct(strain,type,m_production_all,sd_production_all)
+
+#From acetate to glucose only
+modeled_data_ace_glu <- mydata_results_all %>%
+  filter(condition != "glucoseaa") %>% 
+  mutate(l_production=log(production)) %>% 
+  mutate(sd_l_production=sd_production/production) %>% 
+  group_by(strain) %>% 
+  do((function(.df){
+     .new_df <- .df %>% 
+       mutate(s=compute_slope_errxy_robust(well_gr,l_production),
+              e=compute_sdslope_errxy_robust(well_gr,l_production),
+              i=mean(l_production)-s*mean(well_gr),
+              i_min=mean(l_production)-(s+e)*mean(well_gr),
+              i_max=mean(l_production)-(s-e)*mean(well_gr),
+              l_production_pred=s*well_gr+i,
+              l_production_pred_min=(s+e)*well_gr+i_min,
+              l_production_pred_max=(s-e)*well_gr+i_max)
+    return(.new_df)})(.)) %>% 
+    ungroup()
+
+modeled_data_glu_gluaa <- mydata_results_all %>%
+  filter(condition %in% c("glucose","glucoseaa")) %>% 
+  mutate(l_production=log(production)) %>% 
+  mutate(sd_l_production=sd_production/production) %>% 
+  group_by(strain) %>% 
+  do((function(.df){
+     .new_df <- .df %>% 
+       mutate(s=compute_slope_errxy_robust(well_gr,l_production),
+              e=compute_sdslope_errxy_robust(well_gr,l_production),
+              i=mean(l_production)-s*mean(well_gr),
+              i_min=mean(l_production)-(s+e)*mean(well_gr),
+              i_max=mean(l_production)-(s-e)*mean(well_gr),
+              l_production_pred=s*well_gr+i,
+              l_production_pred_min=(s+e)*well_gr+i_min,
+              l_production_pred_max=(s-e)*well_gr+i_max)
+    return(.new_df)})(.)) %>% 
+    ungroup()
+
+
+ace_glu <- modeled_data_ace_glu %>% 
+  distinct(strain,s,e,type) %>% 
+  rename(s_ace_glu=s,
+         sd_s_ace_glu=e)
+
+glu_gluaa <- modeled_data_glu_gluaa %>% 
+  distinct(strain,s,e,type) %>% 
+  rename(s_glu_gluaa=s,
+         sd_s_glu_gluaa=e)
+
+phenotypes <- left_join(ace_glu,glu_gluaa,by=c("strain","type")) %>% 
+  left_join(average_data,by=c("strain","type")) %>% 
+  filter(s_ace_glu>0) #discard obvious outliers
+```
+
+I write now a function that compute the log likelihood. Then maximize it to find the best sigma (using cobyla from the nls package.), then using that to find the best mean. But does not work. Let's assume now, sd is 0 every where.
+
+```{r}
+#First we write a function that computes it from the data frame "phenotypes", as function of the parameter .sigma
+
+df <- phenotypes %>% 
+  filter(type=="hi") %>% 
+  dplyr::select(strain,type,s_ace_glu,sd_s_ace_glu) %>% 
+  rename(s=s_ace_glu,
+         sd=sd_s_ace_glu/s_ace_glu)
+
+df %>% 
+  ggplot()+
+  geom_point(aes(s,sd))
+
+compute_ll <- function(.sigma){
+  .df <- df %>% 
+    mutate(wp=1/(.sigma**2+sd**2),
+    #mutate(wp=1/(.sigma**2),
+           sum_wp=sum(wp),
+           weighed_s=wp*s/sum_wp)
+  .u <- sum(.df$weighed_s)
+  #ll <- -1/2*sum(.df$wp*(.df$s**2-.u**2))-log(.sigma)+1/2*sum(log(.df$wp))-1/2*log(sum(.df$wp))
+  ll <- -(-1/2*sum(.df$wp*(.df$s**2-.u**2))-log(.sigma)+1/2*sum(log(.df$wp))-1/2*log(sum(.df$wp)))
+  #ll <- -1/2*sum(.df$wp*(.df$s**2-.u**2))+1/2*sum(log(.df$wp))-1/2*log(sum(.df$wp))
+  return(ll)
+}
+
+.sigmas <- seq(0.00001,0.00005,by=0.00001)
+lls <- lapply(.sigmas,compute_ll)
+plot(.sigmas,lls)
+
+compute_u <- function(.sigma){
+  .df <- df %>% 
+    mutate(wp=1/(.sigma**2+sd**2),
+    #mutate(wp=1/(.sigma**2),
+           sum_wp=sum(wp),
+           weighed_s=wp*s/sum_wp)
+  .u <- sum(.df$weighed_s)
+  return(.u)}
+
+compute_u(0)
+```
+In the case of high promoters, I cannot say anything. Everything is hidden due to experimental measurement. Or in other words, they are all behaving the same. No evidence to say that these promoters are behaving differently. Let's check medium and rib.
+
+```{r}
+#First we write a function that computes it from the data frame "phenotypes", as function of the parameter .sigma
+
+df <- phenotypes %>% 
+  filter(type=="med") %>% 
+  dplyr::select(strain,type,s_ace_glu,sd_s_ace_glu) %>% 
+  rename(s=s_ace_glu,
+         sd=sd_s_ace_glu/s_ace_glu)
+
+df %>% 
+  ggplot()+
+  geom_point(aes(s,sd))
+
+compute_ll <- function(.sigma){
+  .df <- df %>% 
+    mutate(wp=1/(.sigma**2+sd**2),
+    #mutate(wp=1/(.sigma**2),
+           sum_wp=sum(wp),
+           weighed_s=wp*s/sum_wp)
+  .u <- sum(.df$weighed_s)
+  #ll <- -1/2*sum(.df$wp*(.df$s**2-.u**2))-log(.sigma)+1/2*sum(log(.df$wp))-1/2*log(sum(.df$wp))
+  ll <- -(-1/2*sum(.df$wp*(.df$s**2-.u**2))-log(.sigma)+1/2*sum(log(.df$wp))-1/2*log(sum(.df$wp)))
+  #ll <- -1/2*sum(.df$wp*(.df$s**2-.u**2))+1/2*sum(log(.df$wp))-1/2*log(sum(.df$wp))
+  return(ll)
+}
+
+.sigmas <- seq(0.00001,0.00005,by=0.00001)
+lls <- lapply(.sigmas,compute_ll)
+plot(.sigmas,lls)
+
+compute_u <- function(.sigma){
+  .df <- df %>% 
+    mutate(wp=1/(.sigma**2+sd**2),
+    #mutate(wp=1/(.sigma**2),
+           sum_wp=sum(wp),
+           weighed_s=wp*s/sum_wp)
+  .u <- sum(.df$weighed_s)
+  return(.u)}
+
+compute_u(0)
+```
+
+```{r}
+#First we write a function that computes it from the data frame "phenotypes", as function of the parameter .sigma
+
+df <- phenotypes %>% 
+  filter(type=="rib") %>% 
+  dplyr::select(strain,type,s_ace_glu,sd_s_ace_glu) %>% 
+  rename(s=s_ace_glu,
+         sd=sd_s_ace_glu/s_ace_glu)
+
+df %>% 
+  ggplot()+
+  geom_point(aes(s,sd))
+
+compute_ll <- function(.sigma){
+  .df <- df %>% 
+    mutate(wp=1/(.sigma**2+sd**2),
+    #mutate(wp=1/(.sigma**2),
+           sum_wp=sum(wp),
+           weighed_s=wp*s/sum_wp)
+  .u <- sum(.df$weighed_s)
+  #ll <- -1/2*sum(.df$wp*(.df$s**2-.u**2))-log(.sigma)+1/2*sum(log(.df$wp))-1/2*log(sum(.df$wp))
+  ll <- -(-1/2*sum(.df$wp*(.df$s**2-.u**2))-log(.sigma)+1/2*sum(log(.df$wp))-1/2*log(sum(.df$wp)))
+  #ll <- -1/2*sum(.df$wp*(.df$s**2-.u**2))+1/2*sum(log(.df$wp))-1/2*log(sum(.df$wp))
+  return(ll)
+}
+
+.sigmas <- seq(0.00001,0.00005,by=0.00001)
+lls <- lapply(.sigmas,compute_ll)
+plot(.sigmas,lls)
+
+compute_u <- function(.sigma){
+  .df <- df %>% 
+    mutate(wp=1/(.sigma**2+sd**2),
+    #mutate(wp=1/(.sigma**2),
+           sum_wp=sum(wp),
+           weighed_s=wp*s/sum_wp)
+  .u <- sum(.df$weighed_s)
+  return(.u)}
+
+compute_u(0)
+```
+
+So to conclude on this:
+- hi: 1.9
+- medium: 2.2
+- rib: 2.5
+
+An error bar on that, maybe?
+
+# GLU TO GLUAA: APPLYING ERIK'S MODEL WITH ERROR BARS
+
+In a nutshell, the error bars that I have are not negligible with the standard deviation inferred from the maximum likelihood maximization...
+And it seems that it screws the inference somehow, in a way that I do not understand.
+
+```{r}
+# The phenotype of each promoter is described in:
+
+average_data <- mydata_results_all %>% 
+  #mutate(l_production=log(production)) %>% 
+  #mutate(sd_l_production=sd_production/production) %>% 
+  filter(condition %in% c("acetate","glycerol","glucose")) %>% 
+  group_by(strain) %>% 
+  mutate(m_production_all=mean(production)) %>% 
+  mutate(sd_production_all=sqrt(1/3*sum(sd_production**2))) %>% 
+  ungroup() %>% 
+  distinct(strain,type,m_production_all,sd_production_all)
+
+#From acetate to glucose only
+modeled_data_ace_glu <- mydata_results_all %>%
+  filter(condition != "glucoseaa") %>% 
+  mutate(l_production=log(production)) %>% 
+  mutate(sd_l_production=sd_production/production) %>% 
+  group_by(strain) %>% 
+  do((function(.df){
+     .new_df <- .df %>% 
+       mutate(s=compute_slope_errxy_robust(well_gr,l_production),
+              e=compute_sdslope_errxy_robust(well_gr,l_production),
+              i=mean(l_production)-s*mean(well_gr),
+              i_min=mean(l_production)-(s+e)*mean(well_gr),
+              i_max=mean(l_production)-(s-e)*mean(well_gr),
+              l_production_pred=s*well_gr+i,
+              l_production_pred_min=(s+e)*well_gr+i_min,
+              l_production_pred_max=(s-e)*well_gr+i_max)
+    return(.new_df)})(.)) %>% 
+    ungroup()
+
+modeled_data_glu_gluaa <- mydata_results_all %>%
+  filter(condition %in% c("glucose","glucoseaa")) %>% 
+  mutate(l_production=log(production)) %>% 
+  mutate(sd_l_production=sd_production/production) %>% 
+  group_by(strain) %>% 
+  do((function(.df){
+     .new_df <- .df %>% 
+       mutate(s=compute_slope_errxy_robust(well_gr,l_production),
+              e=compute_sdslope_errxy_robust(well_gr,l_production),
+              i=mean(l_production)-s*mean(well_gr),
+              i_min=mean(l_production)-(s+e)*mean(well_gr),
+              i_max=mean(l_production)-(s-e)*mean(well_gr),
+              l_production_pred=s*well_gr+i,
+              l_production_pred_min=(s+e)*well_gr+i_min,
+              l_production_pred_max=(s-e)*well_gr+i_max)
+    return(.new_df)})(.)) %>% 
+    ungroup()
+
+
+ace_glu <- modeled_data_ace_glu %>% 
+  distinct(strain,s,e,type) %>% 
+  rename(s_ace_glu=s,
+         sd_s_ace_glu=e)
+
+glu_gluaa <- modeled_data_glu_gluaa %>% 
+  distinct(strain,s,e,type) %>% 
+  rename(s_glu_gluaa=s,
+         sd_s_glu_gluaa=e)
+
+phenotypes <- left_join(ace_glu,glu_gluaa,by=c("strain","type")) %>% 
+  left_join(average_data,by=c("strain","type")) %>% 
+  filter(s_ace_glu>0) #discard obvious outliers
+```
+
+I write now a function that compute the log likelihood. Then maximize it to find the best sigma (using cobyla from the nls package.), then using that to find the best mean. But does not work. Let's assume now, sd is 0 every where.
+
+```{r}
+phenotypes %>% 
+  filter(!grepl("ch",strain)) %>% 
+  group_by(type) %>% 
+  mutate(s=s_ace_glu,
+         sd=sd_s_ace_glu) %>% 
+  arrange(desc(s)) %>%
+  mutate(rank=row_number()) %>% 
+  mutate(wp=1/(sd**2),
+         sum_wp=sum(wp),
+         weighed_s=wp*s/sum_wp,
+         mu0=sum(weighed_s)) %>% 
+  ungroup() %>% 
+  ggplot()+
+  geom_point(aes(rank,s,col=type),alpha=1)+
+  #geom_errorbar(aes(x=s_ace_glu,ymin=s_glu_gluaa-sd_s_glu_gluaa,ymax=s_glu_gluaa+sd_s_glu_gluaa,col=type),alpha=0.5,width=0)+
+  geom_errorbar(aes(ymin=s-sd,ymax=s+sd,x=rank,col=type),alpha=0.5)+
+  #geom_point(data=compare_slopes %>% filter(strain %in% c("pl-rrnB","ch-rrnB","ch-med3","pl-med3","ch-hi1","pl-hi1","pl-hi3","ch-hi3","ch-med2","pl-med2")),
+               #aes(s_ace_glu,s_glu_gluaa,col=strain))+
+  geom_hline(aes(yintercept=mu0),alpha=1)+
+  facet_wrap(~type,scale="free")+
+  #scale_color_manual(values=mycolors)+
+  theme_cowplot()+
+  xlab("Rank")+
+  ylab("Slope from acetate to glucose")
+```
+
+```{r}
+phenotypes %>% 
+  group_by(type) %>% 
+  mutate(s=s_glu_gluaa,
+         sd=sd_s_glu_gluaa) %>% 
+  arrange(desc(s)) %>%
+  mutate(rank=row_number()) %>% 
+  mutate(wp=1/(sd**2),
+         sum_wp=sum(wp),
+         weighed_s=wp*s/sum_wp,
+         mu0=sum(weighed_s)) %>% 
+  ungroup() %>% 
+  ggplot()+
+  geom_point(aes(rank,s,col=type),alpha=1)+
+  #geom_errorbar(aes(x=s_ace_glu,ymin=s_glu_gluaa-sd_s_glu_gluaa,ymax=s_glu_gluaa+sd_s_glu_gluaa,col=type),alpha=0.5,width=0)+
+  geom_errorbar(aes(ymin=s-sd,ymax=s+sd,x=rank,col=type),alpha=0.5)+
+  #geom_point(data=compare_slopes %>% filter(strain %in% c("pl-rrnB","ch-rrnB","ch-med3","pl-med3","ch-hi1","pl-hi1","pl-hi3","ch-hi3","ch-med2","pl-med2")),
+               #aes(s_ace_glu,s_glu_gluaa,col=strain))+
+  geom_hline(aes(yintercept=mu0),alpha=1)+
+  facet_wrap(~type,scale="free")+
+  #scale_color_manual(values=mycolors)+
+  theme_cowplot()+
+  xlab("Rank")+
+  ylab("Slope from glucose to glucose aa")
+```
+Why are the errors on the slope so large?
+
+
+```{r}
+#First we write a function that computes it from the data frame "phenotypes", as function of the parameter .sigma
+
+df <- phenotypes %>% 
+  filter(type=="hi") %>% 
+  dplyr::select(strain,type,s_glu_gluaa,sd_s_glu_gluaa) %>% 
+  rename(s=s_glu_gluaa,
+         sd=sd_s_glu_gluaa)
+
+df %>% 
+  ggplot()+
+  geom_point(aes(s,sd))
+
+compute_ll <- function(.sigma){
+  .df <- df %>% 
+    mutate(wp=1/(.sigma**2+sd**2),
+    #mutate(wp=1/(.sigma**2),
+           sum_wp=sum(wp),
+           weighed_s=wp*s/sum_wp)
+  .u <- sum(.df$weighed_s)
+  #ll <- -1/2*sum(.df$wp*(.df$s**2-.u**2))-log(.sigma)+1/2*sum(log(.df$wp))-1/2*log(sum(.df$wp))
+  ll <- -(-1/2*sum(.df$wp*(.df$s**2-.u**2))-log(.sigma)+1/2*sum(log(.df$wp))-1/2*log(sum(.df$wp)))
+  #ll <- -1/2*sum(.df$wp*(.df$s**2-.u**2))+1/2*sum(log(.df$wp))-1/2*log(sum(.df$wp))
+  return(ll)
+}
+
+.sigmas <- seq(0.001,0.2,by=0.01)
+lls <- lapply(.sigmas,compute_ll)
+plot(.sigmas,lls)
+
+compute_u <- function(.sigma){
+  .df <- df %>% 
+    mutate(wp=1/(.sigma**2+sd**2),
+    #mutate(wp=1/(.sigma**2),
+           sum_wp=sum(wp),
+           weighed_s=wp*s/sum_wp)
+  .u <- sum(.df$weighed_s)
+  return(.u)}
+
+compute_u(0)
+```
+
+```{r}
+#First we write a function that computes it from the data frame "phenotypes", as function of the parameter .sigma
+
+df <- phenotypes %>% 
+  filter(type=="med") %>% 
+  dplyr::select(strain,type,s_glu_gluaa,sd_s_glu_gluaa) %>% 
+  rename(s=s_glu_gluaa,
+         sd=sd_s_glu_gluaa)
+
+df %>% 
+  ggplot()+
+  geom_point(aes(s,sd))
+
+compute_ll <- function(.sigma){
+  .df <- df %>% 
+    mutate(wp=1/(.sigma**2+sd**2),
+    #mutate(wp=1/(.sigma**2),
+           sum_wp=sum(wp),
+           weighed_s=wp*s/sum_wp)
+  .u <- sum(.df$weighed_s)
+  #ll <- -1/2*sum(.df$wp*(.df$s**2-.u**2))-log(.sigma)+1/2*sum(log(.df$wp))-1/2*log(sum(.df$wp))
+  ll <- -(-1/2*sum(.df$wp*(.df$s**2-.u**2))-log(.sigma)+1/2*sum(log(.df$wp))-1/2*log(sum(.df$wp)))
+  #ll <- -1/2*sum(.df$wp*(.df$s**2-.u**2))+1/2*sum(log(.df$wp))-1/2*log(sum(.df$wp))
+  return(ll)
+}
+
+.sigmas <- seq(0.001,0.5,by=0.001)
+lls <- lapply(.sigmas,compute_ll)
+plot(.sigmas,lls)
+
+compute_u <- function(.sigma){
+  .df <- df %>% 
+    mutate(wp=1/(.sigma**2+sd**2),
+    #mutate(wp=1/(.sigma**2),
+           sum_wp=sum(wp),
+           weighed_s=wp*s/sum_wp)
+  .u <- sum(.df$weighed_s)
+  return(.u)}
+
+compute_u(0)
+```
+
+```{r}
+#First we write a function that computes it from the data frame "phenotypes", as function of the parameter .sigma
+
+df <- phenotypes %>% 
+  filter(type=="rib") %>% 
+  dplyr::select(strain,type,s_glu_gluaa,sd_s_glu_gluaa) %>% 
+  rename(s=s_glu_gluaa,
+         sd=sd_s_glu_gluaa)
+
+df %>% 
+  ggplot()+
+  geom_point(aes(s,sd))
+
+compute_ll <- function(.sigma){
+  .df <- df %>% 
+    mutate(wp=1/(.sigma**2+sd**2),
+    #mutate(wp=1/(.sigma**2),
+           sum_wp=sum(wp),
+           weighed_s=wp*s/sum_wp)
+  .u <- sum(.df$weighed_s)
+  #ll <- -1/2*sum(.df$wp*(.df$s**2-.u**2))-log(.sigma)+1/2*sum(log(.df$wp))-1/2*log(sum(.df$wp))
+  ll <- -(-1/2*sum(.df$wp*(.df$s**2-.u**2))-log(.sigma)+1/2*sum(log(.df$wp))-1/2*log(sum(.df$wp)))
+  #ll <- -1/2*sum(.df$wp*(.df$s**2-.u**2))+1/2*sum(log(.df$wp))-1/2*log(sum(.df$wp))
+  return(ll)
+}
+
+.sigmas <- seq(0.001,0.5,by=0.001)
+lls <- lapply(.sigmas,compute_ll)
+plot(.sigmas,lls)
+
+compute_u <- function(.sigma){
+  .df <- df %>% 
+    mutate(wp=1/(.sigma**2+sd**2),
+    #mutate(wp=1/(.sigma**2),
+           sum_wp=sum(wp),
+           weighed_s=wp*s/sum_wp)
+  .u <- sum(.df$weighed_s)
+  return(.u)}
+
+compute_u(0)
+```
+
+Given how the distribution look like... I would probably change the distribution that is to be fitted here.
+But how do we do to fit a log normal distribution? With error bars?
+
+
+
+
+```{r}
+#First we write a function that computes it from the data frame "phenotypes", as function of the parameter .sigma
+
+df <- phenotypes %>% 
+  filter(type=="rib") %>% 
+  dplyr::select(strain,type,s_glu_gluaa,sd_s_glu_gluaa) %>% 
+  rename(s=s_glu_gluaa,
+         sd=sd_s_glu_gluaa)
+
+df %>% 
+  ggplot()+
+  geom_point(aes(s,sd))
+
+compute_ll <- function(.sigma){
+  .df <- df %>% 
+    mutate(wp=1/(.sigma**2+sd**2),
+    #mutate(wp=1/(.sigma**2),
+           sum_wp=sum(wp),
+           weighed_s=wp*s/sum_wp)
+  .u <- sum(.df$weighed_s)
+  #ll <- -1/2*sum(.df$wp*(.df$s**2-.u**2))-log(.sigma)+1/2*sum(log(.df$wp))-1/2*log(sum(.df$wp))
+  ll <- -(-1/2*sum(.df$wp*(.df$s**2-.u**2))-log(.sigma)+1/2*sum(log(.df$wp))-1/2*log(sum(.df$wp)))
+  #ll <- -1/2*sum(.df$wp*(.df$s**2-.u**2))+1/2*sum(log(.df$wp))-1/2*log(sum(.df$wp))
+  return(ll)
+}
+
+.sigmas <- seq(0.000001,0.000005,by=0.000001)
+lls <- lapply(.sigmas,compute_ll)
+plot(.sigmas,lls)
+
+compute_u <- function(.sigma){
+  .df <- df %>% 
+    mutate(wp=1/(.sigma**2+sd**2),
+    #mutate(wp=1/(.sigma**2),
+           sum_wp=sum(wp),
+           weighed_s=wp*s/sum_wp)
+  .u <- sum(.df$weighed_s)
+  return(.u)}
+
+compute_u(0)
+```
+
+
+
+```{r}
+sigma <- nloptr::cobyla(x0=0.1,compute_ll)$par
+sigma
+
+compute_mu <- function(.sigma){
+  .df <- df %>% 
+    mutate(wp=1/(.sigma**2),
+           sum_wp=sum(wp),
+           weighed_s=wp*s/sum_wp)
+  .u <- sum(.df$weighed_s)
+  return(.u)}
+
+mu <- compute_mu(sigma)
+mu
+```
+
+
+
+
+
+
+
+# MOTEVO
+
+Preliminary analysis
+
+```{r}
+read_mot_output <- function(.file){
+  #two first lines raw output:
+  #                             V1      V2                  V3               V4                  V5
+  #  1                       173-201       +            0.305227 Sigma24_spacer17   ecoli_sodc_22_F_-
+  #  2 ATGAAACGTTTTAGTCTGGCTATTCTGGC 4.58445   ecoli_sodc_22_F_-  
+  .file <- .file[file.info(.file)$size != 0]
+  .f <- lapply(.file, function(r){
+    .sites_raw <- read.table(r, fill = T, header= F)
+    .even_indexes <- seq(2,nrow(.sites_raw), 2)
+    .odd_indexes <- seq(1,nrow(.sites_raw)-1, 2)
+    ind <- length(.sites_raw[.even_indexes, ]) + 3
+    #.odd <- .sites_raw[.odd_indexes,][1:5]
+    #.odd <- .odd %>% select(V1, V2, V3, V4, V5) 
+    .sites_motevo <- cbind(.sites_raw[.odd_indexes,][1:5], .sites_raw[.even_indexes, ])[,1:8]
+    
+    colnames(.sites_motevo) <- c('pos', 'strand', 'post_prob', 'tf', 'name', 'seq', 'WM_score', 'seq_name')
+    .sites_motevo$WM_score <- as.numeric(as.character(.sites_motevo$WM_score))
+    .sites_motevo$post_prob <- as.numeric(as.character(.sites_motevo$post_prob))
+    .sites_motevo$pos <- as.character(.sites_motevo$pos)
+    .sites_motevo$seq_name <- gsub('_Alon_22_F_', '', .sites_motevo$seq_name)
+    .sites_motevo$seq_name <- gsub('_22_F_', '', .sites_motevo$seq_name)
+    .sites_motevo$seq_name <- gsub('ecoli_', '', .sites_motevo$seq_name)
+    .sites_motevo$seq <- as.character(.sites_motevo$seq)
+    .sites_motevo$name <- as.character(.sites_motevo$name)
+    .sites_motevo$tf <- as.character(.sites_motevo$tf)
+    .sites_motevo$strand <- as.character(.sites_motevo$strand)
+    
+    return(.sites_motevo)
+  })
+  return(do.call(rbind, .f))
+}
+
+fls <- list.files(path="/scicore/home/nimwegen/schdav16/Projects/monodcurve/motEvo/motesynth",pattern = '^sites', ignore.case = T, full.names = T)
+mot <- read_mot_output(fls)
+mot <- as.tibble(mot)
+```
+
+```{r}
+mot2 <- mot %>% 
+  tidyr::extract(seq_name,c("p","num","row","column"),"(p)([2-3]{1})ex_([A-H]{1})([0-9]{2})",remove=FALSE) %>% 
+  mutate(column=ifelse(substr(column,1,1)=="0",substr(column,2,2),column))
+
+
+mot2$identifyer <- paste(mot2$p,mot2$num,mot2$row,mot2$column,sep="")
+
+#Now let's select only the ones we see in the bulk data
+compare_slopes_2 <- compare_slopes %>% 
+  separate(strain,into=c("vector","identifyer"),remove=FALSE)
+
+id_list <- compare_slopes_2 %>% 
+  distinct(identifyer)
+
+mot3 <- mot2 %>% 
+  semi_join(id_list,by=c("identifyer"))
+
+# Keeping only the top sigma factor WM
+mot_sigma_top <- mot3 %>% 
+  filter(grepl("Sigma70",tf)) %>% 
+  group_by(identifyer) %>% 
+  arrange(desc(WM_score)) %>% 
+  filter(row_number()==1) %>% 
+  ungroup() %>% 
+  select(identifyer,WM_score,post_prob)
+
+results <- left_join(mot_sigma_top,compare_slopes_2,by=c("identifyer")) %>% 
+  drop_na()
+
+results %>% 
+  ggplot()+
+  geom_point(aes(WM_score,s_)) +
+  xlab("WM score")+
+  ylab("Slope from acetate to glucose")
+
+results %>% 
+  ggplot()+
+  geom_point(aes(post_prob,s_ace_glu))+
+  xlab("Posterior probability")+
+  ylab("Slope from acetate to glucose")
+
+results %>% 
+  ggplot()+
+  geom_point(aes(WM_score,s_glu_gluaa))+
+  xlab("WM score")+
+  ylab("Slope from glucose to glucose aa")
+
+results %>% 
+  ggplot()+
+  geom_point(aes(post_prob,s_glu_gluaa))+
+  xlab("Posterior probability")+
+  ylab("Slope from glucose to glucose aa")
+```
+
+
+
+
+Now let's take a look at these all together
+
+```{r}
+corr_analysis_df <- modeled_data %>% 
+  distinct(strain,s) %>% 
+  left_join(glu_gluaa_data,by=c("strain")) %>% 
+  left_join(average_data,by=c("strain")) %>% 
+  left_join(average_data_log,by=c("strain","strength"))
+```
+
+#dlogp/dg vs <p>
+corr_analysis_df %>% 
+  filter(strength %in% c("med","hi")) %>% 
+  ggplot()+
+  geom_point(aes(m_production_all,s,col=strength))+
+  ggpubr::stat_cor(aes(m_production_all,s))+
+  #geom_hline(aes(yintercept=0))+
+  facet_wrap(~strength,scale="free")+
+  theme_cowplot()+
+  xlab("Growth-rate (h-1)")+
+  ylab("d(log(p))/dg")
+
+
+
+```
+
+
+
+```{r}
+glu_gluaa_data <- mydata_results_all %>%
+  mutate(l_production=log(production)) %>% 
+  mutate(sd_l_production=sd_production/production) %>% 
+  filter(condition %in% c("glucose","glucoseaa")) %>% 
+  group_by(strain,condition) %>% 
+  mutate(m_l_production=mean(l_production,na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  select(strain,condition,m_l_production) %>% 
+  distinct(strain,condition,.keep_all = TRUE) %>% 
+  arrange(strain) %>% 
+  pivot_wider(names_from = condition,values_from=m_l_production) %>% 
+  mutate(delta=glucoseaa-glucose) %>% 
+  mutate(l_delta=log(glucoseaa)-log(glucose)) %>% 
+  select(strain,delta,l_delta)
+```
+
+Third variable, would be the average production
+
+```{r}
+average_data_log <- all_data %>% 
+  mutate(l_production=log(production)) %>% 
+  mutate(sd_l_production=sd_production/production) %>% 
+  filter(condition %in% c("acetate","glycerol","glucose")) %>% 
+  group_by(strain) %>% 
+  mutate(m_l_production_all=mean(l_production)) %>% 
+  ungroup() %>% 
+  distinct(strain,strength,m_l_production_all)
+```
+
+```{r}
+average_data <- all_data %>% 
+  #mutate(l_production=log(production)) %>% 
+  #mutate(sd_l_production=sd_production/production) %>% 
+  filter(condition %in% c("acetate","glycerol","glucose")) %>% 
+  group_by(strain) %>% 
+  mutate(m_production_all=mean(production)) %>% 
+  ungroup() %>% 
+  distinct(strain,strength,m_production_all)
+```
+
+Now let's take a look at these all together
+
+```{r}
+corr_analysis_df <- modeled_data %>% 
+  distinct(strain,s) %>% 
+  left_join(glu_gluaa_data,by=c("strain")) %>% 
+  left_join(average_data,by=c("strain")) %>% 
+  left_join(average_data_log,by=c("strain","strength"))
+```
+
+What is the structure of the correlations there?
+
+```{r}
+#dlogp/dg vs <p>
+corr_analysis_df %>% 
+  filter(strength %in% c("med","hi")) %>% 
+  ggplot()+
+  geom_point(aes(m_production_all,s,col=strength))+
+  ggpubr::stat_cor(aes(m_production_all,s))+
+  #geom_hline(aes(yintercept=0))+
+  facet_wrap(~strength,scale="free")+
+  theme_cowplot()+
+  xlab("Growth-rate (h-1)")+
+  ylab("d(log(p))/dg")
+
+
+#dlogp/dg l_delta
+corr_analysis_df %>% 
+  filter(strength %in% c("med","hi")) %>% 
+  ggplot()+
+  geom_point(aes(s,l_delta,col=strength))+
+  ggpubr::stat_cor(aes(s,l_delta))+
+  #geom_hline(aes(yintercept=0))+
+  facet_wrap(~strength,scale="free")+
+  theme_cowplot()+
+  xlab("d(log(p))/dg")+
+  ylab("l_delta")
+
+#m_production l_delta
+corr_analysis_df %>% 
+  filter(strength %in% c("med","hi")) %>% 
+  ggplot()+
+  geom_point(aes(m_production_all,l_delta,col=strength))+
+  ggpubr::stat_cor(aes(m_production_all,l_delta))+
+  #geom_hline(aes(yintercept=0))+
+  facet_wrap(~strength,scale="free")+
+  theme_cowplot()+
+  xlab("<p>")+
+  ylab("l_delta")
+
+```
+
+```{r}
+corr_analysis_df %>% 
+  filter(strength %in% c("med","hi")) %>% 
+  ggplot()+
+  geom_point(aes(s,delta,col=strength))+
+  ggpubr::stat_cor(aes(s,delta))+
+  geom_hline(aes(yintercept=0))+
+  theme_cowplot()+
+  xlab("Production slope from acetate to glucose")+
+  ylab("Production difference glucose aa - glucose")
+
+corr_analysis_df %>% 
+  filter(strength %in% c("med","hi")) %>% 
+  ggplot()+
+  geom_point(aes(s,delta,col=strength))+
+  ggpubr::stat_cor(aes(s,delta))+
+  geom_hline(aes(yintercept=0))+
+  facet_wrap(~strength,scale="free")+
+  theme_cowplot()+
+  xlab("Production slope from acetate to glucose")+
+  ylab("Production difference glucose aa - glucose")
+```
+
+So the faster the slope, relative to your average level, the more important the decrease between glucose aa and glucose. Which also makes sense and it is probably driven by the amount of production in glucose. The higher you are going to be in glucose, the higher you are likely to fall, after glucose. So I do not know if this is something really interesting in the end.
+
+```{r}
+corr_analysis_df %>% 
+  filter(strength %in% c("med","hi")) %>% 
+  ggplot()+
+  geom_point(aes(m_l_production_all,s))+
+  ggpubr::stat_cor(aes(m_l_production_all,s))+
+  facet_wrap(~strength,scale="free")+
+  #geom_hline(aes(yintercept=0))+
+  theme_cowplot()+
+  xlab("Mean production level")+
+  ylab("Production slope from acetate to glucose")
+```
+
+The production slope correlates very well, with the mean production level. Meaning that the more you produce in general, the better you are going to be at increasing the amount you produce with the growth rate. But that could be due to one condition, that's much higher than the others. is it varying all together.
+
+```{r}
+corr_analysis_df %>% 
+  filter(strength %in% c("med","hi")) %>% 
+  ggplot()+
+  geom_point(aes(m_l_production_all,s,col=strength))+
+  ggpubr::stat_cor(aes(m_l_production_all,s))+
+  #facet_wrap(~strength,scale="free")+
+  #geom_hline(aes(yintercept=0))+
+  theme_cowplot()+
+  xlab("Mean production level")+
+  ylab("Production slope from acetate to glucose")
+
+corr_analysis_df %>% 
+  filter(strength %in% c("med","hi")) %>% 
+  ggplot()+
+  geom_point(aes(log(m_l_production_all),log(s),col=strength))+
+  ggpubr::stat_cor(aes(log(m_l_production_all),log(s)))+
+  #facet_wrap(~strength,scale="free")+
+  #geom_hline(aes(yintercept=0))+
+  theme_cowplot()+
+  xlab("Mean production level (log)")+
+  ylab("Production slope from acetate to glucose (log)")
+
+unique(compute_slope_errxy(log(corr_analysis_df$m_l_production_all),log(corr_analysis_df$s)))
+unique(compute_sdslope_errxy(log(corr_analysis_df$m_l_production_all),log(corr_analysis_df$s)))
+```
+Not exactly sure what it means... that the relative increase from acetate to glucose, is actually independent of the mean production level?
+Or that there is actually a slight variation... as mean production level is going up, the slope of increase is going down.
+
+
+# COMING BACK TO LINEAR MODEL FOR RAW PRODUCTION
+
+Once we get rid of the main trend in the slope. What is the variability. And how is this variability of dp/dg versus <p>, looks like, compared to the variability in production between glucose and glucoseaa.
+
+```{r}
+#From acetate to glucose only
+modeled_data <- all_data %>%
+  filter(condition != "glucoseaa") %>% 
+  group_by(strain) %>% 
+  do((function(.df){
+    
+     .new_df <- .df %>% 
+       mutate(s=compute_slope_errxy(well_gr,production),
+              i=compute_intercept_errxy(well_gr,production),
+              production_pred=s*well_gr+i,
+              sd_s=compute_sdslope_errxy(well_gr,production))
+    return(.new_df)})(.)) %>% 
+    ungroup()
+```
+
+Comparing the results and the data!
+How many of them were correctly modelled?
+```{r}
+all_data %>% 
+  distinct(strain) %>% 
+  count()
+
+modeled_data %>% 
+  distinct(strain) %>% 
+  count()
+
+#One strain is posing problems...
+```
+
+```{r}
+modeled_data %>% 
+  ggplot()+
+  geom_line(aes(well_gr,production_pred),col="red")+
+  geom_point(aes(well_gr,production,col=condition))+
+  geom_errorbarh(aes(y=production,xmin=well_gr-sd_well_gr,xmax=well_gr+sd_well_gr))+
+  geom_errorbar(aes(x=well_gr,ymin=production-sd_production,ymax=production+sd_production))+
+  facet_wrap(~strain,scale="free")+
+  theme_cowplot()+
+  ggsave("./all_promoters_production_prediction_linear.pdf",width=30,height=20)
+```
+
+Let's now compute the what extent promoters are going down between glucose and glucose aa. The best way is simply to take all data again and compute the difference between the mean values.
+
+```{r}
+glu_gluaa_data <- all_data %>% 
+  filter(condition %in% c("glucose","glucoseaa")) %>% 
+  group_by(strain,condition) %>% 
+  mutate(m_production=mean(production,na.rm=TRUE)) %>% 
+  mutate(sd_m_production=sd(production,na.rm=TRUE)) %>% 
+  mutate(m_gr=mean(well_gr)) %>% 
+  mutate(sd_gr=sd(well_gr)) %>% 
+  ungroup() %>% 
+  select(strain,condition,m_production,m_gr,sd_m_production,sd_gr) %>% 
+  distinct(strain,condition,.keep_all = TRUE) %>% 
+  arrange(strain) %>% 
+  pivot_wider(names_from = condition,values_from=c(m_production,m_gr,sd_m_production,sd_gr)) %>% 
+  mutate(delta_gr=(m_gr_glucoseaa-m_gr_glucose)) %>%
+  mutate(delta=(m_production_glucoseaa-m_production_glucose)) %>% 
+  mutate(sd_delta=sqrt(sd_m_production_glucoseaa**2+sd_m_production_glucose**2)) %>% 
+  select(strain,delta,sd_delta,delta_gr)
+```
+
+Third variable, would be the average production
+
+```{r}
+average_data <- all_data %>% 
+  filter(condition %in% c("acetate","glycerol","glucose")) %>% 
+  group_by(strain) %>% 
+  mutate(m_production_all=mean(production)) %>% 
+  ungroup() %>% 
+  distinct(strain,strength,m_production_all)
+```
+
+Now let's take a look at these all together
+
+```{r}
+corr_analysis_df <- modeled_data %>% 
+  distinct(strain,s) %>% 
+  left_join(glu_gluaa_data,by=c("strain")) %>% 
+  left_join(average_data,by=c("strain"))
+```
+
+What is the structure of the correlations there?
+
+```{r}
+corr_analysis_df %>% 
+  filter(strength %in% c("med","hi")) %>% 
+  ggplot()+
+  geom_point(aes(s,delta,col=strength))+
+  ggpubr::stat_cor(aes(s,delta))+
+  geom_hline(aes(yintercept=0))+
+  theme_cowplot()+
+  xlab("Production slope from acetate to glucose")+
+  ylab("Production difference glucose aa - glucose")
+
+corr_analysis_df %>% 
+  filter(strength %in% c("med","hi")) %>% 
+  ggplot()+
+  geom_point(aes(s,delta,col=strength))+
+  ggpubr::stat_cor(aes(s,delta))+
+  geom_hline(aes(yintercept=0))+
+  facet_wrap(~strength,scale="free")+
+  theme_cowplot()+
+  xlab("Production slope from acetate to glucose")+
+  ylab("Production difference glucose aa - glucose")
+```
+
+So the faster the slope, relative to your average level, the more important the decrease between glucose aa and glucose. Which also makes sense and it is probably driven by the amount of production in glucose. The higher you are going to be in glucose, the higher you are likely to fall, after glucose. So I do not know if this is something really interesting in the end.
+
+```{r}
+corr_analysis_df %>% 
+  filter(strength %in% c("med","hi")) %>% 
+  ggplot()+
+  geom_point(aes(m_production_all,s))+
+  ggpubr::stat_cor(aes(m_production_all,s))+
+  facet_wrap(~strength,scale="free")+
+  #geom_hline(aes(yintercept=0))+
+  theme_cowplot()+
+  xlab("Mean production level")+
+  ylab("Production slope from acetate to glucose")
+```
+
+The production slope correlates very well, with the mean production level. Meaning that the more you produce in general, the better you are going to be at increasing the amount you produce with the growth rate. But that could be due to one condition, that's much higher than the others. is it varying all together.
+
+```{r}
+corr_analysis_df %>% 
+  filter(strength %in% c("med","hi")) %>% 
+  ggplot()+
+  geom_point(aes(m_production_all,s,col=strength))+
+  ggpubr::stat_cor(aes(m_production_all,s))+
+  #facet_wrap(~strength,scale="free")+
+  #geom_hline(aes(yintercept=0))+
+  theme_cowplot()+
+  xlab("Mean production level")+
+  ylab("Production slope from acetate to glucose")
+
+corr_analysis_df %>% 
+  filter(strength %in% c("med","hi")) %>% 
+  ggplot()+
+  geom_point(aes(log(m_production_all),log(s),col=strength))+
+  ggpubr::stat_cor(aes(log(m_production_all),log(s)))+
+  #facet_wrap(~strength,scale="free")+
+  #geom_hline(aes(yintercept=0))+
+  theme_cowplot()+
+  xlab("Mean production level (log)")+
+  ylab("Production slope from acetate to glucose (log)")
+
+unique(compute_slope_errxy(log(corr_analysis_df$m_production_all),log(corr_analysis_df$s)))
+unique(compute_sdslope_errxy(log(corr_analysis_df$m_production_all),log(corr_analysis_df$s)))
+```
+/
+Let's plot that again in linear scale.
+Let's do a fit in log scale, and then plot it in the linear scale.
+
+```{r}
+corr_analysis_df %>% 
+  filter(strength %in% c("med","hi")) %>% 
+  drop_na() %>% 
+  mutate(slope=compute_slope_errxy(log(m_production_all),log(s))) %>% 
+  mutate(intercept=compute_intercept_errxy(log(m_production_all),log(s))) %>% 
+  ggplot()+
+  geom_point(aes(m_production_all,s,col=strength))+
+  geom_line(aes(m_production_all,exp(slope*log(m_production_all)+intercept)),col="red")+
+  ggpubr::stat_cor(aes(m_production_all,s))+
+  #facet_wrap(~strength,scale="free")+
+  #geom_hline(aes(yintercept=0))+
+  theme_cowplot()+
+  xlab("Mean production level")+
+  ylab("Production slope from acetate to glucose")
+
+corr_analysis_df %>% 
+  filter(strength %in% c("med","hi")) %>% 
+  drop_na() %>% 
+  mutate(slope=compute_slope_errxy(log(m_production_all),log(s))) %>% 
+  mutate(intercept=compute_intercept_errxy(log(m_production_all),log(s))) %>% 
+  ggplot()+
+  geom_point(aes(log(m_production_all),log(s),col=strength))+
+  geom_line(aes(log(m_production_all),slope*log(m_production_all)+intercept),col="red")+
+  ggpubr::stat_cor(aes(log(m_production_all),log(s)))+
+  #facet_wrap(~strength,scale="free")+
+  #geom_hline(aes(yintercept=0))+
+  theme_cowplot()+
+  xlab("Mean production level")+
+  ylab("Production slope from acetate to glucose")
+```
+
+Now I can look at the noise around this relationship.
+
+```{r}
+corr_analysis_df %>% 
+  filter(strength %in% c("med","hi")) %>% 
+  drop_na() %>% 
+  mutate(slope=compute_slope_errxy(log(m_production_all),log(s))) %>% 
+  mutate(intercept=compute_intercept_errxy(log(m_production_all),log(s))) %>% 
+  mutate(s_pred=exp(slope*log(m_production_all)+intercept)) %>%
+  mutate(s_res=s-s_pred) %>% 
+  ggplot()+
+  geom_point(aes(m_production_all,s_res,col=strength))+
+  #geom_line(aes(m_production_all,exp(slope*log(m_production_all)+intercept)),col="red")+
+  #ggpubr::stat_cor(aes(m_production_all,s))+
+  #facet_wrap(~strength,scale="free")+
+  #geom_hline(aes(yintercept=0))+
+  theme_cowplot()+
+  xlab("Mean production level")+
+  ylab("Residuals")
+```
+
+Let's see how this residual slope, compares to delta
+
+```{r}
+corr_analysis_df %>% 
+  filter(strength %in% c("med","hi")) %>% 
+  drop_na() %>% 
+  mutate(slope=compute_slope_errxy(log(m_production_all),log(s))) %>% 
+  mutate(intercept=compute_intercept_errxy(log(m_production_all),log(s))) %>% 
+  mutate(s_pred=exp(slope*log(m_production_all)+intercept)) %>%
+  mutate(s_res=s-s_pred) %>% 
+  filter(!((strength=="med")&(s_res>5000))) %>% 
+  ggplot()+
+  geom_point(aes(s_res,delta/delta_gr,col=strength))+
+  #geom_line(aes(m_production_all,exp(slope*log(m_production_all)+intercept)),col="red")+
+  #ggpubr::stat_cor(aes(m_production_all,s))+
+  facet_wrap(~strength,scale="free")+
+  #geom_hline(aes(yintercept=0))+
+  theme_cowplot()+
+  xlab("Residuals to best slope from acetate to glucoseaa")+
+  ylab("Slope from glucose to glucoseaa")
+```
+
+So the variability, around this main trend, is the same order of magnitude as the one we see for the delta between glucose and glucose aa.
+But... it NOT correlated.
+
+Meaning that everything can be explained probably by:
+1) All of them saturate at the same growth rates, which is driven by RNA pol saturating.
+2) On top of that there is a layer of variation, probably due to some experimental noise, and, some change in sigma factors that are liked.
+
+So essentially, there are three ingredients now:
+- main trend: RNA pol saturates
+- residual with respect to the main trend: add error bars there...
+- delta from glucose to glucose aa
+- So we have two slopes, they vary by the same order of magnitude, and... they are NOT correlated.
+
+Would it be possible to... do the same analysis again.
+- With error bars.
+- With the log.
+- Looking at the d(log p)/dg versus <p> or <log(p)>, or log(<p>)
+- As well as... log(glucose aa/glucose)
+
+# LOOKING AT ALEXANDER SCHMIDT DATA
+
+I would like to look at the concentration of different sub-units of the RNA polymerase.
+For that, went to look at:
+
+"/scicore/home/nimwegen/rocasu25/Documents/Projects/biozentrum/constitexpr/src/20190911_schmidtEtAl/"
+
+The RNA polymerase subunits, that are present in the data set are (DNA-directed)
+- rpoC, rpoB, rpoA, rpoZ (respectively, beta', beta, alpha, omega)
+
+Then there are RNA polymerase associated proteins such as:
+- rapA, which is thought to be involved in freeing RNA pol when it is trapped in supercoiled DNA for instance.
+
+Then sigma factors:
+- rpoD, rpoS, rpoE, fliA, rpoN
+
+```{r}
+# Ran tidySchmidtData.R
+unique(mydata %>%
+  filter(grepl("RNA polymerase",Description)) %>% 
+  .$Description)
+```
+
+Let's first look at the RNA polymerase subunits
+
+```{r}
+# Ran tidySchmidtData.R
+mydata %>% 
+  filter(Gene %in% c("rpoA","rpoB","rpoC","rpoZ")) %>% 
+  ggplot(aes(`Growth.rate.(h-1)`,prot_nb_per_cell))+
+  geom_line()+
+  geom_point()+
+  facet_wrap(~Gene,scale="free")+
+  xlim(0,3)+
+  theme_cowplot()+
+  xlab("Growth-rate (h-1)")+
+  ylab("# proteins per cell")
+
+mydata %>% 
+  filter(Gene %in% c("rpoA","rpoB","rpoC","rpoZ")) %>% 
+  ggplot(aes(`Growth.rate.(h-1)`,prot_nb_per_cell/`Single.cell.volume.[fl]1`))+
+  geom_line()+
+  geom_point()+
+  facet_wrap(~Gene,scale="free")+
+  xlim(0,3)+
+  theme_cowplot()+
+  xlab("Growth-rate (h-1)")+
+  ylab("Concentration (#prot/fl)")
+```
+rpoZ, the omega subunit, is the only one that shows saturation. Why? What it is doing in the functioning of the RNA pol?
+Let' look at the other proteins:
+
+```{r}
+mydata %>% 
+  filter(Gene %in% c("rpoD", "rpoS", "rpoE", "fliA", "rpoN")) %>% 
+  ggplot(aes(`Growth.rate.(h-1)`,prot_nb_per_cell/`Single.cell.volume.[fl]1`))+
+  geom_line()+
+  geom_point()+
+  facet_wrap(~Gene,scale="free")+
+  xlim(0,3)+
+  theme_cowplot()+
+  xlab("Growth-rate (h-1)")+
+  ylab("Concentration (#prot/fl)")
+```
+
+Are there anti-sigma factor in the data set?
+
+```{r}
+# Ran tidySchmidtData.R
+unique(mydata %>%
+  filter(grepl("sigma",Description)) %>% 
+  .$Description)
+```
+The only one there, is an anti-sigma factor, rsd. Which is the anti sigma factor of rpoD, according to https://pubmed.ncbi.nlm.nih.gov/21573101/
+
+```{r}
+mydata %>% 
+  filter(Gene %in% c("rpoD", "rpoS", "rpoE", "fliA", "rpoN","rsd")) %>% 
+  ggplot(aes(`Growth.rate.(h-1)`,prot_nb_per_cell/`Single.cell.volume.[fl]1`))+
+  geom_line()+
+  geom_point()+
+  facet_wrap(~Gene,scale="free")+
+  xlim(0,3)+
+  theme_cowplot()+
+  xlab("Growth-rate (h-1)")+
+  ylab("Concentration (#prot/fl)")
+```
+
+It is interesting to see that rsd, the rpoD anti-sigma factor is indeed going down.
+And also that rpoS, seems to go down first and then to go up.
+But rsd levels, between glucose and glucose aa do not change. Only rpoD concentration goes up quite a lot.
+
+RssB is supposed to be the anti-sigma factor of sigma38 on the other end.
+```{r}
+# Ran tidySchmidtData.R
+unique(mydata %>%
+  filter(grepl("clpx",Description,ignore.case=TRUE)) %>% 
+  .$Description)
+```
+
+If I was only to think of sigma38 and sigma70, then there is a missing actor there: RssB, the sigma38 anti-sigma factor which also promotes it hydrolysis. It is also called sprE... I really do not want to go there.
+
+
+
+
+
+

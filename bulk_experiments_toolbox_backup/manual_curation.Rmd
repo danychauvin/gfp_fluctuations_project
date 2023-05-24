@@ -1,0 +1,1084 @@
+# Manual curation of 96 well plates data
+
+# David, Dany
+# 20210301
+
+# 96 well plates data are quite noisy.
+# This script aims at manually curating data set coming from 96 well plates.
+# 1- mean_OD blank of .038 is subtracted from the data, which leads to corrected_od
+# 2- For all 96 well plates, at once, corrected OD versus time is plotted.
+# 3- This is used to decide on criteria to select only exponential growth rate regime data (filtering can be done based on time and corrected_od values)
+# 4- Then log(corrected_OD) vs time is plotted again, with highlighted exponential growth rate.
+# 5- Then the following are plotted: corrected_OD vs time, fluo vs time, log(corrected_od versus time), fluo vs corrected_OD, together with an exponential fit.
+# 6- Each well can be either selected or discarded, based on the shown data.
+# 7- Depending on these results, the mean growth rate and the distribution of growth rate can be issued.
+# 8- Based on these results the left data can be selected or discarded.
+
+# Loading functions
+```{r}
+source("/scicore/home/nimwegen/schdav16/Projects/constitexpr/code/momentum_kinetics/load_packages_functions.R")
+```
+
+# Data set, 20210209Testrun3
+## Importing data
+```{r}
+path_to_data_list <- "/scicore/home/nimwegen/rocasu25/Documents/Projects/biozentrum/constitexpr/20210208_constitexpr_testrun2/dataList.csv"
+source("/scicore/home/nimwegen/schdav16/Projects/constitexpr/code/momentum_kinetics/import_data.R")
+```
+
+```{r}
+mydata <- mydata %>% 
+  mutate(valid=NA) %>% 
+  mutate(well=paste(plate,row,column,strain,sep="_"))
+```
+
+# Plot, number of plates in the data set, and number of wells
+```{r}
+plates <- unique(mydata %>% 
+  distinct(well,.keep_all = TRUE) %>%
+  group_by(plate) %>% 
+  count() %>% 
+  .$plate)
+```
+
+# Correct for blank
+# From testrun2
+```{r}
+mean_blank_od <- 0.03840125 
+mydata <- mydata %>% 
+  mutate(corrected_od=od-mean_blank_od)
+
+mean_blank_fluo <- 35.3075
+mydata <- mydata %>% 
+  mutate(corrected_fluo=fluo-mean_blank_fluo)
+```
+
+# Plot log(corrected_od) for all plates
+```{r message=FALSE,warning=FALSE}
+for(i in plates){
+  mydata_to_plot <- mydata %>% 
+    filter(plate==i) %>% 
+    filter(time_min/60<30)
+  
+  condition <- unique(mydata_to_plot$condition)
+  
+  print(
+  mydata_to_plot %>%
+  ggplot()+
+  geom_point(aes(time_min/60,corrected_od))+
+  facet_grid(row~column)+ 
+  theme(strip.text.x = element_blank())+
+  labs(subtitle=paste(i,condition,sep=" ")))
+  }
+```
+
+```{r message=FALSE,warning=FALSE}
+for(i in plates){
+  mydata_to_plot <- mydata %>% 
+    filter(plate==i)%>% 
+    filter(time_min/60<30)
+  
+  condition <- unique(mydata_to_plot$condition)
+  
+  print(
+  mydata_to_plot %>%
+  ggplot()+
+  geom_point(aes(time_min,log(corrected_fluo)))+
+  facet_grid(row~column)+ 
+  theme(strip.text.x = element_blank())+
+  labs(subtitle=paste(i,condition,sep=" ")))
+  }
+```
+
+# Set raw filters to select only exponential growth regime
+## acetate
+```{r}
+cond <- "acetate"
+```
+
+We'll use here the global maximum regime for each growth curve, two parameters.
+minimal OD (here corrected OD): actually 0 on corrected_od
+fold-change before getting to global maximum: set to 0.7
+Also need to set a filter on 
+
+```{r message=FALSE,warning=FALSE}
+#parameters for exponential growth
+rel <- 0.6
+time_min_threshold <- 5*60
+```
+
+```{r message=FALSE,warning=FALSE}
+mydata_exp_growth <- mydata %>% 
+  filter(condition==cond) %>% 
+  filter(!grepl("empty",strain)) %>% #filter out empty wells
+  filter(max(od)>0.05) %>% #to get rid of wells in which there are no growth at all 
+  filter(time_min>time_min_threshold) %>% 
+  group_by(well) %>%
+  arrange(time_min) %>% 
+  mutate(global_max=max(corrected_od,na.rm=TRUE)) %>%
+  mutate(relative_max=rel*global_max) %>% 
+  mutate(above_max_time=ifelse(corrected_od>=relative_max,time_min,NA)) %>% 
+  mutate(time_limit=min(above_max_time,na.rm=TRUE)) %>% 
+  filter(time_min<time_limit) %>% 
+  ungroup()
+```
+
+Checking results 
+```{r message=FALSE,warning=FALSE}
+plates <- unique(mydata_exp_growth$plate)
+
+for(i in plates){
+  mydata_to_plot <- mydata_exp_growth %>% 
+    filter(plate==i)
+  
+  condition <- unique(mydata_to_plot$condition)
+  
+  print(
+  mydata_to_plot %>%
+  ggplot()+
+  geom_point(aes(time_min/60,log(corrected_od)))+
+  facet_grid(row~column)+ 
+  theme(strip.text.x = element_blank())+
+  labs(subtitle=paste(i,condition,sep=" ")))
+  
+  print(
+  mydata_to_plot %>%
+  ggplot()+
+  geom_point(aes(time_min/60,log(corrected_fluo)))+
+  facet_grid(row~column)+ 
+  theme(strip.text.x = element_blank())+
+  labs(subtitle=paste(i,condition,sep=" ")))
+  }
+```
+
+```{r message=FALSE,warning=FALSE}
+raw_data <- mydata %>% 
+  filter(condition==cond) %>% 
+  filter(!grepl("empty",strain)) %>% #filter out empty wells
+  filter(max(od)>0.05) %>% #to get rid of wells in which there are no growth at all 
+  filter(time_min/60<30) %>% #after things are not interesting anymore
+  mutate(valid=NA)#will be used to record data that will be kept
+
+min_corrected_od <- 0.05
+max_corrected_od <- 0.2
+
+raw_data_fluo_od <- mydata %>% 
+  filter(between(corrected_od,min_corrected_od,max_corrected_od)) %>% 
+  filter(condition==cond) %>% 
+  filter(!grepl("empty",strain)) %>% #filter out empty wells
+  filter(max(od)>min_corrected_od) %>% #to get rid of wells in which there are no growth at all 
+  filter(time_min/60<30) %>% #after things are not interesting anymore
+  mutate(valid=NA)#will be used to record data that will be kept
+
+exp_growth_data <- mydata_exp_growth
+# Now let's compare hidata and legdata
+```
+
+```{r}
+# Saving data
+ace_textrun2_data <- raw_data
+ace_textrun2_data %>% 
+  readr::write_csv("~/ace_textrun2_data.csv")
+```
+
+# Set raw filters to select only exponential growth regime
+## acetate
+```{r}
+cond <- "glycerol"
+```
+
+We'll use here the global maximum regime for each growth curve, two parameters.
+minimal OD (here corrected OD): actually 0 on corrected_od
+fold-change before getting to global maximum: set to 0.7
+Also need to set a filter on 
+
+```{r message=FALSE,warning=FALSE}
+#parameters for exponential growth
+rel <- 0.6
+time_min_threshold <- 2*60
+```
+
+```{r message=FALSE,warning=FALSE}
+mydata_exp_growth <- mydata %>% 
+  filter(condition==cond) %>% 
+  filter(!grepl("empty",strain)) %>% #filter out empty wells
+  filter(max(od)>0.05) %>% #to get rid of wells in which there are no growth at all 
+  filter(time_min>time_min_threshold) %>% 
+  group_by(well) %>%
+  arrange(time_min) %>% 
+  mutate(global_max=max(corrected_od,na.rm=TRUE)) %>%
+  mutate(relative_max=rel*global_max) %>% 
+  mutate(above_max_time=ifelse(corrected_od>=relative_max,time_min,NA)) %>% 
+  mutate(time_limit=min(above_max_time,na.rm=TRUE)) %>% 
+  filter(time_min<time_limit) %>% 
+  ungroup()
+```
+
+Checking results 
+```{r message=FALSE,warning=FALSE}
+plates <- unique(mydata_exp_growth$plate)
+
+for(i in plates){
+  mydata_to_plot <- mydata_exp_growth %>% 
+    filter(plate==i)
+  
+  condition <- unique(mydata_to_plot$condition)
+  
+  print(
+  mydata_to_plot %>%
+  ggplot()+
+  geom_point(aes(time_min/60,log(corrected_od)))+
+  facet_grid(row~column)+ 
+  theme(strip.text.x = element_blank())+
+  labs(subtitle=paste(i,condition,sep=" ")))
+  
+  print(
+  mydata_to_plot %>%
+  ggplot()+
+  geom_point(aes(time_min/60,log(corrected_fluo)))+
+  facet_grid(row~column)+ 
+  theme(strip.text.x = element_blank())+
+  labs(subtitle=paste(i,condition,sep=" ")))
+  }
+```
+
+```{r message=FALSE,warning=FALSE}
+raw_data <- mydata %>% 
+  filter(condition==cond) %>% 
+  filter(!grepl("empty",strain)) %>% #filter out empty wells
+  filter(max(od)>0.05) %>% #to get rid of wells in which there are no growth at all 
+  filter(time_min/60<30) %>% #after things are not interesting anymore
+  mutate(valid=NA)#will be used to record data that will be kept
+
+min_corrected_od <- 0.05
+max_corrected_od <- 0.4
+
+raw_data_fluo_od <- mydata %>% 
+  filter(between(corrected_od,min_corrected_od,max_corrected_od)) %>% 
+  filter(condition==cond) %>% 
+  filter(!grepl("empty",strain)) %>% #filter out empty wells
+  filter(max(od)>min_corrected_od) %>% #to get rid of wells in which there are no growth at all 
+  filter(time_min/60<30) %>% #after things are not interesting anymore
+  mutate(valid=NA)#will be used to record data that will be kept
+
+exp_growth_data <- mydata_exp_growth
+# Now let's compare hidata and legdata
+```
+
+```{r}
+# Saving data
+ace_textrun2_data <- raw_data
+ace_textrun2_data %>% 
+  readr::write_csv("~/gly_textrun2_data.csv")
+```
+
+# Set raw filters to select only exponential growth regime
+## acetate
+```{r}
+cond <- "glucose"
+```
+
+We'll use here the global maximum regime for each growth curve, two parameters.
+minimal OD (here corrected OD): actually 0 on corrected_od
+fold-change before getting to global maximum: set to 0.7
+Also need to set a filter on 
+
+```{r message=FALSE,warning=FALSE}
+#parameters for exponential growth
+rel <- 0.6
+time_min_threshold <- 60
+```
+
+```{r message=FALSE,warning=FALSE}
+mydata_exp_growth <- mydata %>% 
+  filter(condition==cond) %>% 
+  filter(!grepl("empty",strain)) %>% #filter out empty wells
+  filter(max(od)>0.05) %>% #to get rid of wells in which there are no growth at all 
+  filter(time_min>time_min_threshold) %>% 
+  group_by(well) %>%
+  arrange(time_min) %>% 
+  mutate(global_max=max(corrected_od,na.rm=TRUE)) %>%
+  mutate(relative_max=rel*global_max) %>% 
+  mutate(above_max_time=ifelse(corrected_od>=relative_max,time_min,NA)) %>% 
+  mutate(time_limit=min(above_max_time,na.rm=TRUE)) %>% 
+  filter(time_min<time_limit) %>% 
+  ungroup()
+```
+
+Checking results 
+```{r message=FALSE,warning=FALSE}
+plates <- unique(mydata_exp_growth$plate)
+
+for(i in plates){
+  mydata_to_plot <- mydata_exp_growth %>% 
+    filter(plate==i)
+  
+  condition <- unique(mydata_to_plot$condition)
+  
+  print(
+  mydata_to_plot %>%
+  ggplot()+
+  geom_point(aes(time_min/60,log(corrected_od)))+
+  facet_grid(row~column)+ 
+  theme(strip.text.x = element_blank())+
+  labs(subtitle=paste(i,condition,sep=" ")))
+  
+  print(
+  mydata_to_plot %>%
+  ggplot()+
+  geom_point(aes(time_min/60,log(corrected_fluo)))+
+  facet_grid(row~column)+ 
+  theme(strip.text.x = element_blank())+
+  labs(subtitle=paste(i,condition,sep=" ")))
+  }
+```
+
+```{r message=FALSE,warning=FALSE}
+raw_data <- mydata %>% 
+  filter(condition==cond) %>% 
+  filter(!grepl("empty",strain)) %>% #filter out empty wells
+  filter(max(od)>0.05) %>% #to get rid of wells in which there are no growth at all 
+  filter(time_min/60<30) %>% #after things are not interesting anymore
+  mutate(valid=NA)#will be used to record data that will be kept
+
+min_corrected_od <- 0.05
+max_corrected_od <- 0.5
+
+raw_data_fluo_od <- mydata %>% 
+  filter(condition==cond) %>% 
+  filter(!grepl("empty",strain)) %>% #filter out empty wells
+  filter(max(od)>0.05) %>% #to get rid of wells in which there are no growth at all 
+  mutate(valid=NA) %>% #will be used to record data that will be kept
+  group_by(well) %>%
+  arrange(time_min) %>% 
+  mutate(above_max_time=ifelse(corrected_od>=max_corrected_od,time_min,NA)) %>% 
+  mutate(time_limit=min(above_max_time,na.rm=TRUE)) %>% 
+  filter(time_min<time_limit) %>% 
+  mutate(below_min_time=ifelse(corrected_od<=min_corrected_od,time_min,NA)) %>% 
+  mutate(time_limit=max(below_min_time,na.rm=TRUE)) %>% 
+  filter(time_min>time_limit) %>% 
+  ungroup()
+
+exp_growth_data <- mydata_exp_growth
+# Now let's compare hidata and legdata
+```
+
+```{r}
+# Saving data
+ace_textrun2_data <- raw_data
+ace_textrun2_data %>% 
+  readr::write_csv("~/glu_textrun2_data.csv")
+```
+
+# Set raw filters to select only exponential growth regime
+## acetate
+```{r}
+cond <- "glucoseaa"
+```
+
+We'll use here the global maximum regime for each growth curve, two parameters.
+minimal OD (here corrected OD): actually 0 on corrected_od
+fold-change before getting to global maximum: set to 0.7
+Also need to set a filter on 
+
+```{r message=FALSE,warning=FALSE}
+#parameters for exponential growth
+rel <- 0.6
+time_min_threshold <- 60
+```
+
+```{r message=FALSE,warning=FALSE}
+mydata_exp_growth <- mydata %>% 
+  filter(condition==cond) %>% 
+  filter(!grepl("empty",strain)) %>% #filter out empty wells
+  filter(max(od)>0.05) %>% #to get rid of wells in which there are no growth at all 
+  filter(time_min>time_min_threshold) %>% 
+  group_by(well) %>%
+  arrange(time_min) %>% 
+  mutate(global_max=max(corrected_od,na.rm=TRUE)) %>%
+  mutate(relative_max=rel*global_max) %>% 
+  mutate(above_max_time=ifelse(corrected_od>=relative_max,time_min,NA)) %>% 
+  mutate(time_limit=min(above_max_time,na.rm=TRUE)) %>% 
+  filter(time_min<time_limit) %>% 
+  ungroup()
+```
+
+Checking results 
+```{r message=FALSE,warning=FALSE}
+plates <- unique(mydata_exp_growth$plate)
+
+for(i in plates){
+  mydata_to_plot <- mydata_exp_growth %>% 
+    filter(plate==i)
+  
+  condition <- unique(mydata_to_plot$condition)
+  
+  print(
+  mydata_to_plot %>%
+  ggplot()+
+  geom_point(aes(time_min/60,log(corrected_od)))+
+  facet_grid(row~column)+ 
+  theme(strip.text.x = element_blank())+
+  labs(subtitle=paste(i,condition,sep=" ")))
+  
+  print(
+  mydata_to_plot %>%
+  ggplot()+
+  geom_point(aes(time_min/60,log(corrected_fluo)))+
+  facet_grid(row~column)+ 
+  theme(strip.text.x = element_blank())+
+  labs(subtitle=paste(i,condition,sep=" ")))
+  }
+```
+
+```{r message=FALSE,warning=FALSE}
+raw_data <- mydata %>% 
+  filter(condition==cond) %>% 
+  filter(!grepl("empty",strain)) %>% #filter out empty wells
+  filter(max(od)>0.05) %>% #to get rid of wells in which there are no growth at all 
+  filter(time_min/60<30) %>% #after things are not interesting anymore
+  mutate(valid=NA)#will be used to record data that will be kept
+
+min_corrected_od <- 0.05
+max_corrected_od <- 0.75
+
+raw_data_fluo_od <- mydata %>% 
+  filter(condition==cond) %>% 
+  filter(!grepl("empty",strain)) %>% #filter out empty wells
+  filter(max(od)>0.05) %>% #to get rid of wells in which there are no growth at all 
+  mutate(valid=NA) %>% #will be used to record data that will be kept
+  group_by(well) %>%
+  arrange(time_min) %>% 
+  mutate(above_max_time=ifelse(corrected_od>=max_corrected_od,time_min,NA)) %>% 
+  mutate(time_limit=min(above_max_time,na.rm=TRUE)) %>% 
+  filter(time_min<time_limit) %>% 
+  mutate(below_min_time=ifelse(corrected_od<=min_corrected_od,time_min,NA)) %>% 
+  mutate(time_limit=max(below_min_time,na.rm=TRUE)) %>% 
+  filter(time_min>time_limit) %>% 
+  ungroup()
+
+exp_growth_data <- mydata_exp_growth
+# Now let's compare hidata and legdata
+```
+
+```{r}
+# Saving data
+ace_textrun2_data <- raw_data
+ace_textrun2_data %>% 
+  readr::write_csv("~/gluaa_textrun2_data.csv")
+```
+
+# Now that manual curation is over... inference !
+
+## Import saved data
+
+```{r}
+min_corrected_od <- 0.05
+max_corrected_od <- 0.2
+ace_textrun2_data <- readr::read_csv("~/ace_textrun2_data.csv") %>% 
+  filter(valid=="y") %>% 
+  filter(between(corrected_od,min_corrected_od,max_corrected_od))
+
+min_corrected_od <- 0.05
+max_corrected_od <- 0.4
+gly_textrun2_data <- readr::read_csv("~/gly_textrun2_data.csv") %>% 
+  filter(valid=="y") %>% 
+  group_by(well) %>%
+  arrange(time_min) %>% 
+  mutate(above_max_time=ifelse(corrected_od>=max_corrected_od,time_min,NA)) %>% 
+  mutate(time_limit=min(above_max_time,na.rm=TRUE)) %>% 
+  filter(time_min<time_limit) %>% 
+  mutate(below_min_time=ifelse(corrected_od<=min_corrected_od,time_min,NA)) %>% 
+  mutate(time_limit=max(below_min_time,na.rm=TRUE)) %>% 
+  filter(time_min>time_limit) %>% 
+  ungroup() %>% 
+  select(-c(above_max_time,time_limit,below_min_time))
+
+min_corrected_od <- 0.05
+max_corrected_od <- 0.5
+glu_textrun2_data <- readr::read_csv("~/glu_textrun2_data.csv") %>% 
+  filter(valid=="y") %>% 
+  group_by(well) %>%
+  arrange(time_min) %>% 
+  mutate(above_max_time=ifelse(corrected_od>=max_corrected_od,time_min,NA)) %>% 
+  mutate(time_limit=min(above_max_time,na.rm=TRUE)) %>% 
+  filter(time_min<time_limit) %>% 
+  mutate(below_min_time=ifelse(corrected_od<=min_corrected_od,time_min,NA)) %>% 
+  mutate(time_limit=max(below_min_time,na.rm=TRUE)) %>% 
+  filter(time_min>time_limit) %>% 
+  ungroup() %>% 
+  select(-c(above_max_time,time_limit,below_min_time))
+
+
+min_corrected_od <- 0.05
+max_corrected_od <- 0.75
+gluaa_textrun2_data <- readr::read_csv("~/gluaa_textrun2_data.csv") %>% 
+  filter(valid=="y") %>% 
+  group_by(well) %>%
+  arrange(time_min) %>% 
+  mutate(above_max_time=ifelse(corrected_od>=max_corrected_od,time_min,NA)) %>% 
+  mutate(time_limit=min(above_max_time,na.rm=TRUE)) %>% 
+  filter(time_min<time_limit) %>% 
+  mutate(below_min_time=ifelse(corrected_od<=min_corrected_od,time_min,NA)) %>% 
+  mutate(time_limit=max(below_min_time,na.rm=TRUE)) %>% 
+  filter(time_min>time_limit) %>% 
+  ungroup() %>% 
+  select(-c(above_max_time,time_limit,below_min_time))
+
+
+mydata_curated <- rbind(
+  ace_textrun2_data,
+  gly_textrun2_data,
+  glu_textrun2_data,
+  gluaa_textrun2_data) %>% 
+  filter((grepl("p2-",strain))|(grepl("p3-",strain))|(grepl("pl-",strain)))
+
+mydata_curated %>% 
+  mutate(valid=ifelse(is.na(valid),"y",valid)) %>% 
+  group_by(valid) %>% 
+  count()
+
+mydata_curated <- mydata_curated %>% 
+  filter(valid=="y")
+
+```
+
+## Inference on acetate data
+
+
+## Packages and functions
+
+```{r}
+generate_traces <- function(control,rep){
+  
+  if(control==TRUE){
+  alpha_p <- 0
+  }else{
+  alpha_p <- runif(1,min_alpha_p,max_alpha_p)}
+  
+  generate_single_trace <- function(r){
+      gr <- rnorm(1,mean_x,std_x)*log(2)/60
+      lod <- lod_ini + gr*time_min
+      residuals <- rnorm(length(lod),0,exp_err_od)
+      #residuals <- rnorm(length(lod),0,0)
+      od_noisy <- exp(lod)+residuals
+      lod_noisy <- log(od_noisy)
+      f <- exp(lod)*(alpha_0+alpha_p)+beta
+      #f_noise <- rnorm(length(f),0,0)
+      #f_noise <- rnorm(length(f),0,sqrt(mean(f)))
+      #f_noise <- rnorm(length(f),0,100)
+      f_noise <- c(rnorm(1,0,exp_err_f*f[1]))
+      for(i in c(2:length(f))){
+        f_noise <- c(f_noise,rnorm(1,0,exp_err_f*f[i]))
+        #f_noise <- c(f_noise,rnorm(1,0,0.001*f[i]))
+        }
+      f_noisy <- f+f_noise
+      new_df <- tibble(time_min=time_min,corrected_od=od_noisy,fluo=f_noisy,replicate=r,alpha_p=alpha_p,alpha_0=alpha_0,beta=beta)
+      return(new_df)}
+  
+  .final_df <- lapply(c(1:rep), generate_single_trace)
+  .final_df <- do.call(rbind,.final_df)
+  return(.final_df)
+}
+
+compute_dL_dB <- function(.beta){
+  compute_dL_dB_p <- function(map2,mbp2,mapbp,np,.beta){
+    val_p <- np*(mapbp-mbp2*.beta)/(map2+mbp2*.beta**2-2*.beta*mapbp)}
+    
+  new_df <- mydata_inference %>% 
+    mutate(dL_dB_p=compute_dL_dB_p(mean_ap2,mean_bp2,mean_apbp,Np,.beta))
+    dL_dB <- sum(new_df$dL_dB_p)
+  return(dL_dB)
+}
+
+dichotomic_search <- function(.beta_max_ini){
+  beta <- 0
+  dL_dB <- compute_dL_dB(beta)
+  if(dL_dB<=0){
+    print(sprintf("beta,dL_dB = %s,%s",as.character(beta),as.character(dL_dB)))
+    return(0)
+  }else if(dL_dB>=0){
+    beta_min <- 0
+    beta_max <- .beta_max_ini}
+  
+  dL_dB <- compute_dL_dB(beta_max)
+  
+  while(dL_dB>0){
+  beta_max <- beta_max*2
+  dL_dB <- compute_dL_dB(beta_max)
+  }
+  print("Negative dL_dB, beginning dichotomic search")
+  print(sprintf("With beta_max,dL_dB = %s,%s",as.character(beta_max),as.character(dL_dB)))
+  
+  while((2*abs(beta_min-beta_max)/(beta_max+beta_min))>1e-3){
+    print(sprintf("beta_max,beta_min = %s,%s",as.character(beta_max),as.character(beta_min)))
+    beta <- (beta_max+beta_min)/2
+    dL_dB <- compute_dL_dB(beta)
+    print(sprintf("beta,dL_dB = %s,%s",as.character(beta),as.character(dL_dB)))
+    if(dL_dB>=0){
+      beta_min <- beta
+    }else{
+      beta_max <- beta}}
+  
+  return(beta)
+}
+
+
+compute_wp <- function(.Bp,.Qp2,np,.beta){
+  wp_val <- (np-1)/((.beta-.Bp)**2 + .Qp2)
+  return(wp_val)}
+
+compute_beta <- function(.df){
+  .new_df <- .df %>% 
+    mutate(num=wp*Bp)
+  val <- (sum(.new_df$num))/(sum(.new_df$wp))
+  return(val)}
+
+compute_error_beta <- function(.beta){
+  .new_df <- mydata_inference %>% 
+    mutate(dL2_dB2=(Np-1)*(Qp2-(.beta-Bp)**2)/(Qp2+(.beta-Bp)**2)**2)
+  val <- 1/sum(.new_df$dL2_dB2)
+  return(val)}
+
+iterative_search <- function(.beta_ini){
+  
+  .old_beta <- .beta_ini
+  
+  .df <- mydata_inference %>% 
+    mutate(wp=compute_wp(Bp,Qp2,Np,.old_beta))
+  
+  .new_beta <- compute_beta(.df)
+  
+  while(abs(.new_beta-.old_beta)>0.01){
+    print(sprintf("old_beta,new_beta=%s,%s",as.character(.old_beta),as.character(.new_beta)))
+    .old_beta <- .new_beta
+    .df <- mydata_inference %>% 
+    mutate(wp=compute_wp(Bp,Qp2,Np,.old_beta))
+    .new_beta <- compute_beta(.df)}
+    
+    return(.new_beta)
+
+  }
+    
+```
+
+
+```{r}
+mydata_inference <- mydata_curated %>% 
+  filter(condition=="acetate") %>% 
+  group_by(well) %>% 
+  mutate(mean_xy_p=mean(corrected_od*fluo)) %>% 
+  mutate(mean_x2_p=mean((corrected_od)**2)) %>% 
+  mutate(mean_y2_p=mean((fluo)**2)) %>% 
+  mutate(mean_x_p=mean(corrected_od)) %>%
+  mutate(mean_y_p=mean(fluo)) %>%
+  mutate(var_x_p=var(corrected_od)) %>% 
+  mutate(Bp=(mean_y_p*mean_x2_p-mean_xy_p*mean_x_p)/(var_x_p)) %>% 
+  mutate(Qp2=(mean_y2_p*mean_x2_p-mean_xy_p**2)/(var_x_p)-Bp**2) %>% 
+  mutate(Np=n()) %>% 
+  ungroup() %>% 
+  mutate(aip=fluo-corrected_od*mean_xy_p/mean_x2_p) %>% 
+  mutate(bip=1-corrected_od*mean_x_p/mean_x2_p) %>% 
+  group_by(well) %>% 
+  mutate(mean_apbp=mean(aip*bip),
+         mean_ap2=mean(aip**2),
+         mean_bp2=mean(bip**2)) %>% 
+  mutate(Np=n()) %>% 
+  ungroup() %>% 
+  distinct(well,.keep_all=TRUE)
+
+#approx_beta <- mydata_curated %>%
+#  group_by(strain) %>%
+#  mutate(intercept=linear_mod_intercept(fluo,corrected_od)) %>% 
+#  ungroup() %>% 
+#  distinct(promoter,replicate,.keep_all=TRUE) %>% 
+#  .$intercept %>% 
+#  mean
+
+approx_beta <- 500
+
+opt_beta_iterative <- iterative_search(approx_beta)
+opt_beta_dichotomic <- dichotomic_search(approx_beta)
+err_beta_iterative <- compute_error_beta(opt_beta_iterative)
+err_beta_dichotomic <- compute_error_beta(opt_beta_dichotomic)
+
+#Setting some error bars on beta
+
+mydata_inference <- mydata_inference %>% 
+  mutate(beta_predict_dic=opt_beta_dichotomic) %>% 
+  mutate(beta_predict_ite=opt_beta_iterative) %>% 
+  mutate(beta_var_dic=err_beta_dichotomic) %>%
+  mutate(beta_var_ite=err_beta_iterative) %>% 
+  mutate(beta_sd_ite=sqrt(beta_var_ite)) %>% 
+  mutate(beta_sd_dic=sqrt(beta_var_dic)) %>%
+  mutate(alpha_tot_predict=(mean_xy_p-beta_predict_ite*mean_x_p)/(mean_x2_p)) %>% 
+  mutate(var_alpha_tot=var_x_p/(mean_x2_p**2)*((beta_predict_ite-Bp)**2+Qp2)/Np) %>% 
+  mutate(sd_alpha_tot=(sqrt(var_alpha_tot)))
+
+mydata_inference %>% 
+  select(beta_predict_ite,beta_sd_ite,beta_predict_dic,beta_sd_dic) %>% 
+  filter(row_number()==1)
+
+mydata_inference <- mydata_inference %>% 
+  select(exp_start_date,well,alpha_tot_predict,sd_alpha_tot,beta_predict_ite,beta_sd_ite)
+```
+# Display results as facet
+
+```{r}
+mydata_inferred_ace <- mydata_curated %>% 
+  inner_join(mydata_inference,by=c("exp_start_date","well")) %>% 
+  distinct(well,.keep_all = TRUE)
+
+mydata_inferred_ace %>% 
+  distinct(strain,.keep_all=TRUE) %>% 
+  ggplot()+
+  stat_ecdf(aes(alpha_tot_predict))+
+  theme_cowplot()
+```
+
+# Check inference results
+```{r}
+for(w in unique(mydata_inferred_ace$well)[1:10]){
+print(mydata_inferred_ace %>%
+    filter(well==w) %>%
+    ggplot() +
+    geom_point(aes(corrected_od,fluo),alpha=0.2,col="black")+
+    geom_point(aes(corrected_od,corrected_od*alpha_tot_predict+beta_predict_ite),col="red")+
+    xlab("log(c_od)")+
+    ylab("fluo")+theme_cowplot()
+    )}
+```
+
+# Do the same for other media
+## Glycerol
+
+```{r}
+mydata_inference <- mydata_curated %>% 
+  filter(condition=="glycerol") %>% 
+  group_by(well) %>% 
+  mutate(mean_xy_p=mean(corrected_od*fluo)) %>% 
+  mutate(mean_x2_p=mean((corrected_od)**2)) %>% 
+  mutate(mean_y2_p=mean((fluo)**2)) %>% 
+  mutate(mean_x_p=mean(corrected_od)) %>%
+  mutate(mean_y_p=mean(fluo)) %>%
+  mutate(var_x_p=var(corrected_od)) %>% 
+  mutate(Bp=(mean_y_p*mean_x2_p-mean_xy_p*mean_x_p)/(var_x_p)) %>% 
+  mutate(Qp2=(mean_y2_p*mean_x2_p-mean_xy_p**2)/(var_x_p)-Bp**2) %>% 
+  mutate(Np=n()) %>% 
+  ungroup() %>% 
+  mutate(aip=fluo-corrected_od*mean_xy_p/mean_x2_p) %>% 
+  mutate(bip=1-corrected_od*mean_x_p/mean_x2_p) %>% 
+  group_by(well) %>% 
+  mutate(mean_apbp=mean(aip*bip),
+         mean_ap2=mean(aip**2),
+         mean_bp2=mean(bip**2)) %>% 
+  mutate(Np=n()) %>% 
+  ungroup() %>% 
+  distinct(well,.keep_all=TRUE)
+
+#approx_beta <- mydata_curated %>%
+#  group_by(strain) %>%
+#  mutate(intercept=linear_mod_intercept(fluo,corrected_od)) %>% 
+#  ungroup() %>% 
+#  distinct(promoter,replicate,.keep_all=TRUE) %>% 
+#  .$intercept %>% 
+#  mean
+
+approx_beta <- 500
+
+opt_beta_iterative <- iterative_search(approx_beta)
+opt_beta_dichotomic <- dichotomic_search(approx_beta)
+err_beta_iterative <- compute_error_beta(opt_beta_iterative)
+err_beta_dichotomic <- compute_error_beta(opt_beta_dichotomic)
+
+#Setting some error bars on beta
+
+mydata_inference <- mydata_inference %>% 
+  mutate(beta_predict_dic=opt_beta_dichotomic) %>% 
+  mutate(beta_predict_ite=opt_beta_iterative) %>% 
+  mutate(beta_var_dic=err_beta_dichotomic) %>%
+  mutate(beta_var_ite=err_beta_iterative) %>% 
+  mutate(beta_sd_ite=sqrt(beta_var_ite)) %>% 
+  mutate(beta_sd_dic=sqrt(beta_var_dic)) %>%
+  mutate(alpha_tot_predict=(mean_xy_p-beta_predict_ite*mean_x_p)/(mean_x2_p)) %>% 
+  mutate(var_alpha_tot=var_x_p/(mean_x2_p**2)*((beta_predict_ite-Bp)**2+Qp2)/Np) %>% 
+  mutate(sd_alpha_tot=(sqrt(var_alpha_tot)))
+
+mydata_inference %>% 
+  select(beta_predict_ite,beta_sd_ite,beta_predict_dic,beta_sd_dic) %>% 
+  filter(row_number()==1)
+
+mydata_inference <- mydata_inference %>% 
+  select(exp_start_date,well,alpha_tot_predict,sd_alpha_tot,beta_predict_ite,beta_sd_ite)
+```
+
+```{r}
+mydata_inferred_gly <- mydata_curated %>% 
+  inner_join(mydata_inference,by=c("exp_start_date","well")) %>% 
+  distinct(well,.keep_all = TRUE)
+  
+
+mydata_inferred_gly %>% 
+  distinct(strain,.keep_all=TRUE) %>% 
+  ggplot()+
+  stat_ecdf(aes(alpha_tot_predict))+
+  theme_cowplot()
+```
+
+```{r}
+for(w in unique(mydata_inferred_gly$well)[1:10]){
+print(mydata_inferred_gly %>%
+    filter(well==w) %>%
+    ggplot() +
+    geom_point(aes(corrected_od,fluo),alpha=0.2,col="black")+
+    geom_point(aes(corrected_od,corrected_od*alpha_tot_predict+beta_predict_ite),col="red")+
+    xlab("log(c_od)")+
+    ylab("fluo")+theme_cowplot()
+    )}
+```
+
+## Glucose
+
+```{r}
+mydata_inference <- mydata_curated %>% 
+  filter(condition=="glucose") %>% 
+  group_by(well) %>% 
+  mutate(mean_xy_p=mean(corrected_od*fluo)) %>% 
+  mutate(mean_x2_p=mean((corrected_od)**2)) %>% 
+  mutate(mean_y2_p=mean((fluo)**2)) %>% 
+  mutate(mean_x_p=mean(corrected_od)) %>%
+  mutate(mean_y_p=mean(fluo)) %>%
+  mutate(var_x_p=var(corrected_od)) %>% 
+  mutate(Bp=(mean_y_p*mean_x2_p-mean_xy_p*mean_x_p)/(var_x_p)) %>% 
+  mutate(Qp2=(mean_y2_p*mean_x2_p-mean_xy_p**2)/(var_x_p)-Bp**2) %>% 
+  mutate(Np=n()) %>% 
+  ungroup() %>% 
+  mutate(aip=fluo-corrected_od*mean_xy_p/mean_x2_p) %>% 
+  mutate(bip=1-corrected_od*mean_x_p/mean_x2_p) %>% 
+  group_by(well) %>% 
+  mutate(mean_apbp=mean(aip*bip),
+         mean_ap2=mean(aip**2),
+         mean_bp2=mean(bip**2)) %>% 
+  mutate(Np=n()) %>% 
+  ungroup() %>% 
+  distinct(well,.keep_all=TRUE)
+
+#approx_beta <- mydata_curated %>%
+#  group_by(strain) %>%
+#  mutate(intercept=linear_mod_intercept(fluo,corrected_od)) %>% 
+#  ungroup() %>% 
+#  distinct(promoter,replicate,.keep_all=TRUE) %>% 
+#  .$intercept %>% 
+#  mean
+
+approx_beta <- 500
+
+opt_beta_iterative <- iterative_search(approx_beta)
+opt_beta_dichotomic <- dichotomic_search(approx_beta)
+err_beta_iterative <- compute_error_beta(opt_beta_iterative)
+err_beta_dichotomic <- compute_error_beta(opt_beta_dichotomic)
+
+#Setting some error bars on beta
+
+mydata_inference <- mydata_inference %>% 
+  mutate(beta_predict_dic=opt_beta_dichotomic) %>% 
+  mutate(beta_predict_ite=opt_beta_iterative) %>% 
+  mutate(beta_var_dic=err_beta_dichotomic) %>%
+  mutate(beta_var_ite=err_beta_iterative) %>% 
+  mutate(beta_sd_ite=sqrt(beta_var_ite)) %>% 
+  mutate(beta_sd_dic=sqrt(beta_var_dic)) %>%
+  mutate(alpha_tot_predict=(mean_xy_p-beta_predict_ite*mean_x_p)/(mean_x2_p)) %>% 
+  mutate(var_alpha_tot=var_x_p/(mean_x2_p**2)*((beta_predict_ite-Bp)**2+Qp2)/Np) %>% 
+  mutate(sd_alpha_tot=(sqrt(var_alpha_tot)))
+
+mydata_inference %>% 
+  select(beta_predict_ite,beta_sd_ite,beta_predict_dic,beta_sd_dic) %>% 
+  filter(row_number()==1)
+
+mydata_inference <- mydata_inference %>% 
+  select(exp_start_date,well,alpha_tot_predict,sd_alpha_tot,beta_predict_ite,beta_sd_ite)
+```
+
+```{r}
+mydata_inferred_glu <- mydata_curated %>% 
+  inner_join(mydata_inference,by=c("exp_start_date","well")) %>% 
+  distinct(well,.keep_all = TRUE)
+
+mydata_inferred_glu %>% 
+  distinct(strain,.keep_all=TRUE) %>% 
+  ggplot()+
+  stat_ecdf(aes(alpha_tot_predict))+
+  theme_cowplot()
+```
+
+```{r}
+for(w in unique(mydata_inferred_gly$well)[1:10]){
+print(mydata_inferred_gly %>%
+    filter(well==w) %>%
+    ggplot() +
+    geom_point(aes(corrected_od,fluo),alpha=0.2,col="black")+
+    geom_point(aes(corrected_od,corrected_od*alpha_tot_predict+beta_predict_ite),col="red")+
+    xlab("log(c_od)")+
+    ylab("fluo")+theme_cowplot()
+    )}
+```
+
+## Glucoseaa
+
+```{r}
+mydata_inference <- mydata_curated %>% 
+  filter(condition=="glucoseaa") %>% 
+  group_by(well) %>% 
+  mutate(mean_xy_p=mean(corrected_od*fluo)) %>% 
+  mutate(mean_x2_p=mean((corrected_od)**2)) %>% 
+  mutate(mean_y2_p=mean((fluo)**2)) %>% 
+  mutate(mean_x_p=mean(corrected_od)) %>%
+  mutate(mean_y_p=mean(fluo)) %>%
+  mutate(var_x_p=var(corrected_od)) %>% 
+  mutate(Bp=(mean_y_p*mean_x2_p-mean_xy_p*mean_x_p)/(var_x_p)) %>% 
+  mutate(Qp2=(mean_y2_p*mean_x2_p-mean_xy_p**2)/(var_x_p)-Bp**2) %>% 
+  mutate(Np=n()) %>% 
+  ungroup() %>% 
+  mutate(aip=fluo-corrected_od*mean_xy_p/mean_x2_p) %>% 
+  mutate(bip=1-corrected_od*mean_x_p/mean_x2_p) %>% 
+  group_by(well) %>% 
+  mutate(mean_apbp=mean(aip*bip),
+         mean_ap2=mean(aip**2),
+         mean_bp2=mean(bip**2)) %>% 
+  mutate(Np=n()) %>% 
+  ungroup() %>% 
+  distinct(well,.keep_all=TRUE)
+
+#approx_beta <- mydata_curated %>%
+#  group_by(strain) %>%
+#  mutate(intercept=linear_mod_intercept(fluo,corrected_od)) %>% 
+#  ungroup() %>% 
+#  distinct(promoter,replicate,.keep_all=TRUE) %>% 
+#  .$intercept %>% 
+#  mean
+
+approx_beta <- 500
+
+opt_beta_iterative <- iterative_search(approx_beta)
+opt_beta_dichotomic <- dichotomic_search(approx_beta)
+err_beta_iterative <- compute_error_beta(opt_beta_iterative)
+err_beta_dichotomic <- compute_error_beta(opt_beta_dichotomic)
+
+#Setting some error bars on beta
+
+mydata_inference <- mydata_inference %>% 
+  mutate(beta_predict_dic=opt_beta_dichotomic) %>% 
+  mutate(beta_predict_ite=opt_beta_iterative) %>% 
+  mutate(beta_var_dic=err_beta_dichotomic) %>%
+  mutate(beta_var_ite=err_beta_iterative) %>% 
+  mutate(beta_sd_ite=sqrt(beta_var_ite)) %>% 
+  mutate(beta_sd_dic=sqrt(beta_var_dic)) %>%
+  mutate(alpha_tot_predict=(mean_xy_p-beta_predict_ite*mean_x_p)/(mean_x2_p)) %>% 
+  mutate(var_alpha_tot=var_x_p/(mean_x2_p**2)*((beta_predict_ite-Bp)**2+Qp2)/Np) %>% 
+  mutate(sd_alpha_tot=(sqrt(var_alpha_tot)))
+
+mydata_inference %>% 
+  select(beta_predict_ite,beta_sd_ite,beta_predict_dic,beta_sd_dic) %>% 
+  filter(row_number()==1)
+
+mydata_inference <- mydata_inference %>% 
+  select(exp_start_date,well,alpha_tot_predict,sd_alpha_tot,beta_predict_ite,beta_sd_ite)
+```
+
+```{r}
+mydata_inferred_gluaa <- mydata_curated %>% 
+  inner_join(mydata_inference,by=c("exp_start_date","well")) %>% 
+  distinct(well,.keep_all = TRUE)
+
+mydata_inferred_gluaa %>% 
+  distinct(strain,.keep_all=TRUE) %>% 
+  ggplot()+
+  stat_ecdf(aes(alpha_tot_predict))+
+  theme_cowplot()
+```
+
+```{r}
+for(w in unique(mydata_inferred_gluaa$well)[1:10]){
+print(mydata_inferred_gluaa %>%
+    filter(well==w) %>%
+    ggplot() +
+    geom_point(aes(corrected_od,fluo),alpha=0.2,col="black")+
+    geom_point(aes(corrected_od,corrected_od*alpha_tot_predict+beta_predict_ite),col="red")+
+    xlab("log(c_od)")+
+    ylab("fluo")+theme_cowplot()
+    )}
+```
+
+# All data together testrun2
+
+```{r}
+mydata_inferred_all <- rbind(
+  mydata_inferred_ace %>% 
+    filter(is.na(alpha_tot_predict)==FALSE) %>% 
+    distinct(well,.keep_all = TRUE),
+  
+  mydata_inferred_gly %>% 
+    filter(is.na(alpha_tot_predict)==FALSE) %>% 
+    distinct(well,.keep_all = TRUE),
+
+  mydata_inferred_glu%>% 
+    filter(is.na(alpha_tot_predict)==FALSE) %>% 
+    distinct(well,.keep_all = TRUE),
+  
+  mydata_inferred_gluaa %>% 
+    filter(is.na(alpha_tot_predict)==FALSE) %>% 
+    distinct(well,.keep_all = TRUE))
+```
+
+```{r message=FALSE, warning=FALSE}
+gr_df <- tibble(gr=c(0.2,0.5,1,2),condition=c("acetate","glycerol","glucose","glucoseaa"))
+
+mydata_inferred_all %>% 
+  left_join(gr_df,by=c("condition")) %>% 
+  filter(grepl("p2-",strain)) %>% 
+  ggplot()+
+  geom_point(aes(gr,alpha_tot_predict,col=condition))+
+  geom_errorbar(aes(x=gr,ymin=alpha_tot_predict-sd_alpha_tot,ymax=alpha_tot_predict+sd_alpha_tot))+
+  theme_cowplot()+
+  xlab("Doublings per hour")+
+  ylab("alpha (GFP + autofluorescence)")
+  #facet_wrap(~well,scales="free")
+```
+
+```{r,message=FALSE,warning=FALSE}
+mystrain <- unique(mydata_inferred_all$strain)
+
+mydata_inferred_all %>%
+  arrange(strain) %>% 
+  left_join(gr_df,by=c("condition")) %>% 
+  #filter(grepl("p2-",strain)) %>% 
+  ggplot()+
+  geom_point(aes(gr,alpha_tot_predict,col=condition),size=2)+
+  geom_errorbar(aes(x=gr,ymin=alpha_tot_predict-sd_alpha_tot,ymax=alpha_tot_predict+sd_alpha_tot))+
+  theme_cowplot()+
+  xlab("Doublings per hour")+
+  ylab("alpha (GFP + autofluorescence)")+
+  facet_wrap(~strain,scales="free")+
+  theme(strip.text = element_text(size = 10))+
+    ggsave(sprintf("~/Documents/all.pdf",as.character(i)),width=12*10,height=7*10,dpi=100,limitsize = FALSE)
+```
+
+
+
+```{r}
+mydata_inferred_all %>%
+  filter(strain=="p2-A7") %>% 
+  left_join(gr_df,by=c("condition")) %>% 
+  #filter(grepl("p2-",strain)) %>% 
+  ggplot()+
+  geom_point(aes(gr,alpha_tot_predict,col=condition),size=2)+
+  geom_errorbar(aes(x=gr,ymin=alpha_tot_predict-sd_alpha_tot,ymax=alpha_tot_predict+sd_alpha_tot))+
+  theme_cowplot()+
+  xlab("Doublings per hour")+
+  ylab("alpha (GFP + autofluorescence)")+
+  facet_wrap(~strain,scales="free")+
+  theme(strip.text = element_text(size = 10))+
+    ggsave(sprintf("~/Documents/test.pdf",as.character(i)),width=12,height=7,dpi=100)
+
+```
+

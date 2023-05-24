@@ -1,0 +1,26 @@
+{
+  "description": "",
+  "gl_regions": [
+    {
+      "first_gl_position_from_top":73 ,
+      "gl_spacing_vertical":106.556 ,
+      "horizontal_range": [
+       100,480
+         
+      ],
+    "gl_exit_orientation": "right"
+    },
+    {
+      "first_gl_position_from_top":73 ,
+      "gl_spacing_vertical":106.556 ,
+      "horizontal_range": [
+       729,1069
+         
+      ],
+    "gl_exit_orientation": "left"
+    }
+  ],
+  "name": "",
+  "pixel_size_micron": 1.0,
+  "template_image_path": "template.tif"
+}

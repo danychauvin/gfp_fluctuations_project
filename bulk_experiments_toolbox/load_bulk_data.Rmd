@@ -1,0 +1,28 @@
+---
+title: "Concentration and production of synthetic promoters in 96 well plates experiments"
+author: "Dany Chauvin"
+date: "4/1/2021"
+output: html_document
+---
+
+# Importing bulk data
+
+Importing data into bulk_data tibble.
+
+```{r message=FALSE,warning=FALSE}
+source("/scicore/home/nimwegen/rocasu25/Documents/Projects/biozentrum/gfp_fluctuations_project/bulk_experiments_toolbox/loadFunctionsAndPackages.R")
+path_to_bulk_data_summary <- "/scicore/home/nimwegen/rocasu25/Documents/Projects/biozentrum/gfp_fluctuations_project/bulk_experiments_toolbox/dataList.csv"
+source("/scicore/home/nimwegen/rocasu25/Documents/Projects/biozentrum/gfp_fluctuations_project/bulk_experiments_toolbox/readBulkData.R")
+path_to_manual_curation <- "/scicore/home/nimwegen/rocasu25/Documents/Projects/biozentrum/gfp_fluctuations_project/bulk_experiments_toolbox/manualCuration.csv"
+source("/scicore/home/nimwegen/rocasu25/Documents/Projects/biozentrum/gfp_fluctuations_project/bulk_experiments_toolbox/transformBulkData.R")
+```
+
+The following routines will import:
+- mydata_curated: raw data, curated to keep only well behaving wells (not showing obvious growth defects, or fluorescence measurement obvious errors).
+- bulk_data: data where the apparent concentration (alpha_gfp) and growth-rate (well_gr in doublings/hours) were computed.
+
+# Saving data summary for further analysis
+
+```{r}
+readr::write_csv(bulk_data,"/scicore/home/nimwegen/rocasu25/Documents/Projects/biozentrum/gfp_fluctuations_project/fitted_bulk_data/bulk_data.csv")
+```

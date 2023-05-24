@@ -1,0 +1,7 @@
+date,description,f_start,f_end,condition,t_interval,orientation,data_path,promoter,vector
+20190515,oriented_box_v1,0,440,glucose,3,b,/scicore/home/nimwegen/rocasu25/MM_Data/Dany/20190515/20220111_preprocessing_b6d454f0_rotating_box/20190515_ch_hi1_curated,hi1,ch
+20190515,oriented_box_v1,440,Inf,glycerol,6,b,/scicore/home/nimwegen/rocasu25/MM_Data/Dany/20190515/20220111_preprocessing_b6d454f0_rotating_box/20190515_ch_hi1_curated,hi1,ch
+20200812,oriented_box_v1,0,Inf,acetate,18.75,b,/scicore/home/nimwegen/rocasu25/MM_Data/Dany/20200812/20220111_preprocessing/20200812_ch_hi1_curated,hi1,ch
+20190515,oriented_box_v2,0,440,glucose,3,b,/scicore/home/nimwegen/rocasu25/MM_Data/Dany/20190515/20220111_preprocessing_b6d454f0_rotating_box/20190515_ch_hi1_curated,hi1,ch
+20190515,oriented_box_v2,440,Inf,glycerol,6,b,/scicore/home/nimwegen/rocasu25/MM_Data/Dany/20190515/20220111_preprocessing_b6d454f0_rotating_box/20190515_ch_hi1_curated,hi1,ch
+20200812,oriented_box_v2,0,Inf,acetate,18.75,b,/scicore/home/nimwegen/rocasu25/MM_Data/Dany/20200812/20220111_preprocessing/20200812_ch_hi1_curated,hi1,ch

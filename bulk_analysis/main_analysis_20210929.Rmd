@@ -1,0 +1,3114 @@
+---
+title: "Concentration and production of synthetic promoters in 96 well plates experiments"
+author: "Dany Chauvin"
+date: "4/1/2021"
+output: html_document
+---
+
+# PREPARING MOTHER MACHINE DATA
+
+Importing data.
+
+```{r message=FALSE,warning=FALSE}
+source("./constitexprImportdata/loadFunctionsAndPackages.R")
+path_to_MM_data_summary <- "./dataLists/constitexprData.csv"
+source("./constitexprImportdata/readMMData.R")
+source("./constitexprImportdata/transformMMData.R")
+path_to_bulk_data_summary <- "./dataLists/dataList.csv"
+source("./constitexprImportdata/readBulkData.R")
+path_to_manual_curation <- "./dataLists/manualCuration.csv"
+source("./constitexprImportdata/transformBulkData.R")
+```
+
+# COMPUTING d(log(p))/dg BETWEEN ACETATE AND GLUCOSE, BETWEEN GLUCOSE AND GLUCOSEAA
+
+```{r}
+# The phenotype of each promoter is described in:
+
+hi_or_med_p2 <- tibble(plate=rep(c("pl1","pl3","pl5","pl7"),each=6),strength=rep(rep(c("med","hi"),each=3),times=4),column=rep(c(7,8,9,10,11,12),times=4))
+hi_or_med_p3 <- tibble(plate=rep(c("pl2","pl4","pl6","pl8"),each=12),strength=rep(rep(c("med","hi"),each=3),times=8),column=rep(c(1,2,3,4,5,6,7,8,9,10,11,12),times=4))
+hi_or_med <- rbind(hi_or_med_p2,hi_or_med_p3)
+type_rib_df <- tibble(strain=c("pl-rplN","pl-rpmB","pl-rrnB","pl-rpsB","ch-rrnB","ch-rplN","ch-rpmB","ch-rpsB"),type=rep(c("rib"),times=8))
+
+mydata_results_all <- mydata_results %>% 
+  ungroup() %>% 
+  separate(well,c("well_1","well_2"),sep="-") %>% 
+  tidyr::extract(well_1,"column","^pl[1-8]{1}_[A-H]{1}_([0-9]{1,})_[0-9a-z]{1,}$",remove=FALSE,convert=TRUE) %>% 
+  left_join(hi_or_med,by=c("plate","column")) %>% 
+  left_join(type_rib_df,by=c("strain")) %>%
+  mutate(strength=ifelse(grepl("med",strain)==TRUE,"med",strength)) %>% 
+  mutate(strength=ifelse(grepl("hi",strain)==TRUE,"hi",strength)) %>% 
+  mutate(type=ifelse(is.na(type)==TRUE,strength,type)) %>% 
+  mutate(sd_l_concentration=1/2*((max_l_pred_concentration-l_pred_concentration)+(l_pred_concentration-min_l_pred_concentration))) %>% 
+  mutate(sd_concentration=sd_l_concentration*l_pred_concentration) %>% 
+  mutate(sd_production=sd_concentration*well_gr*log(2)+sd_well_gr*log(2)*exp(l_pred_concentration)) %>% 
+  mutate(production=exp(l_pred_concentration)*well_gr*log(2)) %>% 
+  filter(!((log(production)<4)&(strength=="med"))) %>% 
+  filter(!((log(production)<8)&(strength=="hi")))
+
+log_average_data <- mydata_results_all %>% 
+  #mutate(l_production=log(production)) %>% 
+  #mutate(sd_l_production=sd_production/production) %>% 
+  filter(condition %in% c("acetate","glycerol","glucose")) %>% 
+  group_by(strain) %>% 
+  mutate(m_production_all=mean(production)) %>% 
+  mutate(sd_production_all=sqrt(1/3*sum(sd_production**2))) %>% 
+  ungroup() %>% 
+  distinct(strain,type,m_production_all,sd_production_all) %>% 
+  mutate(sd_production_all=1/2*(log(m_production_all+sd_production_all)-log(m_production_all-sd_production_all)), 
+         m_production_all=log(m_production_all))
+
+log_average_data_gluaa <- mydata_results_all %>% 
+  #mutate(l_production=log(production)) %>% 
+  #mutate(sd_l_production=sd_production/production) %>% 
+  filter(condition %in% c("glucoseaa")) %>% 
+  group_by(strain) %>% 
+  mutate(m_production_all=mean(production)) %>% 
+  mutate(sd_production_all=sqrt(1/3*sum(sd_production**2,na.rm = TRUE))) %>% 
+  ungroup() %>% 
+  distinct(strain,type,m_production_all,sd_production_all) %>% 
+  mutate(sd_production_gluaa=1/2*(log(m_production_all+sd_production_all)-log(m_production_all-sd_production_all)), 
+         m_production_gluaa=log(m_production_all)) %>% 
+  distinct(strain,type,m_production_gluaa,sd_production_gluaa)
+
+#From acetate to glucose only
+modeled_data_ace_glu <- mydata_results_all %>%
+  filter(condition != "glucoseaa") %>% 
+  mutate(l_production=log(production)) %>% 
+  mutate(sd_l_production=sd_production/production) %>% 
+  group_by(strain) %>% 
+  do((function(.df){
+     .new_df <- .df %>% 
+       mutate(p=n()) %>% 
+       mutate(s=compute_slope_errxy_robust(well_gr,l_production),
+              e=compute_sdslope_errxy_robust(well_gr,l_production),
+              i=mean(l_production)-s*mean(well_gr),
+              i_min=mean(l_production)-(s+e)*mean(well_gr),
+              i_max=mean(l_production)-(s-e)*mean(well_gr),
+              l_production_pred=s*well_gr+i,
+              l_production_pred_min=(s+e)*well_gr+i_min,
+              l_production_pred_max=(s-e)*well_gr+i_max)
+    return(.new_df)})(.)) %>% 
+    ungroup()
+
+modeled_data_glu_gluaa <- mydata_results_all %>%
+  filter(condition %in% c("glucose","glucoseaa")) %>% 
+  mutate(l_production=log(production)) %>% 
+  mutate(sd_l_production=sd_production/production) %>% 
+  group_by(strain) %>%
+  do((function(.df){
+     .new_df <- .df %>% 
+       mutate(s=compute_slope_errxy_robust(well_gr,l_production),
+              e=compute_sdslope_errxy_robust(well_gr,l_production),
+              i=mean(l_production)-s*mean(well_gr),
+              i_min=mean(l_production)-(s+e)*mean(well_gr),
+              i_max=mean(l_production)-(s-e)*mean(well_gr),
+              l_production_pred=s*well_gr+i,
+              l_production_pred_min=(s+e)*well_gr+i_min,
+              l_production_pred_max=(s-e)*well_gr+i_max)
+    return(.new_df)})(.)) %>% 
+    ungroup()
+
+
+ace_glu <- modeled_data_ace_glu %>% 
+  distinct(strain,s,e,type) %>% 
+  rename(s_ace_glu=s,
+         sd_s_ace_glu=e)
+
+glu_gluaa <- modeled_data_glu_gluaa %>% 
+  distinct(strain,s,e,type) %>% 
+  rename(s_glu_gluaa=s,
+         sd_s_glu_gluaa=e)
+
+phenotypes <- left_join(ace_glu,glu_gluaa,by=c("strain","type")) %>% 
+  left_join(log_average_data,by=c("strain","type")) %>% 
+  left_join(log_average_data_gluaa,by=c("strain","type")) %>% 
+  filter(s_ace_glu>0) #discard obvious outliers
+```
+
+These results can be used to infer the different distributions, using a Bayesian approach.
+Writing a function to do that well.
+
+```{r}
+perform_inference_ace_glu <- function(.input_df,.type){
+  
+  #.input_df <- phenotypes
+  #.type <- "hi"
+  
+    .df <- .input_df %>% 
+      filter(!grepl("ch",strain)) %>% 
+      filter(type==.type) %>% 
+      dplyr::select(strain,type,s_ace_glu,sd_s_ace_glu) %>% 
+      rename(s=s_ace_glu,
+           sd=sd_s_ace_glu)
+  
+    compute_ll <- function(.sigma){
+      .new_df <- .df %>% 
+      mutate(wp=1/(sd**2+.sigma**2),
+             sum_wp=sum(wp),
+             weighed_s=wp*s/sum_wp)
+      .u <- sum(.new_df$weighed_s)
+      ll <- -(-1/2*sum(.new_df$wp*(.new_df$s**2-.u**2))-log(.sigma)+1/2*sum(log(.new_df$wp))-1/2*log(sum(.new_df$wp)))
+      return(ll)
+      }
+
+      .sigmas <- seq(0.1,2,by=0.01)
+      lls <- lapply(.sigmas,compute_ll)
+      sigma <- nloptr::cobyla(x0=0.1,compute_ll)$par
+
+      plot(.sigmas,lls)
+      abline(v=c(sigma))
+      title(paste(.type," acetate to glucose"))
+
+      
+      compute_mu <- function(.sigma){
+        .new_df <- .df %>% 
+        mutate(wp=1/(sd**2+.sigma**2),
+               sum_wp=sum(wp),
+               weighed_s=wp*s/sum_wp)
+        .u <- sum(.new_df$weighed_s)
+        return(.u)}
+
+      mu <- compute_mu(sigma)
+      
+      return(tibble(type=c(.type),mean=c(mu),sd=c(sigma)))}
+
+perform_inference_glu_gluaa <- function(.input_df,.type){
+  
+  #.input_df <- phenotypes
+  #.type <- "hi"
+  
+    .df <- .input_df %>% 
+      filter(!grepl("ch",strain)) %>% 
+      filter(type==.type) %>% 
+      dplyr::select(strain,type,s_glu_gluaa,sd_s_glu_gluaa) %>% 
+      rename(s=s_glu_gluaa,
+           sd=sd_s_glu_gluaa)
+  
+    compute_ll <- function(.sigma){
+      .new_df <- .df %>% 
+      mutate(wp=1/(sd**2+.sigma**2),
+             sum_wp=sum(wp),
+             weighed_s=wp*s/sum_wp)
+      .u <- sum(.new_df$weighed_s)
+      ll <- -(-1/2*sum(.new_df$wp*(.new_df$s**2-.u**2))-log(.sigma)+1/2*sum(log(.new_df$wp))-1/2*log(sum(.new_df$wp)))
+      return(ll)
+      }
+
+      .sigmas <- seq(0.1,2,by=0.01)
+      lls <- lapply(.sigmas,compute_ll)
+      sigma <- nloptr::cobyla(x0=0.1,compute_ll)$par
+
+      plot(.sigmas,lls)
+      abline(v=c(sigma))
+      title(paste(.type," glucose to glucoseaa"))
+
+
+      
+      compute_mu <- function(.sigma){
+        .new_df <- .df %>% 
+        mutate(wp=1/(sd**2+.sigma**2),
+               sum_wp=sum(wp),
+               weighed_s=wp*s/sum_wp)
+        .u <- sum(.new_df$weighed_s)
+        return(.u)}
+
+      mu <- compute_mu(sigma)
+      
+      return(tibble(type=c(.type),mean=c(mu),sd=c(sigma)))}
+
+perform_inference_log_mean <- function(.input_df,.type){
+  
+  #.input_df <- phenotypes
+  #.type <- "hi"
+  
+    .df <- .input_df %>% 
+      filter(!grepl("ch",strain)) %>% 
+      filter(type==.type) %>% 
+      dplyr::select(strain,type,m_production_all,sd_production_all) %>% 
+      rename(s=m_production_all,
+           sd=sd_production_all)
+  
+    compute_ll <- function(.sigma){
+      .new_df <- .df %>% 
+      mutate(wp=1/(sd**2+.sigma**2),
+             sum_wp=sum(wp),
+             weighed_s=wp*s/sum_wp)
+      .u <- sum(.new_df$weighed_s)
+      ll <- -(-1/2*sum(.new_df$wp*(.new_df$s**2-.u**2))-log(.sigma)+1/2*sum(log(.new_df$wp))-1/2*log(sum(.new_df$wp)))
+      return(ll)
+      }
+
+      .sigmas <- seq(0.1,2,by=0.01)
+      lls <- lapply(.sigmas,compute_ll)
+      sigma <- nloptr::cobyla(x0=0.1,compute_ll)$par
+
+      plot(.sigmas,lls)
+      abline(v=c(sigma))
+      title(paste(.type," glucose to glucoseaa"))
+
+
+      
+      compute_mu <- function(.sigma){
+        .new_df <- .df %>% 
+        mutate(wp=1/(sd**2+.sigma**2),
+               sum_wp=sum(wp),
+               weighed_s=wp*s/sum_wp)
+        .u <- sum(.new_df$weighed_s)
+        return(.u)}
+
+      mu <- compute_mu(sigma)
+      
+      return(tibble(type=c(.type),mean=c(mu),sd=c(sigma)))}
+```
+
+```{r}
+inference_results_ace_glu <- rbind(
+  perform_inference_ace_glu(phenotypes,"hi"),
+  perform_inference_ace_glu(phenotypes,"med"),
+  perform_inference_ace_glu(phenotypes,"rib")) %>% 
+  rename(mean_s_ace_glu=mean,
+         sd_s_ace_glu=sd)       
+
+inference_results_glu_gluaa <- rbind(
+  perform_inference_glu_gluaa(phenotypes,"hi"),
+  perform_inference_glu_gluaa(phenotypes,"med"),
+  perform_inference_glu_gluaa(phenotypes,"rib")) %>% 
+  rename(mean_s_glu_gluaa=mean,
+         sd_s_glu_gluaa=sd)       
+
+inference_results_log_mean <- rbind(
+  perform_inference_log_mean(phenotypes,"hi"),
+  perform_inference_log_mean(phenotypes,"med"),
+  perform_inference_log_mean(phenotypes,"rib")) %>% 
+  rename(log_mean_p=mean,
+         log_sd_p=sd)
+
+inference_results <- left_join(inference_results_ace_glu,inference_results_glu_gluaa,by=c("type")) %>% 
+  left_join(inference_results_log_mean,by=c("type"))
+```
+
+```{r}
+inference_results
+```
+
+# MOTEVO
+
+```{r}
+# First I tried, only sigma70, with different spacers
+#set_id <- "sigma_pwm"
+#sequence_file <- "extended_proms.fasta"
+#source("/scicore/home/nimwegen/rocasu25/Documents/Projects/biozentrum/ouInference_bjoern/run_and_collect_motevo_results.R")
+#readr::write_csv(motevo_results,"./motevo_results_new.csv")
+# I also ran the same, but with shuffled sequences
+#set_id <- "sigma_pwm"
+#sequence_file <- "extended_proms_shuffled.fasta"
+#source("/scicore/home/nimwegen/rocasu25/Documents/Projects/biozentrum/ouInference_bjoern/run_and_collect_motevo_results.R")
+#readr::write_csv(motevo_results,"./motevo_results_shuffled.csv")
+#set_id <- "original_pwm_kinney"
+#sequence_file <- "extended_proms.fasta"
+#source("/scicore/home/nimwegen/rocasu25/Documents/Projects/biozentrum/ouInference_bjoern/run_and_collect_motevo_results.R")
+#readr::write_csv(motevo_results,"./motevo_results_sigma70_original.csv")
+#set_id <- "original_pwm_kinney"
+#sequence_file <- "extended_proms_shuffled.fasta"
+#source("/scicore/home/nimwegen/rocasu25/Documents/Projects/biozentrum/ouInference_bjoern/run_and_collect_motevo_results.R")
+#readr::write_csv(motevo_results,"./motevo_results_sigma70_original_shuffled.csv")
+
+
+```
+
+```{r}
+# Distribution des tailles
+length_df %>% 
+  ggplot()+
+  geom_histogram(aes(length))+
+  #theme_cowplot()+
+  coord_cartesian(xlim=c(0,600))+
+  xlab("Promoter length")
+
+length_df %>% 
+  filter(length>200) %>% 
+  arrange(length)
+```
+
+```{r}
+motevo_results <- rbind(
+  readr::read_csv("./motevo/motevo_results/motevo_results_new.csv") %>% 
+    mutate(shuffled=FALSE),
+  readr::read_csv("./motevo/motevo_results/motevo_results_shuffled_new.csv") %>% 
+    mutate(shuffled=TRUE),
+  readr::read_csv("./motevo/motevo_results/motevo_results_sigma70_original.csv") %>% 
+    mutate(shuffled=FALSE),
+  readr::read_csv("./motevo/motevo_results/motevo_results_sigma70_original_shuffled.csv") %>% 
+    mutate(shuffled=TRUE)
+  )
+```
+
+Let's check if they are identical or not.
+
+```{r}
+motevo_results %>% 
+  filter(shuffled==TRUE) %>% 
+  head()
+
+motevo_results %>% 
+  filter(shuffled==FALSE) %>% 
+  head()
+```
+
+```{r}
+motevo_results %>%
+  mutate(spacer=as.character(spacer)) %>% 
+  filter(shuffled==FALSE) %>% 
+  filter(strand=="+") %>% 
+  filter(tf=="sigma70_original") %>% 
+  #filter(spacer==17) %>% 
+  group_by(strain) %>% 
+  arrange(desc(WM_score)) %>% 
+  filter(row_number()==1) %>% 
+  ungroup() %>% 
+  left_join(phenotypes,by=c("strain")) %>% 
+  ggplot()+
+  #facet_wrap(~type,scale="free")+
+  geom_point(aes(WM_score,m_production_all))+
+  ggpubr::stat_cor(aes(WM_score,m_production_all))+
+  xlab("WM_score")+
+  theme_cowplot()
+```
+
+```{r}
+motevo_results %>%
+  mutate(spacer=as.character(spacer)) %>% 
+  filter(shuffled==FALSE) %>% 
+  filter(strand=="+") %>% 
+  filter(tf=="sigma70_leftFoot") %>% 
+  #filter(spacer==17) %>% 
+  group_by(strain) %>% 
+  arrange(desc(WM_score)) %>% 
+  filter(row_number()==1) %>% 
+  ungroup() %>% 
+  left_join(phenotypes,by=c("strain")) %>% 
+  ggplot()+
+  #facet_wrap(~type,scale="free")+
+  geom_point(aes(WM_score,m_production_all))+
+  ggpubr::stat_cor(aes(WM_score,m_production_all))+
+  xlab("WM_score")+
+  theme_cowplot()
+```
+
+```{r}
+motevo_results %>%
+  mutate(spacer=as.character(spacer)) %>% 
+  #filter(shuffled==FALSE) %>% 
+  #filter(strand=="+") %>% 
+  filter(tf=="sigma70_original") %>% 
+  #filter(spacer==17) %>% 
+  group_by(strain,strand,shuffled) %>% 
+  arrange(desc(WM_score)) %>% 
+  filter(row_number()==1) %>% 
+  ungroup() %>% 
+  left_join(phenotypes,by=c("strain")) %>% 
+  ggplot()+
+  facet_wrap(~paste(shuffled,strand),scale="free")+
+  geom_point(aes(WM_score,m_production_all,col=paste(shuffled,strand)))+
+  #ggpubr::stat_cor(aes(WM_score,m_production_all))+
+  xlab("WM_score")+
+  theme_cowplot()+
+  labs(subtitle="Full Kinney WM")
+
+motevo_results %>%
+  mutate(spacer=as.character(spacer)) %>% 
+  #filter(shuffled==FALSE) %>% 
+  #filter(strand=="+") %>% 
+  filter(tf=="sigma70_original") %>% 
+  #filter(spacer==17) %>% 
+  group_by(strain,shuffled,strand) %>% 
+  arrange(desc(WM_score)) %>% 
+  filter(row_number()==1) %>% 
+  ungroup() %>% 
+  left_join(phenotypes,by=c("strain")) %>% 
+  ggplot(aes(x=WM_score))+
+  #facet_wrap(~type,scale="free")+
+  geom_line(aes(y=1-..y..,col=paste(shuffled,strand)),stat="ecdf")+
+  #ggpubr::stat_cor(aes(WM_score,m_production_all))+
+  xlab("WM_score")+
+  theme_cowplot()+
+  labs(subtitle="Full Kinney WM")+
+  #coord_cartesian(xlim=c(-5,8))+
+  scale_y_log10()
+
+motevo_results %>%
+  mutate(spacer=as.character(spacer)) %>% 
+  #filter(shuffled==FALSE) %>% 
+  #filter(strand=="+") %>% 
+  filter(tf=="sigma70_original") %>% 
+  #filter(spacer==17) %>% 
+  group_by(strain,shuffled,strand) %>% 
+  arrange(desc(WM_score)) %>% 
+  filter(row_number()==1) %>% 
+  ungroup() %>% 
+  left_join(phenotypes,by=c("strain")) %>% 
+  ggplot(aes(x=WM_score))+
+  #facet_wrap(~type,scale="free")+
+  geom_line(aes(y=1-..y..,col=paste(shuffled,strand)),stat="ecdf")+
+  #ggpubr::stat_cor(aes(WM_score,m_production_all))+
+  xlab("WM_score")+
+  theme_cowplot()+
+  labs(subtitle="Full Kinney WM")
+  #coord_cartesian(xlim=c(-5,8))+
+  #scale_y_log10()
+```
+
+```{r}
+motevo_results %>%
+  filter(tf %in% c("sigma70_original","sigma70_leftFoot","sigma70_rightFoot")) %>% 
+  mutate(spacer=as.character(spacer)) %>% 
+  #filter(shuffled==FALSE) %>% 
+  #filter(strand=="+") %>% 
+  #filter(tf=="sigma70_leftFoot") %>% 
+  #filter(spacer==17) %>% 
+  group_by(strain,tf,shuffled,strand) %>% 
+  arrange(desc(WM_score)) %>% 
+  filter(row_number()==1) %>% 
+  ungroup() %>% 
+  left_join(phenotypes,by=c("strain")) %>% 
+  ggplot(aes(x=WM_score))+
+  facet_grid(type~tf,scale="free")+
+  geom_line(aes(y=1-..y..,col=paste(shuffled,strand)),stat="ecdf")+
+  #ggpubr::stat_cor(aes(WM_score,m_production_all))+
+  xlab("WM_score")+
+  theme_cowplot()+
+  labs(subtitle="Kinney left foot WM")+
+  #coord_cartesian(xlim=c(-5,8))+
+  scale_y_log10()
+```
+Most convincing case for right foot, aka -10, in medium expressors.
+
+```{r}
+motevo_results %>%
+  filter(tf %in% c("sigma70_original","sigma70_leftFoot","sigma70_rightFoot")) %>% 
+  mutate(spacer=as.character(spacer)) %>% 
+  filter(shuffled==FALSE) %>% 
+  filter(strand=="+") %>% 
+  #filter(tf=="sigma70_leftFoot") %>% 
+  #filter(spacer==17) %>% 
+  group_by(strain,tf,shuffled,strand) %>% 
+  arrange(desc(WM_score)) %>% 
+  filter(row_number()==1) %>% 
+  ungroup() %>% 
+  left_join(phenotypes,by=c("strain")) %>% 
+  ggplot()+
+  facet_grid(tf~.,scale="free")+
+  geom_point(aes(WM_score,m_production_all,col=paste(shuffled,strand)))+
+  #ggpubr::stat_cor(aes(WM_score,m_production_all))+
+  xlab("WM_score")+
+  theme_cowplot()+
+  labs(subtitle="Full Kinney WM")
+
+motevo_results %>%
+  filter(tf %in% c("sigma70_original","sigma70_leftFoot","sigma70_rightFoot")) %>% 
+  mutate(spacer=as.character(spacer)) %>% 
+  filter(shuffled==FALSE) %>% 
+  filter(strand=="+") %>% 
+  #filter(tf=="sigma70_leftFoot") %>% 
+  #filter(spacer==17) %>% 
+  group_by(strain,tf,shuffled,strand) %>% 
+  arrange(desc(WM_score)) %>% 
+  filter(row_number()==1) %>% 
+  ungroup() %>% 
+  left_join(phenotypes,by=c("strain")) %>% 
+  ggplot()+
+  facet_grid(tf~.,scale="free")+
+  geom_point(aes(WM_score,s_ace_glu,col=paste(shuffled,strand)))+
+  #ggpubr::stat_cor(aes(WM_score,m_production_all))+
+  xlab("WM_score")+
+  theme_cowplot()+
+  labs(subtitle="Full Kinney WM")
+
+motevo_results %>%
+  filter(tf %in% c("sigma70_original","sigma70_leftFoot","sigma70_rightFoot")) %>% 
+  mutate(spacer=as.character(spacer)) %>% 
+  filter(shuffled==FALSE) %>% 
+  filter(strand=="+") %>% 
+  #filter(tf=="sigma70_leftFoot") %>% 
+  #filter(spacer==17) %>% 
+  group_by(strain,tf,shuffled,strand) %>% 
+  arrange(desc(WM_score)) %>% 
+  filter(row_number()==1) %>% 
+  ungroup() %>% 
+  left_join(phenotypes,by=c("strain")) %>% 
+  ggplot()+
+  facet_grid(tf~.,scale="free")+
+  geom_point(aes(WM_score,s_glu_gluaa,col=paste(shuffled,strand)))+
+  ggpubr::stat_cor(aes(WM_score,m_production_all))+
+  xlab("WM_score")+
+  theme_cowplot()+
+  labs(subtitle="Full Kinney WM")
+
+```
+
+Now let's do the same exercice again, with corrected matrix and spacers...
+```{r}
+motevo_results_top <- motevo_results %>% 
+  filter(!(tf %in% c("sigma70_original","sigma70_leftFoot","sigma70_rightFoot"))) %>% 
+  #filter(strand=="+") %>% 
+  group_by(promoter,sigma,end,strand,shuffled) %>%
+  summarise(WM_score_tot=log(sum(exp(WM_score)))) %>% 
+  ungroup() %>% 
+  group_by(promoter,sigma,strand,shuffled) %>% 
+  arrange(desc(WM_score_tot)) %>% 
+  filter(row_number()==1) %>% 
+  ungroup()
+```
+```{r}
+motevo_results_top %>% 
+  ggplot(aes(x=WM_score_tot))+
+  geom_line(aes(y=1-..y..,col=paste(strand,shuffled)),stat='ecdf')+
+  facet_wrap(~sigma)+
+  labs(subtitle="All spacers at specific -10 position")+
+  theme_cowplot()+
+  coord_cartesian(xlim=c(-7,12))+
+  scale_y_log10()
+
+ggsave("./WM_score_dorde.pdf")
+  
+```
+
+```{r}
+motevo_results_top <- motevo_results %>% 
+  filter(!(tf %in% c("sigma70_original","sigma70_leftFoot","sigma70_rightFoot"))) %>% 
+  #filter(strand=="+") %>% 
+  group_by(promoter,sigma,strand,shuffled) %>% 
+  summarise(max_WM_score=max(WM_score)) %>% 
+  arrange(desc(max_WM_score)) %>% 
+  filter(row_number()==1) %>% 
+  ungroup()
+
+motevo_results_top %>% 
+  ggplot(aes(x=max_WM_score))+
+  geom_line(aes(y=1-..y..,col=paste(strand,shuffled)),stat='ecdf')+
+  facet_wrap(~sigma)+
+  labs(subtitle="All spacers at specific -10 position")+
+  theme_cowplot()+
+  coord_cartesian(xlim=c(-7,12))+
+  scale_y_log10()
+```
+
+```{r}
+motevo_results %>% 
+  filter(!(tf %in% c("sigma70_original","sigma70_leftFoot","sigma70_rightFoot"))) %>% 
+  filter(strand=="+") %>% 
+  filter(shuffled=="FALSE") %>% 
+  group_by(strain,sigma,end,strand,shuffled) %>%
+  summarise(WM_score_tot=log(sum(exp(WM_score)))) %>% 
+  ungroup() %>% 
+  group_by(strain,sigma,strand,shuffled) %>% 
+  arrange(desc(WM_score_tot)) %>% 
+  filter(row_number()==1) %>% 
+  ungroup() %>% 
+  left_join(phenotypes,by=c("strain")) %>% 
+  ggplot()+
+  facet_wrap(~sigma)+
+  geom_point(aes(WM_score_tot,m_production_all,col=paste(shuffled,strand)))+
+  ggpubr::stat_cor(aes(WM_score_tot,m_production_all))+
+  xlab("WM_score")+
+  theme_cowplot()+
+  labs(subtitle="Full Kinney WM")
+```
+
+
+```{r}
+motevo_results %>%
+  mutate(spacer=as.character(spacer)) %>% 
+  #filter(shuffled==FALSE) %>% 
+  #filter(strand=="+") %>% 
+  filter(tf=="sigma70_leftFoot") %>% 
+  #filter(spacer==17) %>% 
+  group_by(strain,shuffled) %>% 
+  arrange(desc(WM_score)) %>% 
+  filter(row_number()==1) %>% 
+  ungroup() %>% 
+  left_join(phenotypes,by=c("strain")) %>% 
+  ggplot()+
+  facet_wrap(~paste(shuffled,strand),scale="free")+
+  geom_point(aes(WM_score,m_production_all,col=paste(shuffled,strand)))+
+  #ggpubr::stat_cor(aes(WM_score,m_production_all))+
+  xlab("WM_score")+
+  theme_cowplot()+
+  labs(subtitle="Full Kinney WM")
+
+motevo_results %>%
+  mutate(spacer=as.character(spacer)) %>% 
+  #filter(shuffled==FALSE) %>% 
+  #filter(strand=="+") %>% 
+  filter(tf=="sigma70_leftFoot") %>% 
+  #filter(spacer==17) %>% 
+  group_by(strain,shuffled) %>% 
+  arrange(desc(WM_score)) %>% 
+  filter(row_number()==1) %>% 
+  ungroup() %>% 
+  left_join(phenotypes,by=c("strain")) %>% 
+  ggplot(aes(x=WM_score))+
+  #facet_wrap(~type,scale="free")+
+  geom_line(aes(y=1-..y..,col=paste(shuffled,strand)),stat="ecdf")+
+  #ggpubr::stat_cor(aes(WM_score,m_production_all))+
+  xlab("WM_score")+
+  theme_cowplot()+
+  labs(subtitle="Full Kinney WM")+
+  scale_y_log10()
+```
+
+
+
+
+```{r}
+motevo_results %>%
+  mutate(spacer=as.character(spacer)) %>% 
+  #filter(shuffled==FALSE) %>% 
+  #filter(strand=="+") %>% 
+  filter(tf=="sigma70_rightFoot") %>% 
+  #filter(spacer==17) %>% 
+  group_by(strain,shuffled) %>% 
+  arrange(desc(WM_score)) %>% 
+  filter(row_number()==1) %>% 
+  ungroup() %>% 
+  left_join(phenotypes,by=c("strain")) %>% 
+  ggplot()+
+  facet_wrap(~paste(shuffled,strand),scale="free")+
+  geom_point(aes(WM_score,m_production_all,col=paste(shuffled,strand)))+
+  #ggpubr::stat_cor(aes(WM_score,m_production_all))+
+  xlab("WM_score")+
+  theme_cowplot()+
+  labs(subtitle="Kinney Sigma70, Right Foot")
+
+motevo_results %>%
+  mutate(spacer=as.character(spacer)) %>% 
+  #filter(shuffled==FALSE) %>% 
+  #filter(strand=="+") %>% 
+  filter(tf=="sigma70_rightFoot") %>% 
+  #filter(spacer==17) %>% 
+  group_by(strain,shuffled) %>% 
+  arrange(desc(WM_score)) %>% 
+  filter(row_number()==1) %>% 
+  ungroup() %>% 
+  left_join(phenotypes,by=c("strain")) %>% 
+  ggplot(aes(x=WM_score))+
+  #facet_wrap(~type,scale="free")+
+  geom_line(aes(y=1-..y..,col=paste(shuffled,strand)),stat="ecdf")+
+  #ggpubr::stat_cor(aes(WM_score,m_production_all))+
+  xlab("WM_score")+
+  theme_cowplot()+
+  labs(subtitle="Kinney Sigma70, Right Foot")
+  scale_y_log10()
+```
+
+They are not. Let's look at sigma70 first.
+
+```{r}
+motevo_results %>%
+  mutate(spacer=as.character(spacer)) %>% 
+  filter(shuffled==FALSE) %>% 
+  filter(strand=="+") %>% 
+  filter(sigma=="sigma70") %>% 
+  #filter(spacer==17) %>% 
+  group_by(strain,spacer) %>% 
+  arrange(desc(WM_score)) %>% 
+  filter(row_number()==1) %>% 
+  ungroup() %>% 
+  left_join(phenotypes,by=c("strain")) %>% 
+  ggplot()+
+  facet_wrap(~type+spacer,scale="free")+
+  geom_point(aes(WM_score,m_production_all))+
+  ggpubr::stat_cor(aes(WM_score,m_production_all))+
+  xlab("WM_score")+
+  theme_cowplot()
+
+motevo_results %>%
+  mutate(spacer=as.character(spacer)) %>% 
+  filter(shuffled==FALSE) %>% 
+  filter(strand=="+") %>% 
+  filter(sigma=="sigma70") %>% 
+  #filter(spacer==17) %>% 
+  group_by(strain,spacer) %>% 
+  arrange(desc(WM_score)) %>% 
+  filter(row_number()==1) %>% 
+  ungroup() %>% 
+  left_join(phenotypes,by=c("strain")) %>% 
+  ggplot()+
+  facet_wrap(~paste(type,spacer),scale="free")+
+  geom_point(aes(WM_score,m_production_all))+
+  ggpubr::stat_cor(aes(WM_score,m_production_all))+
+  xlab("WM_score")+
+  theme_cowplot()
+```
+
+```{r}
+motevo_results_top <- motevo_results %>% 
+  #filter(strand=="+") %>% 
+  group_by(promoter,sigma,strand,shuffled) %>% 
+  arrange(desc(WM_score)) %>% 
+  filter(row_number()<2) %>% 
+  ungroup()
+ 
+motevo_results_top %>% 
+  ggplot()+
+  geom_freqpoly(aes(WM_score,col=shuffled),alpha=0.5)+
+  facet_wrap(~strand+sigma)+
+  labs(subtitle="Top WM scores")+
+  theme_cowplot()
+ggsave("top_WM_70_polyfreq.pdf")
+    
+motevo_results_top %>% 
+  ggplot()+
+  stat_ecdf(aes(WM_score,col=shuffled),alpha=0.5)+
+  facet_wrap(~strand+sigma)+
+  labs(subtitle="Top WM scores")+
+  theme_cowplot()
+ggsave("top_WM_70_ecdf.pdf")
+```
+
+Let's first look at the original matrix Sigma70 matrix from Kinney (17bp).
+And only look at the top binding scores.
+
+
+
+```{r}
+motevo_results_top <- motevo_results %>% 
+  #filter(strand=="+") %>% 
+  group_by(promoter,sigma,strand,shuffled) %>% 
+  arrange(desc(WM_score)) %>% 
+  filter(row_number()<2) %>% 
+  ungroup()
+ 
+motevo_results_top %>% 
+  ggplot()+
+  geom_freqpoly(aes(WM_score,col=shuffled),alpha=0.5)+
+  facet_wrap(~strand+sigma)+
+  labs(subtitle="Top WM scores")+
+  theme_cowplot()
+ggsave("top_WM_70_polyfreq.pdf")
+    
+motevo_results_top %>% 
+  ggplot()+
+  stat_ecdf(aes(WM_score,col=shuffled),alpha=0.5)+
+  facet_wrap(~strand+sigma)+
+  labs(subtitle="Top WM scores")+
+  theme_cowplot()
+ggsave("top_WM_70_ecdf.pdf")
+```
+
+
+```{r}
+motevo_results_top %>% 
+  ggplot(aes(x=WM_score))+
+  geom_line(aes(y=1- ..y..,col=interaction(strand,shuffled)),stat="ecdf")+
+  facet_wrap(~sigma)+
+  coord_cartesian(xlim=c(0,12))+
+  scale_y_log10()
+ggsave("top_WM_recdf.pdf",width=10,height=6)
+```
+
+```{r}
+motevo_results_top <- motevo_results %>% 
+  #filter(strand=="+") %>% 
+  group_by(promoter,sigma,end,strand,shuffled) %>%
+  summarise(WM_score_tot=log(sum(exp(WM_score)))) %>% 
+  ungroup() %>% 
+  group_by(promoter,sigma,strand,shuffled) %>% 
+  arrange(desc(WM_score_tot)) %>% 
+  filter(row_number()==1) %>% 
+  ungroup()
+
+motevo_results_top %>% 
+  ggplot()+
+  geom_freqpoly(aes(WM_score_tot,col=shuffled),alpha=0.5)+
+  facet_wrap(~strand+sigma)+
+  labs(subtitle="Top WM scores")+
+  theme_cowplot()
+    
+motevo_results_top %>% 
+  ggplot()+
+  stat_ecdf(aes(WM_score_tot,col=shuffled),alpha=0.5)+
+  facet_wrap(~strand+sigma)+
+  labs(subtitle="Top WM scores")+
+  theme_cowplot()
+```
+
+```{r}
+motevo_results_top %>% 
+  ggplot(aes(x=WM_score_tot))+
+  geom_line(aes(y=1- ..y..,col=interaction(strand,shuffled)),stat="ecdf")+
+  facet_wrap(~sigma)+
+  coord_cartesian(xlim=c(0,12))+
+  scale_y_log10()+
+  theme_cowplot()
+  ggsave("top_summed_WM_recdf.pdf",width=10,height=6)
+```
+
+Aaaaaaah first time I see some signal... Fuck it!
+
+# Let's compare sigma70 scores with mean production
+
+```{r}
+motevo_results_top_plus <- motevo_results %>% 
+  filter(shuffled==FALSE) %>% 
+  group_by(strain,sigma,end,strand) %>%
+  mutate(total_WM_score=log(sum(exp(WM_score)))) %>% 
+  ungroup() %>% 
+  distinct(strain,sigma,end,strand,.keep_all=TRUE)
+  
+motevo_results_top_plus %>% 
+  filter(strand=="+") %>% 
+  filter(sigma=="sigma70") %>% 
+  group_by(strain) %>% 
+  arrange(desc(total_WM_score)) %>% 
+  filter(row_number()==1) %>% 
+  mutate(total_score=total_WM_score) %>% 
+  #mutate(total_score=max(total_WM_score)) %>% 
+  ungroup() %>% 
+  filter(total_score>0) %>% 
+  #distinct(strain,sigma,total_score,.keep_all=TRUE)
+  left_join(phenotypes,by=c("strain")) %>% 
+  ggplot()+
+  #facet_wrap(~type,scale="free")+
+  geom_point(aes(total_score,m_production_all))+
+  ggpubr::stat_cor(aes(total_score,m_production_all))+
+  xlab("WM_score")+
+  theme_cowplot()
+
+motevo_results_top_plus %>% 
+  filter(strand=="+") %>% 
+  filter(sigma=="sigma70") %>% 
+  group_by(strain) %>% 
+  arrange(desc(total_WM_score)) %>% 
+  filter(row_number()==1) %>% 
+  mutate(total_score=total_WM_score) %>% 
+  #mutate(total_score=max(total_WM_score)) %>% 
+  ungroup() %>% 
+  #filter(total_score>0) %>% 
+  #distinct(strain,sigma,total_score,.keep_all=TRUE)
+  left_join(phenotypes,by=c("strain")) %>% 
+  ggplot()+
+  facet_wrap(~type,scale="free")+
+  geom_point(aes(total_score,m_production_all,col=spacer))+
+  ggpubr::stat_cor(aes(total_score,m_production_all))+
+  xlab("WM_score")+
+  theme_cowplot()
+```
+
+So something else is controlling these different rates of production... That's not sigma70.
+
+
+
+```{r}
+motevo_results %>% 
+  filter(shuffled==FALSE) %>% 
+  filter(strand=="+") %>% 
+  filter(sigma=="sigma70") %>% 
+  group_by(strain) %>% 
+  arrange(desc(WM_score)) %>% 
+  filter(row_number()==1) %>% 
+  mutate(total_score=WM_score) %>% 
+  #mutate(total_score=max(total_WM_score)) %>% 
+  ungroup() %>% 
+  #distinct(strain,sigma,total_score,.keep_all=TRUE)
+  left_join(phenotypes,by=c("strain")) %>% 
+  ggplot()+
+  facet_wrap(~paste(type,spacer),scale="free")+
+  geom_point(aes(total_score,m_production_all,col=spacer))+
+  ggpubr::stat_cor(aes(total_score,m_production_all))+
+  xlab("WM_score")+
+  theme_cowplot()
+```
+
+Clearly the WM with spacer 13 is fucking it up. Cause a bs is predicted in the constant part.
+
+
+
+
+
+```{r}
+motevo_results_1 <- motevo_results %>% 
+  #filter(strand=="+") %>% 
+  group_by(promoter,strand,sigma) %>% 
+  arrange(desc(WM_score)) %>% 
+  filter(row_number()<2) %>% 
+  ungroup()
+
+motevo_results_1 %>% 
+    ggplot()+
+    geom_point(aes(length,WM_score,col=strand),alpha=0.5)+
+    facet_wrap(~sigma)
+ 
+motevo_results_1 %>% 
+    ggplot()+
+    geom_freqpoly(aes(WM_score,col=strand),alpha=0.5)+
+    facet_wrap(~sigma)
+
+motevo_results_1 %>% 
+    ggplot()+
+    stat_ecdf(aes(WM_score,col=strand),alpha=0.5)+
+    facet_wrap(~sigma)
+
+motevo_results_1 %>% 
+    filter(strand=="+") %>% 
+    ggplot()+
+    geom_boxplot(aes(spacer,WM_score,group=spacer,col=strand),alpha=0.5)+
+    facet_wrap(~sigma,scale="free")
+  #coord_cartesian(xlim=c(10,23))
+```
+
+
+```{r}
+motevo_results_top <- motevo_results %>% 
+  group_by(strain,sigma,end,strand) %>%
+  mutate(total_WM_score=log(sum(exp(WM_score)))) %>% 
+  ungroup() %>% 
+  distinct(strain,sigma,end,strand,.keep_all=TRUE) %>% 
+  group_by(strain,sigma,end,strand) %>% 
+  arrange(desc(total_WM_score)) %>% 
+  filter(row_number()==1) %>% 
+  ungroup()
+
+motevo_results_top %>% 
+    ggplot(aes(total_WM_score))+
+    geom_line(aes(y=1-..y..,col=strand),stat="ecdf")+
+    facet_wrap(~sigma)+
+    coord_cartesian(xlim=c(0,12))+
+    scale_y_log10()
+
+    
+```
+
+
+```{r}
+motevo_results_70_plus <- motevo_results %>% 
+  #filter(strand=="+") %>% 
+  filter(sigma=="sigma32")
+```
+
+```{r}
+motevo_results_5 <- motevo_results_70_plus %>% 
+  #filter(strand=="+") %>% 
+  group_by(promoter,strand) %>% 
+  arrange(desc(WM_score)) %>% 
+  filter(row_number()<6) %>% 
+  ungroup()
+
+motevo_results_5 %>% 
+    ggplot()+
+    geom_point(aes(length,WM_score,col=strand),alpha=0.5)
+ 
+motevo_results_5 %>% 
+    ggplot()+
+    geom_freqpoly(aes(WM_score,col=strand),alpha=0.5)
+
+motevo_results_5 %>% 
+    ggplot()+
+    stat_ecdf(aes(WM_score,col=strand),alpha=0.5)
+```
+
+```{r}
+# Overall distribution of scores and post_prob
+motevo_results %>% 
+  ggplot()+
+  geom_point(aes(post_prob,WM_score))
+
+motevo_results %>% 
+  ggplot()+
+  geom_freqpoly(aes(WM_score))
+
+motevo_results %>% 
+  ggplot()+
+  geom_freqpoly(aes(post_prob))
+
+# Overall distribution: apply a filter for post_prob > 0.1
+motevo_results %>% 
+  filter(post_prob>0.1) %>% 
+  ggplot()+
+  geom_point(aes(post_prob,WM_score))
+
+motevo_results %>% 
+  filter(post_prob>0.1) %>% 
+  ggplot()+
+  geom_freqpoly(aes(WM_score))
+
+motevo_results %>% 
+  filter(post_prob>0.1) %>% 
+  ggplot()+
+  geom_freqpoly(aes(post_prob))
+
+# How many promoters are represented with such a filter?
+```
+Let's keep only 5 top scores for each promoter:
+```{r}
+motevo_results_5 <- motevo_results %>% 
+  #filter(strand=="+") %>% 
+  group_by(promoter,strand) %>% 
+  arrange(desc(WM_score)) %>% 
+  filter(row_number()<6) %>% 
+  ungroup()
+
+motevo_results_5 %>% 
+    ggplot()+
+    geom_point(aes(length,WM_score,col=strand),alpha=0.5)
+ 
+motevo_results_5 %>% 
+    ggplot()+
+    geom_freqpoly(aes(WM_score,col=strand),alpha=0.5)
+
+motevo_results_5 %>% 
+    ggplot()+
+    stat_ecdf(aes(WM_score,col=strand),alpha=0.5)
+```
+
+Plot these...
+Let's now focus on something easy. i.e: all promoters for which the strongest promoter is:
+1- Downstream of everything else
+2- On the + strand
+
+```{r}
+motevo_results_top_plus <- motevo_results %>% 
+  group_by(strain,sigma,end,strand) %>%
+  mutate(total_WM_score=log(sum(exp(WM_score)))) %>% 
+  ungroup() %>% 
+  distinct(strain,sigma,end,strand,.keep_all=TRUE)
+  
+motevo_results_top_plus %>% 
+  filter(strand=="+") %>% 
+  group_by(strain) %>% 
+  arrange(desc(total_WM_score)) %>% 
+  filter(row_number()==1) %>% 
+  mutate(total_score=total_WM_score) %>% 
+  #mutate(total_score=max(total_WM_score)) %>% 
+  ungroup() %>% 
+  #distinct(strain,sigma,total_score,.keep_all=TRUE)
+  left_join(phenotypes,by=c("strain")) %>% 
+  ggplot()+
+  facet_wrap(~type,scale="free")+
+  geom_point(aes(total_score,m_production_all,col=sigma))+
+  ggpubr::stat_cor(aes(total_score,m_production_all))+
+  xlab("WM_score")+
+  theme_cowplot()
+```
+
+A lot of promoters have quite high WM_score for sigma38.
+I should filter out sites which are ENTIRELY in the constant part.
+i.e:1 to 100.
+and beg in 100+98+1.
+
+Ok, and now?
+
+
+```{r}
+motevo_results_top_plus <- motevo_results %>% 
+  group_by(strain,sigma,end,strand) %>%
+  mutate(total_WM_score=log(sum(exp(WM_score)))) %>% 
+  ungroup() %>% 
+  distinct(strain,sigma,end,strand,.keep_all=TRUE)
+  
+motevo_results_top_plus %>% 
+  filter(strand=="+") %>% 
+  group_by(strain) %>% 
+  arrange(desc(total_WM_score)) %>% 
+  filter(row_number()==1) %>% 
+  mutate(total_score=total_WM_score) %>% 
+  #mutate(total_score=max(total_WM_score)) %>% 
+  ungroup() %>% 
+  #distinct(strain,sigma,total_score,.keep_all=TRUE)
+  left_join(phenotypes,by=c("strain")) %>% 
+  ggplot()+
+  #facet_wrap(~type,scale="free")+
+  geom_point(aes(total_score,m_production_all,col=sigma))+
+  ggpubr::stat_cor(aes(total_score,m_production_all))+
+  xlab("WM_score")+
+  theme_cowplot()
+
+motevo_results_top_plus %>% 
+  filter(strand=="+") %>% 
+  group_by(strain) %>% 
+  arrange(desc(total_WM_score)) %>% 
+  filter(row_number()==1) %>% 
+  mutate(total_score=total_WM_score) %>% 
+  #mutate(total_score=max(total_WM_score)) %>% 
+  ungroup() %>% 
+  #distinct(strain,sigma,total_score,.keep_all=TRUE)
+  left_join(phenotypes,by=c("strain")) %>% 
+  ggplot()+
+  facet_wrap(~type,scale="free")+
+  geom_point(aes(total_score,m_production_all,col=sigma))+
+  ggpubr::stat_cor(aes(total_score,m_production_all))+
+  xlab("WM_score")+
+  theme_cowplot()
+```
+
+I could also keep all promoters, and look at the different sigma score for all of them.
+
+```{r}
+motevo_results_top_plus %>% 
+  filter(strand=="+") %>% 
+  group_by(strain,sigma) %>% 
+  arrange(desc(total_WM_score)) %>% 
+  filter(row_number()==1) %>% 
+  mutate(total_score=total_WM_score) %>% 
+  #mutate(total_score=max(total_WM_score)) %>% 
+  ungroup() %>% 
+  #distinct(strain,sigma,total_score,.keep_all=TRUE)
+  left_join(phenotypes,by=c("strain")) %>% 
+  ggplot()+
+  facet_wrap(~sigma+type,scale="free")+
+  geom_point(aes(total_score,m_production_all,col=end))+
+  ggpubr::stat_cor(aes(total_score,m_production_all))+
+  xlab("WM_score")+
+  theme_cowplot()
+```
+
+Let's plot it all. Again. I put a WM_score threshold above 3.
+Problem is... it is pretty hard to see anything if I superimpose everything together.
+So... we'll look at this, one sigma factor at a time.
+
+```{r}
+plot_WM <- function(sig,typ,stra,thre){
+toplot_results <- motevo_results %>% 
+  filter(sigma==sig) %>% 
+  filter(strand==stra) %>% 
+  filter(WM_score>thre) %>% 
+  semi_join(selected_strain,by=c("strain")) %>% 
+  left_join(phenotypes,by=c("strain")) %>% 
+  filter(type==typ) %>% 
+  mutate(total_length=length+100+32) %>% 
+  group_by(strain) %>% 
+  mutate(ref=as.character(row_number())) %>% 
+  ungroup() %>% 
+  pivot_longer(cols=c("beg","end"),values_to="x") %>% 
+  mutate(x=as.double(x))
+
+type_df <- phenotypes %>% 
+  distinct(strain,type)
+
+length_df_plot <- length_df %>% 
+  semi_join(toplot_results,by=c("strain")) %>% 
+  left_join(type_df,by=c("strain")) %>% 
+  mutate(y=0) %>% 
+  group_by(strain) %>%
+  mutate(endseq=length+100+32) %>% 
+  mutate(begseq=1) %>% 
+  mutate(begprom=101) %>% 
+  mutate(begthreecon=length+100+1) %>% 
+  ungroup() %>% 
+  pivot_longer(cols=c("begseq","begprom","begthreecon","endseq"),values_to="x")
+  
+plot <- toplot_results %>% 
+  ggplot()+
+  geom_line(data=length_df_plot %>%
+              filter(name %in% c("begseq","begprom")),aes(x,y),col="green",alpha=1)+
+  geom_line(data=length_df_plot %>% 
+              filter(name %in% c("begprom","begthreecon")),aes(x,y),col="blue",alpha=1)+
+  geom_line(data=length_df_plot %>% 
+              filter(name %in% c("begthreecon","endseq")),aes(x,y),col="green",alpha=1)+
+  geom_line(data=toplot_results,aes(x,WM_score,group=ref,col=strand),alpha=0.5)+
+  facet_wrap(~strain,scale="free")+
+  theme(legend.position = NULL)+
+  xlab("Promoter position")+
+  ylab("WM_score")
+  
+ggsave(paste(sig,typ,thre,stra,"WM_score.pdf",sep="_"),plot,width=15,height=10)}
+```
+    
+```{r}
+sig1 <- "sigma70"
+typ1 <- "hi"
+selected_strain <- phenotypes %>%
+  distinct(strain)
+stra1 <- "+"
+thre1 <- 3
+
+plot_WM(sig1,typ1,stra1,thre1)
+```
+
+```{r}
+sig1 <- "sigma38"
+typ1 <- "hi"
+selected_strain <- phenotypes %>%
+  distinct(strain)
+stra1 <- "+"
+thre1 <- 3
+
+plot_WM(sig1,typ1,stra1,thre1)
+```
+
+```{r}
+sig1 <- "sigma32"
+typ1 <- "hi"
+selected_strain <- phenotypes %>%
+  distinct(strain)
+stra1 <- "+"
+thre1 <- 3
+
+plot_WM(sig1,typ1,stra1,thre1)
+```
+
+
+```{r}
+sig1 <- "sigma28"
+typ1 <- "hi"
+selected_strain <- phenotypes %>%
+  distinct(strain)
+stra1 <- "+"
+thre1 <- 3
+
+plot_WM(sig1,typ1,stra1,thre1)
+```
+
+```{r}
+sig1 <- "sigma54"
+typ1 <- "hi"
+selected_strain <- phenotypes %>%
+  distinct(strain)
+stra1 <- "+"
+thre1 <- 3
+
+plot_WM(sig1,typ1,stra1,thre1)
+```
+
+
+
+What is the distribution amongst these different sigma factors?
+Sigma 38 seems to be giving, in general higher scores.
+It seems that in general, sigma70, as it is right now, gives scores which are not as good.
+
+```{r}
+motevo_results %>% 
+  filter(strand=="+") %>% 
+  filter(WM_score>3) %>% 
+  ggplot() +
+  stat_ecdf(aes(WM_score,col=sigma))
+
+motevo_results %>% 
+  filter(strand=="+") %>% 
+  filter(WM_score>3) %>% 
+  ggplot() +
+  geom_freqpoly(aes(WM_score,col=sigma))+
+  scale_y_log10()
+```
+I have the feeling that sigma38 and sigma32 are being better...
+
+```{r}
+motevo_results_top_plus <- motevo_results %>% 
+  filter(sigma=="sigma32") %>% 
+  group_by(strain,sigma,end,strand) %>%
+  mutate(total_WM_score=log(sum(exp(WM_score)))) %>% 
+  ungroup() %>% 
+  distinct(strain,sigma,end,strand,.keep_all=TRUE)
+  
+motevo_results_top_plus %>% 
+  filter(strand=="+") %>% 
+  group_by(strain) %>% 
+  arrange(desc(total_WM_score)) %>% 
+  filter(row_number()==1) %>% 
+  mutate(total_score=total_WM_score) %>% 
+  #mutate(total_score=max(total_WM_score)) %>% 
+  ungroup() %>% 
+  #distinct(strain,sigma,total_score,.keep_all=TRUE)
+  left_join(phenotypes,by=c("strain")) %>% 
+  ggplot()+
+  #facet_wrap(~type,scale="free")+
+  geom_point(aes(total_score,m_production_all,col=sigma))+
+  ggpubr::stat_cor(aes(total_score,m_production_all))+
+  xlab("WM_score")+
+  theme_cowplot()
+
+motevo_results_top_plus %>% 
+  filter(strand=="+") %>% 
+  group_by(strain) %>% 
+  arrange(desc(total_WM_score)) %>% 
+  filter(row_number()==1) %>% 
+  mutate(total_score=total_WM_score) %>% 
+  #mutate(total_score=max(total_WM_score)) %>% 
+  ungroup() %>% 
+  #distinct(strain,sigma,total_score,.keep_all=TRUE)
+  left_join(phenotypes,by=c("strain")) %>% 
+  ggplot()+
+  facet_wrap(~type,scale="free")+
+  geom_point(aes(total_score,m_production_all,col=sigma))+
+  ggpubr::stat_cor(aes(total_score,m_production_all))+
+  xlab("WM_score")+
+  theme_cowplot()
+```
+
+
+
+
+
+plot <- toplot_results %>% 
+  filter(type=="hi") %>% 
+  ggplot()+
+  geom_line(data=length_df_plot %>% 
+              filter(type=="hi") %>% 
+              filter(name %in% c("begseq","begprom")),aes(x,y),col="green",alpha=1)+
+  geom_line(data=length_df_plot %>% 
+              filter(type=="hi") %>% 
+              filter(name %in% c("begprom","begthreecon")),aes(x,y),col="blue",alpha=1)+
+  geom_line(data=length_df_plot %>% 
+              filter(type=="hi") %>%
+              filter(name %in% c("begthreecon","endseq")),aes(x,y),col="green",alpha=1)+
+  geom_line(data=toplot_results %>% filter(type=="hi"),aes(x,WM_score,group=ref,col=strand),alpha=0.5)+
+  facet_wrap(~strain,scale="free")+
+  theme(legend.position = NULL)+
+  xlab("Promoter position")+
+  ylab("WM_score")
+  #coord_cartesian(ylim=c(-1,1))
+  
+ggsave("all_hi_WM_score_kinney.pdf",plot,width=15,height=10)
+```
+
+
+
+
+```{r}
+motevo_results %>% 
+  group_by(strain,strand,sigma,spacer,end) %>%
+  arrange(strain,strand,sigma,spacer,end) %>% 
+  count()
+
+```
+
+
+```{r}
+selected_strain <- phenotypes %>%
+  distinct(strain)
+
+toplot_results <- motevo_results_5 %>% 
+  semi_join(selected_strain,by=c("strain")) %>% 
+  left_join(phenotypes,by=c("strain")) %>% 
+  #filter(strand=="+") %>% 
+  #filter(WM_score>0) %>% 
+  mutate(total_length=length+100+32) %>% 
+  group_by(strain) %>% 
+  mutate(ref=as.character(row_number())) %>% 
+  ungroup() %>% 
+  separate(pos,into=c("beg","end")) %>% 
+  mutate(beg=as.double(beg),
+         end=as.double(end)) %>% 
+  #filter((beg<=100+length) & (end>100)) %>% 
+  pivot_longer(cols=c("beg","end"),values_to="x") %>% 
+  mutate(x=as.double(x))
+
+type_df <- phenotypes %>% 
+  distinct(strain,type)
+
+length_df_plot <- length_df %>% 
+  semi_join(selected_strain,by=c("strain")) %>% 
+  semi_join(toplot_results,by=c("strain")) %>% 
+  left_join(type_df,by=c("strain")) %>% 
+  mutate(y=0) %>% 
+  group_by(strain) %>%
+  mutate(endseq=length+100+32) %>% 
+  mutate(begseq=1) %>% 
+  mutate(begprom=101) %>% 
+  mutate(begthreecon=length+100+1) %>% 
+  ungroup() %>% 
+  pivot_longer(cols=c("begseq","begprom","begthreecon","endseq"),values_to="x")
+  
+plot <- toplot_results %>% 
+  filter(type=="med") %>% 
+  ggplot()+
+  geom_line(data=length_df_plot %>%
+              filter(type=="med") %>% 
+              filter(name %in% c("begseq","begprom")),aes(x,y),col="green",alpha=1)+
+  geom_line(data=length_df_plot %>% 
+              filter(type=="med") %>% 
+              filter(name %in% c("begprom","begthreecon")),aes(x,y),col="blue",alpha=1)+
+  geom_line(data=length_df_plot %>% 
+              filter(type=="med") %>% 
+              filter(name %in% c("begthreecon","endseq")),aes(x,y),col="green",alpha=1)+
+  geom_line(data=toplot_results %>% filter(type=="med"),aes(x,WM_score,group=ref,col=strand),alpha=0.5)+
+  facet_wrap(~strain,scale="free")+
+  theme(legend.position = NULL)+
+  xlab("Promoter position")+
+  ylab("WM_score")
+  #coord_cartesian(ylim=c(-1,1))
+  
+  
+ggsave("all_med_WM_score_kinney.pdf",plot,width=15,height=10)
+    
+plot <- toplot_results %>% 
+  filter(type=="hi") %>% 
+  ggplot()+
+  geom_line(data=length_df_plot %>% 
+              filter(type=="hi") %>% 
+              filter(name %in% c("begseq","begprom")),aes(x,y),col="green",alpha=1)+
+  geom_line(data=length_df_plot %>% 
+              filter(type=="hi") %>% 
+              filter(name %in% c("begprom","begthreecon")),aes(x,y),col="blue",alpha=1)+
+  geom_line(data=length_df_plot %>% 
+              filter(type=="hi") %>%
+              filter(name %in% c("begthreecon","endseq")),aes(x,y),col="green",alpha=1)+
+  geom_line(data=toplot_results %>% filter(type=="hi"),aes(x,WM_score,group=ref,col=strand),alpha=0.5)+
+  facet_wrap(~strain,scale="free")+
+  theme(legend.position = NULL)+
+  xlab("Promoter position")+
+  ylab("WM_score")
+  #coord_cartesian(ylim=c(-1,1))
+  
+ggsave("all_hi_WM_score_kinney.pdf",plot,width=15,height=10)
+```
+
+
+```{r}
+motevo_results_5 %>% 
+  semi_join(selected_strain,by=c("strain")) %>% 
+  left_join(phenotypes,by=c("strain")) %>% 
+  #filter(strand=="+") %>% 
+  ggplot()+
+  stat_ecdf(aes(WM_score,col=interaction(strand,type)))+
+  ylab("CDF")
+
+motevo_results_5 %>% 
+  filter(strand=="+") %>% 
+  semi_join(selected_strain,by=c("strain")) %>% 
+  left_join(phenotypes,by=c("strain")) %>% 
+  #filter(strand=="+") %>% 
+  ggplot()+
+  stat_ecdf(aes(WM_score,col=interaction(strand,type)))+
+  ylab("CDF")
+
+motevo_results_5 %>% 
+  filter(strand=="-") %>% 
+  semi_join(selected_strain,by=c("strain")) %>% 
+  left_join(phenotypes,by=c("strain")) %>% 
+  #filter(strand=="+") %>% 
+  ggplot()+
+  stat_ecdf(aes(WM_score,col=interaction(strand,type)))+
+  ylab("CDF")
+```
+
+
+```{r}
+# Set a automatic filter to keep at least the 5 best sites per promoter, according to WM_score and/or post_prob
+min_sites <- 1 # Which also sets a limit on WM_score
+step <- 0.0001
+
+motevo_results_filtered <- motevo_results %>% 
+  do((function(.df){
+    min_p <- 0
+    
+    new_df <- .df %>% 
+      filter(post_prob>min_p) %>% 
+      group_by(promoter) %>% 
+      summarise(n=n())
+    min_count <- min(new_df$n)
+    i=0
+    
+    while(min_count>min_sites){
+      
+      i <- i+1
+  
+    new_df <- .df %>% 
+      filter(post_prob>min_p+i*step) %>% 
+      group_by(promoter) %>% 
+      summarise(n=n())
+    min_count <- min(new_df$n)
+    }
+    
+    new_df <- .df %>% 
+      filter(post_prob>min_p+(i-1)*step) %>% 
+      mutate(p_thres=(i-1)*step)
+    
+    return(new_df)
+    
+  })(.)) %>% 
+  ungroup()
+  
+  min_count <- min(motevo_results_filtered %>% 
+    group_by(promoter) %>% 
+    count() %>% 
+    .$n)
+  
+  min_count
+  unique(motevo_results_filtered$p_thres)
+  
+  motevo_results_filtered %>% 
+    group_by(promoter) %>% 
+    count() %>% 
+    ggplot()+
+    geom_histogram(aes(n))+
+    coord_cartesian(xlim=c(0,100))
+  
+  motevo_results_filtered %>% 
+    group_by(promoter) %>% 
+    mutate(n_sites=n()) %>%
+    mutate(max_WM_score=max(WM_score)) %>% 
+    ungroup() %>% 
+    distinct(promoter,.keep_all = TRUE) %>% 
+    ggplot()+
+    geom_point(aes(length,n_sites,col=max_WM_score))
+```
+
+So the fact that there is a correlation between length and number of sites is a sign for me... that we do not filter enough. Because this should not depend. So this is certainly not the best way to look at it. Another way is simply to take the 5 best ones for instance.
+
+```{r}
+motevo_results_5 <- motevo_results %>% 
+  #filter(strand=="+") %>% 
+  group_by(promoter,strand) %>% 
+  arrange(desc(WM_score)) %>% 
+  filter(row_number()<6) %>% 
+  ungroup()
+
+ motevo_results_5 %>% 
+    ggplot()+
+    geom_point(aes(length,WM_score,col=strand),alpha=0.5)
+ 
+  motevo_results_5 %>% 
+    ggplot()+
+    geom_point(aes(post_prob,WM_score,col=strand))
+```
+
+
+```{r}
+selected_strain <- phenotypes %>%
+  distinct(strain)
+
+toplot_results <- motevo_results_5 %>% 
+  semi_join(selected_strain,by=c("strain")) %>% 
+  left_join(phenotypes,by=c("strain")) %>% 
+  #filter(strand=="+") %>% 
+  #filter(WM_score>0) %>% 
+  mutate(total_length=length+2*100) %>% 
+  group_by(strain) %>% 
+  mutate(ref=as.character(row_number())) %>% 
+  ungroup() %>% 
+  separate(pos,into=c("beg","end")) %>% 
+  mutate(beg=as.double(beg),
+         end=as.double(end)) %>% 
+  #filter((beg<=100+length) & (end>100)) %>% 
+  pivot_longer(cols=c("beg","end"),values_to="x") %>% 
+  mutate(x=as.double(x))
+
+type_df <- phenotypes %>% 
+  distinct(strain,type)
+
+length_df_plot <- length_df %>% 
+  semi_join(selected_strain,by=c("strain")) %>% 
+  semi_join(toplot_results,by=c("strain")) %>% 
+  left_join(type_df,by=c("strain")) %>% 
+  mutate(y=0) %>% 
+  group_by(strain) %>%
+  mutate(endseq=length+2*100) %>% 
+  mutate(begseq=1) %>% 
+  mutate(begprom=101) %>% 
+  mutate(begthreecon=length+100+1) %>% 
+  ungroup() %>% 
+  pivot_longer(cols=c("begseq","begprom","begthreecon","endseq"),values_to="x")
+  
+plot <- toplot_results %>% 
+  filter(type=="med") %>% 
+  ggplot()+
+  geom_line(data=length_df_plot %>%
+              filter(type=="med") %>% 
+              filter(name %in% c("begseq","begprom")),aes(x,y),col="green",alpha=1)+
+  geom_line(data=length_df_plot %>% 
+              filter(type=="med") %>% 
+              filter(name %in% c("begprom","begthreecon")),aes(x,y),col="blue",alpha=1)+
+  geom_line(data=length_df_plot %>% 
+              filter(type=="med") %>% 
+              filter(name %in% c("begthreecon","endseq")),aes(x,y),col="green",alpha=1)+
+  geom_line(data=toplot_results %>% filter(type=="med"),aes(x,WM_score,group=ref,col=strand),alpha=0.5)+
+  facet_wrap(~strain,scale="free")+
+  theme(legend.position = NULL)+
+  xlab("Promoter position")+
+  ylab("WM_score")
+  #coord_cartesian(ylim=c(-1,1))
+  
+  
+ggsave("all_med_WM_score_kinney.pdf",plot,width=15,height=10)
+    
+plot <- toplot_results %>% 
+  filter(type=="hi") %>% 
+  ggplot()+
+  geom_line(data=length_df_plot %>% 
+              filter(type=="hi") %>% 
+              filter(name %in% c("begseq","begprom")),aes(x,y),col="green",alpha=1)+
+  geom_line(data=length_df_plot %>% 
+              filter(type=="hi") %>% 
+              filter(name %in% c("begprom","begthreecon")),aes(x,y),col="blue",alpha=1)+
+  geom_line(data=length_df_plot %>% 
+              filter(type=="hi") %>%
+              filter(name %in% c("begthreecon","endseq")),aes(x,y),col="green",alpha=1)+
+  geom_line(data=toplot_results %>% filter(type=="hi"),aes(x,WM_score,group=ref,col=strand),alpha=0.5)+
+  facet_wrap(~strain,scale="free")+
+  theme(legend.position = NULL)+
+  xlab("Promoter position")+
+  ylab("WM_score")
+  #coord_cartesian(ylim=c(-1,1))
+  
+ggsave("all_hi_WM_score_kinney.pdf",plot,width=15,height=10)
+```
+
+It is hard to see anything like that: I should simply look at the distributions.
+
+
+
+```{r}
+#post prob
+motevo_results_5 %>% 
+  semi_join(selected_strain,by=c("strain")) %>% 
+  left_join(phenotypes,by=c("strain")) %>% 
+  #filter(strand=="+") %>% 
+  ggplot()+
+  stat_ecdf(aes(post_prob,col=interaction(strand,type)))+
+  ylab("CDF")
+
+motevo_results_5 %>% 
+  filter(strand=="+") %>% 
+  semi_join(selected_strain,by=c("strain")) %>% 
+  left_join(phenotypes,by=c("strain")) %>% 
+  #filter(strand=="+") %>% 
+  ggplot()+
+  stat_ecdf(aes(post_prob,col=interaction(strand,type)))+
+  ylab("CDF")
+
+motevo_results_5 %>% 
+  filter(strand=="-") %>% 
+  semi_join(selected_strain,by=c("strain")) %>% 
+  left_join(phenotypes,by=c("strain")) %>% 
+  #filter(strand=="+") %>% 
+  ggplot()+
+  stat_ecdf(aes(post_prob,col=interaction(strand,type)))+
+  ylab("CDF")
+```
+
+So we notice several things. There is a site that comes up in almost all data. At 2.5 or so. Always at the same position. This site is:
+
+```{r}
+# We can compute... for each promoter
+
+
+  
+  
+```
+# Correlation between these and phenotype data?
+
+```{r}
+motevo_results_5 %>% 
+  filter(strand=="+") %>% 
+  group_by(strain) %>% 
+  mutate(total_score=log(sum(exp(WM_score)))) %>% 
+  ungroup() %>% 
+  distinct(strain,total_score) %>% 
+  left_join(phenotypes,by=c("strain")) %>% 
+  ggplot()+
+  facet_wrap(~type,scale="free")+
+  geom_point(aes(total_score,m_production_all))+
+  ggpubr::stat_cor(aes(total_score,m_production_all))+
+  xlab("WM_score")+
+  theme_cowplot()
+
+motevo_results_5 %>% 
+  filter(strand=="+") %>% 
+  group_by(strain) %>% 
+  mutate(total_score=log(sum(exp(WM_score)))) %>% 
+  ungroup() %>% 
+  distinct(strain,total_score) %>% 
+  left_join(phenotypes,by=c("strain")) %>% 
+  ggplot()+
+  facet_wrap(~type,scale="free")+
+  geom_point(aes(total_score,s_glu_gluaa))+
+  ggpubr::stat_cor(aes(total_score,s_glu_gluaa))+
+  xlab("WM_score")+
+  theme_cowplot()
+
+motevo_results_5 %>% 
+  filter(strand=="+") %>% 
+  group_by(strain) %>% 
+  mutate(total_score=log(sum(exp(WM_score)))) %>% 
+  ungroup() %>% 
+  distinct(strain,total_score) %>% 
+  left_join(phenotypes,by=c("strain")) %>% 
+  ggplot()+
+  facet_wrap(~type,scale="free")+
+  geom_point(aes(total_score,s_glu_gluaa))+
+  ggpubr::stat_cor(aes(total_score,s_ace_glu))+
+  xlab("WM_score")+
+  coord_cartesian(ylim=c(-2,2))+
+  theme_cowplot()
+```
+
+```{r}
+motevo_results_5 %>% 
+  filter(strand=="+") %>% 
+  group_by(strain) %>% 
+  mutate(total_score=max(WM_score)) %>% 
+  ungroup() %>% 
+  distinct(strain,total_score,pos) %>% 
+  left_join(phenotypes,by=c("strain")) %>% 
+  group_by(total_score,type) %>% 
+  filter(n()>=2) %>% 
+  ungroup() %>% 
+  ggplot()+
+  facet_wrap(~type,scale="free")+
+  geom_point(aes(total_score,m_production_all,col=pos))+
+  ggpubr::stat_cor(aes(total_score,m_production_all))+
+  xlab("WM_score")+
+  theme_cowplot()
+
+motevo_results_5 %>% 
+  filter(strand=="+") %>% 
+  group_by(strain) %>% 
+  mutate(total_score=max(WM_score)) %>% 
+  ungroup() %>% 
+  distinct(strain,total_score) %>% 
+  left_join(phenotypes,by=c("strain")) %>% 
+  ggplot()+
+  facet_wrap(~type,scale="free")+
+  geom_point(aes(total_score,s_glu_gluaa))+
+  ggpubr::stat_cor(aes(total_score,s_glu_gluaa))+
+  xlab("WM_score")+
+  theme_cowplot()
+
+motevo_results_5 %>% 
+  filter(strand=="+") %>% 
+  group_by(strain) %>% 
+  mutate(total_score=max(WM_score)) %>% 
+  ungroup() %>% 
+  distinct(strain,total_score) %>% 
+  left_join(phenotypes,by=c("strain")) %>% 
+  ggplot()+
+  facet_wrap(~type,scale="free")+
+  geom_point(aes(total_score,s_glu_gluaa))+
+  ggpubr::stat_cor(aes(total_score,s_ace_glu))+
+  xlab("WM_score")+
+  coord_cartesian(ylim=c(-2,2))+
+  theme_cowplot()
+
+
+```
+```{r}
+motevo_results_5 %>% 
+  left_join(phenotypes,by=c("strain")) %>% 
+  filter(strand=="+") %>% 
+  filter(type=="hi") %>% 
+  group_by(strain) %>% 
+  mutate(total_score=max(WM_score)) %>% 
+  ungroup() %>% 
+  filter(dplyr::between(total_score,4,5)) %>% 
+  group_by(pos,total_score,sequence) %>% 
+  mutate(p=n()) %>% 
+  ungroup() %>% 
+  distinct(p,sequence,pos,total_score) %>% 
+  arrange(desc(p)) %>% 
+  select(p,sequence,pos,total_score)
+
+motevo_results_5 %>% 
+  left_join(phenotypes,by=c("strain")) %>% 
+  filter(strand=="+") %>% 
+  filter(type=="hi") %>% 
+  group_by(strain) %>% 
+  mutate(total_score=max(WM_score)) %>% 
+  ungroup() %>% 
+  filter(dplyr::between(total_score,5,6)) %>% 
+  group_by(pos,total_score,sequence) %>% 
+  mutate(p=n()) %>% 
+  ungroup() %>% 
+  distinct(p,sequence,pos,total_score) %>% 
+  arrange(desc(p)) %>% 
+  select(p,sequence,pos,total_score)
+```
+
+
+```{r}
+motevo_results_5 %>% 
+  filter(strand=="+") %>% 
+  #group_by(strain) %>% 
+  #mutate(total_score=) %>% 
+  #ungroup() %>% 
+  #distinct(strain,total_score) %>% 
+  left_join(phenotypes,by=c("strain")) %>% 
+  ggplot()+
+  facet_wrap(~type,scale="free")+
+  geom_point(aes(WM_score,m_production_all))+
+  ggpubr::stat_cor(aes(WM_score,m_production_all))+
+  xlab("WM_score")+
+  theme_cowplot()
+```
+# 
+
+motevo_results %>% 
+  filter(strand=="+") %>% 
+  group_by(strain) %>% 
+  mutate(total_score=log(sum(exp(WM_score)))) %>% 
+  ungroup() %>% 
+  distinct(strain,total_score) %>% 
+  left_join(phenotypes) %>% 
+  ggplot()+
+  geom_point(aes(total_score,s_ace_glu))+
+  theme_cowplot()
+
+motevo_results %>% 
+  filter(strand=="+") %>% 
+  group_by(strain) %>% 
+  mutate(total_score=log(sum(exp(WM_score)))) %>% 
+  ungroup() %>% 
+  distinct(strain,total_score) %>% 
+  left_join(phenotypes) %>% 
+  ggplot()+
+  geom_point(aes(total_score,s_glu_gluaa))+
+  theme_cowplot()
+```
+
+```{r}
+motevo_results %>% 
+  filter(strand=="+") %>% 
+  group_by(strain) %>% 
+  mutate(total_score=log(max(WM_score))) %>% 
+  ungroup() %>% 
+  distinct(strain,total_score) %>% 
+  left_join(phenotypes,by=c("strain")) %>% 
+  ggplot()+
+  geom_point(aes(total_score,m_production_all))+
+  theme_cowplot()
+
+motevo_results %>% 
+  filter(strand=="+") %>% 
+  group_by(strain) %>% 
+  mutate(total_score=log(max(WM_score))) %>% 
+  ungroup() %>% 
+  distinct(strain,total_score) %>% 
+  left_join(phenotypes) %>% 
+  ggplot()+
+  geom_point(aes(total_score,s_ace_glu))+
+  theme_cowplot()
+
+motevo_results %>% 
+  filter(strand=="+") %>% 
+  group_by(strain) %>% 
+  mutate(total_score=log(max(WM_score))) %>% 
+  ungroup() %>% 
+  distinct(strain,total_score) %>% 
+  left_join(phenotypes) %>% 
+  ggplot()+
+  geom_point(aes(total_score,s_glu_gluaa))+
+  theme_cowplot()
+```
+
+
+```{r}
+motevo_results %>% 
+  filter(strand=="+") %>% 
+  group_by(strain) %>% 
+  mutate(total_score=log(sum(post_prob))) %>% 
+  ungroup() %>% 
+  distinct(strain,total_score) %>% 
+  left_join(phenotypes,by=c("strain")) %>% 
+  ggplot()+
+  geom_point(aes(total_score,m_production_all))+
+  theme_cowplot()
+
+motevo_results %>% 
+  filter(strand=="+") %>% 
+  group_by(strain) %>% 
+  mutate(total_score=log(sum(post_prob))) %>% 
+  ungroup() %>% 
+  distinct(strain,total_score) %>% 
+  left_join(phenotypes) %>% 
+  ggplot()+
+  geom_point(aes(total_score,s_ace_glu))+
+  theme_cowplot()
+
+motevo_results %>% 
+  filter(strand=="+") %>% 
+  group_by(strain) %>% 
+  mutate(total_score=log(sum(post_prob))) %>% 
+  ungroup() %>% 
+  distinct(strain,total_score) %>% 
+  left_join(phenotypes) %>% 
+  ggplot()+
+  geom_point(aes(total_score,s_glu_gluaa))+
+  theme_cowplot()
+```
+# Trying out with other matrices. -35 foot.
+
+
+
+```{r}
+motevo_results %>% 
+  filter(strand=="+") %>% 
+  group_by(strain) %>% 
+  mutate(total_score=log(sum(exp(WM_score)))) %>% 
+  ungroup() %>% 
+  distinct(strain,total_score) %>% 
+  left_join(phenotypes,by=c("strain")) %>% 
+  ggplot()+
+  geom_point(aes(total_score,m_production_all))+
+  theme_cowplot()
+
+motevo_results %>% 
+  filter(strand=="+") %>% 
+  group_by(strain) %>% 
+  mutate(total_score=log(sum(exp(WM_score)))) %>% 
+  ungroup() %>% 
+  distinct(strain,total_score) %>% 
+  left_join(phenotypes) %>% 
+  ggplot()+
+  geom_point(aes(total_score,s_ace_glu))+
+  theme_cowplot()
+
+motevo_results %>% 
+  filter(strand=="+") %>% 
+  group_by(strain) %>% 
+  mutate(total_score=log(sum(exp(WM_score)))) %>% 
+  ungroup() %>% 
+  distinct(strain,total_score) %>% 
+  left_join(phenotypes) %>% 
+  ggplot()+
+  geom_point(aes(total_score,s_glu_gluaa))+
+  theme_cowplot()
+```
+```{r}
+motevo_results %>% 
+  filter(strand=="+") %>% 
+  group_by(strain) %>% 
+  mutate(total_score=max(WM_score)) %>% 
+  ungroup() %>% 
+  distinct(strain,total_score) %>% 
+  left_join(phenotypes,by=c("strain")) %>% 
+  ggplot()+
+  geom_point(aes(total_score,m_production_all))+
+  theme_cowplot()
+
+motevo_results %>% 
+  filter(strand=="+") %>% 
+  group_by(strain) %>% 
+  mutate(total_score=max(WM_score)) %>% 
+  ungroup() %>% 
+  distinct(strain,total_score) %>% 
+  left_join(phenotypes) %>% 
+  ggplot()+
+  geom_point(aes(total_score,s_ace_glu))+
+  theme_cowplot()
+
+motevo_results %>% 
+  filter(strand=="+") %>% 
+  group_by(strain) %>% 
+  mutate(total_score=max(WM_score)) %>% 
+  ungroup() %>% 
+  distinct(strain,total_score) %>% 
+  left_join(phenotypes) %>% 
+  ggplot()+
+  geom_point(aes(total_score,s_glu_gluaa))+
+  theme_cowplot()
+```
+
+# -10 foot
+
+```{r}
+# First I tried, only sigma70, with different spacers
+set_id <- "wm_sigma70_10"
+sequence_file <- "extended_proms.fasta"
+source("/scicore/home/nimwegen/rocasu25/Documents/Projects/biozentrum/ouInference_bjoern/run_and_collect_motevo_results.R")
+```
+
+```{r}
+motevo_results %>% 
+  filter(strand=="+") %>% 
+  group_by(strain) %>% 
+  mutate(total_score=log(sum(exp(WM_score)))) %>% 
+  ungroup() %>% 
+  distinct(strain,total_score) %>% 
+  left_join(phenotypes,by=c("strain")) %>% 
+  ggplot()+
+  geom_point(aes(total_score,m_production_all))+
+  theme_cowplot()
+
+motevo_results %>% 
+  filter(strand=="+") %>% 
+  group_by(strain) %>% 
+  mutate(total_score=log(sum(exp(WM_score)))) %>% 
+  ungroup() %>% 
+  distinct(strain,total_score) %>% 
+  left_join(phenotypes) %>% 
+  ggplot()+
+  geom_point(aes(total_score,s_ace_glu))+
+  theme_cowplot()
+
+motevo_results %>% 
+  filter(strand=="+") %>% 
+  group_by(strain) %>% 
+  mutate(total_score=log(sum(exp(WM_score)))) %>% 
+  ungroup() %>% 
+  distinct(strain,total_score) %>% 
+  left_join(phenotypes) %>% 
+  ggplot()+
+  geom_point(aes(total_score,s_glu_gluaa))+
+  theme_cowplot()
+```
+
+```{r}
+# Looking more closely at these data
+minus10foot <- motevo_results %>% 
+  filter(strand=="+") %>% 
+  group_by(strain) %>% 
+  arrange(desc(WM_score)) %>% 
+  filter(row_number()==1) %>% 
+  ungroup()
+
+# Surprise: Pribnow box right there: TATAAT
+# Other box: TTGACA
+# All promoters have a TATTAT or TATAAT
+```
+
+# -35 foot
+
+```{r}
+# First I tried, only sigma70, with different spacers
+set_id <- "wm_sigma70_35"
+sequence_file <- "extended_proms.fasta"
+source("/scicore/home/nimwegen/rocasu25/Documents/Projects/biozentrum/ouInference_bjoern/run_and_collect_motevo_results.R")
+```
+
+```{r}
+motevo_results %>% 
+  filter(strand=="+") %>% 
+  group_by(strain) %>% 
+  mutate(total_score=log(sum(exp(WM_score)))) %>% 
+  ungroup() %>% 
+  distinct(strain,total_score) %>% 
+  left_join(phenotypes,by=c("strain")) %>% 
+  ggplot()+
+  geom_point(aes(total_score,m_production_all))+
+  theme_cowplot()
+
+motevo_results %>% 
+  filter(strand=="+") %>% 
+  group_by(strain) %>% 
+  mutate(total_score=log(sum(exp(WM_score)))) %>% 
+  ungroup() %>% 
+  distinct(strain,total_score) %>% 
+  left_join(phenotypes) %>% 
+  ggplot()+
+  geom_point(aes(total_score,s_ace_glu))+
+  theme_cowplot()
+
+motevo_results %>% 
+  filter(strand=="+") %>% 
+  group_by(strain) %>% 
+  mutate(total_score=log(sum(exp(WM_score)))) %>% 
+  ungroup() %>% 
+  distinct(strain,total_score) %>% 
+  left_join(phenotypes) %>% 
+  ggplot()+
+  geom_point(aes(total_score,s_glu_gluaa))+
+  theme_cowplot()
+```
+
+```{r}
+# Looking more closely at these data
+minus35foot <- motevo_results %>% 
+  filter(strand=="+") %>% 
+  group_by(strain) %>% 
+  arrange(desc(WM_score)) %>% 
+  filter(row_number()==1) %>% 
+  ungroup()
+
+# Surprise: Pribnow box right there: TATAAT
+# Other box: TTGACA
+# All promoters have a TATTAT or TATAAT
+```
+
+So the strategy is to use the best minus10 and the best minus35 foot that there is to find the best sites...
+But maybe the best is simply to run motevo with these pwm...
+
+# Sigma70 with different spacers
+
+```{r}
+# First I tried, only sigma70, with different spacers
+set_id <- "wm_sigma_spacer"
+sequence_file <- "extended_proms.fasta"
+source("/scicore/home/nimwegen/rocasu25/Documents/Projects/biozentrum/ouInference_bjoern/run_and_collect_motevo_results.R")
+```
+
+```{r}
+motevo_results %>% 
+  filter(strand=="+") %>% 
+  group_by(strain) %>% 
+  mutate(total_score=log(max(WM_score))) %>% 
+  ungroup() %>% 
+  distinct(strain,total_score) %>% 
+  left_join(phenotypes,by=c("strain")) %>% 
+  ggplot()+
+  geom_point(aes(total_score,m_production_all))+
+  theme_cowplot()
+
+motevo_results %>% 
+  filter(strand=="+") %>% 
+  group_by(strain) %>% 
+  mutate(total_score=log(max(WM_score))) %>% 
+  ungroup() %>% 
+  distinct(strain,total_score) %>% 
+  left_join(phenotypes) %>% 
+  ggplot()+
+  geom_point(aes(total_score,s_ace_glu))+
+  theme_cowplot()
+
+motevo_results %>% 
+  filter(strand=="+") %>% 
+  group_by(strain) %>% 
+  mutate(total_score=log(max(WM_score))) %>% 
+  ungroup() %>% 
+  distinct(strain,total_score) %>% 
+  left_join(phenotypes) %>% 
+  ggplot()+
+  geom_point(aes(total_score,s_glu_gluaa))+
+  theme_cowplot()
+```
+
+```{r}
+all_spacer <- motevo_results %>% 
+  filter(strand=="+") %>% 
+  group_by(strain) %>% 
+  arrange(desc(WM_score)) %>% 
+  filter(row_number()==1) %>% 
+  ungroup()
+```
+
+I would have expected compatible results... but it does not seem to be the case:
+
+```{r}
+all_spacer %>% filter(promoter=="p2F9")
+minus10foot %>% filter(promoter=="p2F9")
+minus35foot %>% filter(promoter=="p2F9")
+```
+So looking at these sequences from the point of view of -10 foot or -35 foot, or different sigma 70 with spacers, does not really give a good prediction of the results. Now, I am curious to see: what are the predictions for single promoters, when considering these different feet/spacers?
+
+# Looking at the length
+
+First I would like to add promoter length to the df.
+Are there many -10 feet?
+
+```{r}
+# First I tried, only sigma70, with different spacers
+set_id <- "wm_sigma70_10"
+sequence_file <- "extended_proms.fasta"
+source("/scicore/home/nimwegen/rocasu25/Documents/Projects/biozentrum/ouInference_bjoern/run_and_collect_motevo_results.R")
+```
+
+```{r}
+motevo_results %>% 
+  distinct(strain,.keep_all = TRUE) %>% 
+  left_join(phenotypes,by=c("strain")) %>% 
+  ggplot()+
+  geom_point(aes(length,s_glu_gluaa))
+
+motevo_results %>% 
+  distinct(strain,.keep_all = TRUE) %>% 
+  left_join(phenotypes,by=c("strain")) %>% 
+  ggplot()+
+  geom_point(aes(length,m_production_all))
+
+motevo_results %>% 
+  distinct(strain,.keep_all = TRUE) %>% 
+  left_join(phenotypes,by=c("strain")) %>% 
+  ggplot()+
+  geom_point(aes(length,s_ace_glu))
+```
+# Distribution of the TATA boxes (aka -10 foot).
+
+```{r}
+# First I tried, only sigma70, with different spacers
+set_id <- "wm_sigma70_10"
+sequence_file <- "extended_proms.fasta"
+source("/scicore/home/nimwegen/rocasu25/Documents/Projects/biozentrum/ouInference_bjoern/run_and_collect_motevo_results.R")
+```
+
+How to represent that correctly?
+It is not exactly clear to me. First I would like to look at the distribution of score for each one of them. Scores and post_prob.
+In a big faceted plot. Then obviously I would like to know if there are medium or hi. This information is already contained in phenotypes$type.
+
+We know that all these are active.
+
+```{r}
+plot_med <- motevo_results %>% 
+  filter(strand=="+") %>% 
+  left_join(phenotypes,by=c("strain")) %>% 
+  separate(pos,into = c("beg","end")) %>% 
+  filter(type=="med") %>% 
+  filter(WM_score>4.5) %>% 
+  group_by(strain) %>% 
+  arrange(desc(WM_score)) %>% 
+  mutate(rank=row_number()) %>% 
+  ungroup() %>% 
+  ggplot()+
+  geom_point(aes(rank,WM_score))+
+  facet_wrap(~promoter)
+
+plot_hi <- motevo_results %>% 
+  filter(strand=="+") %>% 
+  left_join(phenotypes,by=c("strain")) %>% 
+  separate(pos,into = c("beg","end")) %>% 
+  filter(type=="hi") %>% 
+  filter(WM_score>4.5) %>% 
+  group_by(strain) %>% 
+  arrange(desc(WM_score)) %>% 
+  mutate(rank=row_number()) %>% 
+  ungroup() %>% 
+  ggplot()+
+  geom_point(aes(rank,WM_score))+
+  facet_wrap(~promoter)
+
+plot_med <- motevo_results %>% 
+  filter(strand=="+") %>% 
+  left_join(phenotypes,by=c("strain")) %>% 
+  separate(pos,into = c("beg","end")) %>% 
+  filter(type=="med") %>% 
+  filter(WM_score>2.5) %>% 
+  group_by(strain) %>% 
+  arrange(desc(WM_score)) %>% 
+  mutate(rank=row_number()) %>% 
+  ungroup() %>% 
+  ggplot()+
+  geom_point(aes(beg,WM_score))+
+  facet_wrap(~promoter)
+  
+ggsave("./plot_med.pdf",plot_med,width=10,height=8)
+ggsave("./plot_hi.pdf",plot_hi,width=10,height=8)
+
+plot_hi <- motevo_results %>% 
+  filter(strand=="+") %>% 
+  left_join(phenotypes,by=c("strain")) %>% 
+  separate(pos,into = c("beg","end")) %>% 
+  filter(type=="med") %>% 
+  filter(WM_score>2.5) %>% 
+  group_by(strain) %>% 
+  arrange(desc(WM_score)) %>% 
+  mutate(rank=row_number()) %>% 
+  ungroup() %>% 
+  ggplot()+
+  geom_point(aes(rank,WM_score))+
+  facet_wrap(~promoter)
+
+ggsave("./plot_hi.pdf",plot_med,width=10,height=8)
+  
+# it looks like it is at the beginning of the sequence
+# A given post_prob defines a minimum for the WM_score.
+# 
+
+plot_hi <- motevo_results %>% 
+  filter(strand=="+") %>% 
+  left_join(phenotypes,by=c("strain")) %>% 
+  separate(pos,into = c("beg","end")) %>% 
+  filter(type=="med") %>% 
+  filter(WM_score>2.5) %>% 
+  group_by(strain) %>% 
+  arrange(desc(WM_score)) %>% 
+  mutate(rank=row_number()) %>% 
+  ungroup() %>% 
+  ggplot()+
+  geom_point(aes(post_prob,WM_score))
+  #facet_wrap(~promoter)
+```
+
+```{r}
+motevo_results %>% 
+  filter(strand=="+") %>% 
+  left_join(phenotypes,by=c("strain")) %>% 
+  separate(pos,into = c("beg","end")) %>% 
+  #filter(type=="med") %>% 
+  filter(WM_score>2) %>% 
+  group_by(strain) %>% 
+  arrange(desc(WM_score)) %>% 
+  mutate(rank=row_number()) %>% 
+  ungroup() %>% 
+  ggplot()+
+  stat_ecdf(aes(WM_score,col=type))
+
+motevo_results %>% 
+  group_by(strain) %>% 
+  arrange(desc(WM_score)) %>% 
+  filter(row_number()==1)
+  
+```
+
+Ok, these sequences are found within the constant part for most of them.
+Hence the analysis but must done a bit more rigorously. I need to get an idea of the position, length of the promoter, length of the 5' and 3' part as well.
+And 50 bp before and after are enough. Then I should discard sites that are found at positions that are characterized by constant parts.
+
+# Start over again
+
+```{r}
+# First I tried, only sigma70, with different spacers
+set_id <- "wm_kinney_dany"
+sequence_file <- "extended_proms.fasta"
+source("/scicore/home/nimwegen/rocasu25/Documents/Projects/biozentrum/ouInference_bjoern/run_and_collect_motevo_results.R")
+```
+
+Now let's represent where the sites are found. I ave an old code for that.
+
+```{r}
+selected_strain <- phenotypes %>%
+  distinct(strain)
+
+toplot_results <- motevo_results %>% 
+  semi_join(selected_strain,by=c("strain")) %>% 
+  left_join(phenotypes,by=c("strain")) %>% 
+  filter(strand=="+") %>% 
+  #filter(WM_score>0) %>% 
+  mutate(total_length=length+2*100) %>% 
+  group_by(strain) %>% 
+  mutate(ref=as.character(row_number())) %>% 
+  ungroup() %>% 
+  separate(pos,into=c("beg","end")) %>% 
+  pivot_longer(cols=c("beg","end"),values_to="x") %>% 
+  mutate(x=as.double(x))
+
+length_df_plot <- length_df %>% 
+  semi_join(selected_strain,by=c("strain")) %>% 
+  mutate(y=0) %>% 
+  group_by(promoter) %>%
+  mutate(endseq=length+2*100) %>% 
+  mutate(begseq=1) %>% 
+  mutate(begprom=101) %>% 
+  mutate(begthreecon=length+100+1) %>% 
+  ungroup() %>% 
+  pivot_longer(cols=c("begseq","begprom","begthreecon","endseq"),values_to="x")
+  
+plot <- toplot_results %>% 
+  ggplot()+
+  geom_line(data=length_df_plot %>% 
+              filter(name %in% c("begseq","begprom")),aes(x,y),col="green")+
+  geom_line(data=length_df_plot %>% 
+              filter(name %in% c("begprom","begthreecon")),aes(x,y),col="blue")+
+  geom_line(data=length_df_plot %>% 
+              filter(name %in% c("begthreecon","endseq")),aes(x,y),col="green")+
+  geom_line(data=toplot_results,aes(x,WM_score,group=ref))+
+  facet_wrap(~strain,scale="free")+
+  theme(legend.position = NULL)
+  #coord_cartesian(ylim=c(-1,1))
+  
+ggsave("all_WM_score.pdf",plot,width=15,height=10)
+```
+
+```{r}
+selected_strain <- phenotypes %>%
+  distinct(strain)
+
+toplot_results <- motevo_results %>% 
+  semi_join(selected_strain,by=c("strain")) %>% 
+  left_join(phenotypes,by=c("strain")) %>% 
+  filter(strand=="+") %>% 
+  filter(WM_score>0) %>% 
+  mutate(total_length=length+2*100) %>% 
+  group_by(strain) %>% 
+  mutate(ref=as.character(row_number())) %>% 
+  ungroup() %>% 
+  separate(pos,into=c("beg","end")) %>% 
+  mutate(beg=as.double(beg),
+         end=as.double(end)) %>% 
+  #filter((beg<=100+length) & (end>100)) %>% 
+  pivot_longer(cols=c("beg","end"),values_to="x") %>% 
+  mutate(x=as.double(x))
+
+length_df_plot <- length_df %>% 
+  semi_join(selected_strain,by=c("strain")) %>% 
+  semi_join(toplot_results,by=c("strain")) %>% 
+  mutate(y=0) %>% 
+  group_by(strain) %>%
+  mutate(endseq=length+2*100) %>% 
+  mutate(begseq=1) %>% 
+  mutate(begprom=101) %>% 
+  mutate(begthreecon=length+100+1) %>% 
+  ungroup() %>% 
+  pivot_longer(cols=c("begseq","begprom","begthreecon","endseq"),values_to="x")
+  
+plot <- toplot_results %>% 
+  ggplot()+
+  geom_line(data=length_df_plot %>% 
+              filter(name %in% c("begseq","begprom")),aes(x,y),col="green",alpha=1)+
+  geom_line(data=length_df_plot %>% 
+              filter(name %in% c("begprom","begthreecon")),aes(x,y),col="blue",alpha=1)+
+  geom_line(data=length_df_plot %>% 
+              filter(name %in% c("begthreecon","endseq")),aes(x,y),col="green",alpha=1)+
+  geom_line(data=toplot_results,aes(x,post_prob,group=ref,col=type),alpha=0.2)+
+  facet_wrap(~strain,scale="free")+
+  theme(legend.position = NULL)
+  #coord_cartesian(ylim=c(-1,1))
+  
+ggsave("all_post_prob_constant_parts.pdf",plot,width=15,height=10)
+```
+
+I should get rid of the sequences that are completely on the sides, done.
+Unfortunately, the proability look pretty bad in almost all cases.
+Do they look better on the sides?
+Nope.
+
+Maybe my WM is shit?
+
+```{r}
+# First I tried, only sigma70, with different spacers
+set_id <- "wm_kinney"
+sequence_file <- "extended_proms.fasta"
+source("/scicore/home/nimwegen/rocasu25/Documents/Projects/biozentrum/ouInference_bjoern/run_and_collect_motevo_results.R")
+```
+
+```{r}
+selected_strain <- phenotypes %>%
+  distinct(strain)
+
+toplot_results <- motevo_results %>% 
+  semi_join(selected_strain,by=c("strain")) %>% 
+  left_join(phenotypes,by=c("strain")) %>% 
+  filter(strand=="+") %>% 
+  filter(WM_score>0) %>% 
+  mutate(total_length=length+2*100) %>% 
+  group_by(strain) %>% 
+  mutate(ref=as.character(row_number())) %>% 
+  ungroup() %>% 
+  separate(pos,into=c("beg","end")) %>% 
+  mutate(beg=as.double(beg),
+         end=as.double(end)) %>% 
+  #filter((beg<=100+length) & (end>100)) %>% 
+  pivot_longer(cols=c("beg","end"),values_to="x") %>% 
+  mutate(x=as.double(x))
+
+length_df_plot <- length_df %>% 
+  semi_join(selected_strain,by=c("strain")) %>% 
+  semi_join(toplot_results,by=c("strain")) %>% 
+  mutate(y=0) %>% 
+  group_by(strain) %>%
+  mutate(endseq=length+2*100) %>% 
+  mutate(begseq=1) %>% 
+  mutate(begprom=101) %>% 
+  mutate(begthreecon=length+100+1) %>% 
+  ungroup() %>% 
+  pivot_longer(cols=c("begseq","begprom","begthreecon","endseq"),values_to="x")
+  
+plot <- toplot_results %>% 
+  ggplot()+
+  geom_line(data=length_df_plot %>% 
+              filter(name %in% c("begseq","begprom")),aes(x,y),col="green",alpha=1)+
+  geom_line(data=length_df_plot %>% 
+              filter(name %in% c("begprom","begthreecon")),aes(x,y),col="blue",alpha=1)+
+  geom_line(data=length_df_plot %>% 
+              filter(name %in% c("begthreecon","endseq")),aes(x,y),col="green",alpha=1)+
+  geom_line(data=toplot_results,aes(x,post_prob,group=ref,col=type),alpha=0.5)+
+  facet_wrap(~strain,scale="free")+
+  theme(legend.position = NULL)
+  #coord_cartesian(ylim=c(-1,1))
+  
+ggsave("all_post_prob_constant_parts.pdf",plot,width=15,height=10)
+```
+
+
+The scores look muuuch better.
+
+```{r}
+selected_strain <- phenotypes %>%
+  distinct(strain)
+
+toplot_results <- motevo_results %>% 
+  semi_join(selected_strain,by=c("strain")) %>% 
+  left_join(phenotypes,by=c("strain")) %>% 
+  filter(strand=="+") %>% 
+  filter(WM_score>0) %>% 
+  mutate(total_length=length+2*100) %>% 
+  group_by(strain) %>% 
+  mutate(ref=as.character(row_number())) %>% 
+  ungroup() %>% 
+  separate(pos,into=c("beg","end")) %>% 
+  mutate(beg=as.double(beg),
+         end=as.double(end)) %>% 
+  #filter((beg<=100+length) & (end>100)) %>% 
+  pivot_longer(cols=c("beg","end"),values_to="x") %>% 
+  mutate(x=as.double(x))
+
+length_df_plot <- length_df %>% 
+  semi_join(selected_strain,by=c("strain")) %>% 
+  semi_join(toplot_results,by=c("strain")) %>% 
+  mutate(y=0) %>% 
+  group_by(strain) %>%
+  mutate(endseq=length+2*100) %>% 
+  mutate(begseq=1) %>% 
+  mutate(begprom=101) %>% 
+  mutate(begthreecon=length+100+1) %>% 
+  ungroup() %>% 
+  pivot_longer(cols=c("begseq","begprom","begthreecon","endseq"),values_to="x")
+  
+plot <- toplot_results %>% 
+  ggplot()+
+  geom_line(data=length_df_plot %>% 
+              filter(name %in% c("begseq","begprom")),aes(x,y),col="green",alpha=1)+
+  geom_line(data=length_df_plot %>% 
+              filter(name %in% c("begprom","begthreecon")),aes(x,y),col="blue",alpha=1)+
+  geom_line(data=length_df_plot %>% 
+              filter(name %in% c("begthreecon","endseq")),aes(x,y),col="green",alpha=1)+
+  geom_line(data=toplot_results,aes(x,WM_score,group=ref,col=type),alpha=0.5)+
+  facet_wrap(~strain,scale="free")+
+  theme(legend.position = NULL)
+  #coord_cartesian(ylim=c(-1,1))
+  
+ggsave("all_WM_score_constant_parts.pdf",plot,width=15,height=10)
+```
+
+```{r}
+motevo_results %>% 
+  filter(strand=="+") %>% 
+  filter(WM_score>0) %>% 
+  separate(pos,into=c("beg","end")) %>% 
+  mutate(beg=as.double(beg),end=as.double(end)) %>% 
+  group_by(strain) %>% 
+  arrange(desc(WM_score)) %>% 
+  filter(row_number()==1) %>% 
+  mutate(total_score=beg/length) %>% 
+  ungroup() %>% 
+  distinct(strain,total_score) %>% 
+  left_join(phenotypes,by=c("strain")) %>% 
+  ggplot()+
+  geom_point(aes(total_score,m_production_all,col=type))+
+  theme_cowplot()
+
+motevo_results %>% 
+  filter(strand=="+") %>% 
+  filter(WM_score>0) %>% 
+  separate(pos,into=c("beg","end")) %>% 
+  mutate(beg=as.double(beg),end=as.double(end)) %>% 
+  group_by(strain) %>% 
+  arrange(desc(post_prob)) %>% 
+  filter(row_number()==1) %>% 
+  mutate(total_score=beg/length) %>% 
+  ungroup() %>% 
+  distinct(strain,total_score) %>% 
+  left_join(phenotypes,by=c("strain")) %>% 
+  ggplot()+
+  geom_point(aes(total_score,m_production_all,col=type))+
+  theme_cowplot()
+
+motevo_results %>% 
+  filter(strand=="+") %>% 
+  filter(WM_score>0) %>% 
+  separate(pos,into=c("beg","end")) %>% 
+  mutate(beg=as.double(beg),end=as.double(end)) %>% 
+  group_by(strain) %>% 
+  arrange(desc(post_prob)) %>% 
+  filter(row_number()==1) %>% 
+  mutate(total_score=post_prob) %>% 
+  ungroup() %>% 
+  distinct(strain,total_score) %>% 
+  left_join(phenotypes,by=c("strain")) %>% 
+  ggplot()+
+  geom_point(aes(total_score,m_production_all,col=type))+
+  theme_cowplot()
+
+motevo_results %>% 
+  filter(strand=="+") %>% 
+  filter(WM_score>0) %>% 
+  separate(pos,into=c("beg","end")) %>% 
+  mutate(beg=as.double(beg),end=as.double(end)) %>% 
+  group_by(strain) %>% 
+  arrange(desc(WM_score)) %>% 
+  filter(row_number()==1) %>% 
+  mutate(total_score=beg/length) %>% 
+  ungroup() %>% 
+  distinct(strain,total_score) %>% 
+  left_join(phenotypes,by=c("strain")) %>% 
+  ggplot()+
+  geom_point(aes(total_score,s_ace_glu))+
+  theme_cowplot()
+
+motevo_results %>% 
+  filter(strand=="+") %>% 
+  filter(WM_score>0) %>% 
+  separate(pos,into=c("beg","end")) %>% 
+  mutate(beg=as.double(beg),end=as.double(end)) %>% 
+  group_by(strain) %>% 
+  arrange(desc(WM_score)) %>% 
+  filter(row_number()==1) %>% 
+  mutate(total_score=beg/length) %>% 
+  ungroup() %>% 
+  distinct(strain,total_score) %>% 
+  left_join(phenotypes,by=c("strain")) %>% 
+  ggplot()+
+  geom_point(aes(total_score,s_glu_gluaa))+
+  theme_cowplot()
+```
+
+They have something else. Something else enables them to be hi or medium. But what? Lets take a look at single foot again.
+
+# Single foot from WM Kinney
+
+```{r}
+# First I tried, only sigma70, with different spacers
+set_id <- "wm_kinney_minus35"
+sequence_file <- "extended_proms.fasta"
+source("/scicore/home/nimwegen/rocasu25/Documents/Projects/biozentrum/ouInference_bjoern/run_and_collect_motevo_results.R")
+```
+
+```{r}
+selected_strain <- phenotypes %>%
+  distinct(strain)
+
+toplot_results <- motevo_results %>% 
+  semi_join(selected_strain,by=c("strain")) %>% 
+  left_join(phenotypes,by=c("strain")) %>% 
+  filter(strand=="+") %>% 
+  filter(WM_score>0) %>% 
+  mutate(total_length=length+2*100) %>% 
+  group_by(strain) %>% 
+  mutate(ref=as.character(row_number())) %>% 
+  ungroup() %>% 
+  separate(pos,into=c("beg","end")) %>% 
+  mutate(beg=as.double(beg),
+         end=as.double(end)) %>% 
+  filter((beg<=100+length) & (end>100)) %>% 
+  pivot_longer(cols=c("beg","end"),values_to="x") %>% 
+  mutate(x=as.double(x))
+
+length_df_plot <- length_df %>% 
+  semi_join(selected_strain,by=c("strain")) %>% 
+  semi_join(toplot_results,by=c("strain")) %>% 
+  mutate(y=0) %>% 
+  group_by(strain) %>%
+  mutate(endseq=length+2*100) %>% 
+  mutate(begseq=1) %>% 
+  mutate(begprom=101) %>% 
+  mutate(begthreecon=length+100+1) %>% 
+  ungroup() %>% 
+  pivot_longer(cols=c("begseq","begprom","begthreecon","endseq"),values_to="x")
+  
+plot <- toplot_results %>% 
+  ggplot()+
+  geom_line(data=length_df_plot %>% 
+              filter(name %in% c("begseq","begprom")),aes(x,y),col="green",alpha=1)+
+  geom_line(data=length_df_plot %>% 
+              filter(name %in% c("begprom","begthreecon")),aes(x,y),col="blue",alpha=1)+
+  geom_line(data=length_df_plot %>% 
+              filter(name %in% c("begthreecon","endseq")),aes(x,y),col="green",alpha=1)+
+  geom_line(data=toplot_results,aes(x,post_prob,group=ref,col=type),alpha=0.5)+
+  facet_wrap(~strain,scale="free")+
+  theme(legend.position = NULL)
+  #coord_cartesian(ylim=c(-1,1))
+  
+ggsave("all_post_prob_constant_parts.pdf",plot,width=15,height=10)
+```
+
+
+The scores look muuuch better.
+
+```{r}
+selected_strain <- phenotypes %>%
+  distinct(strain)
+
+toplot_results <- motevo_results %>% 
+  semi_join(selected_strain,by=c("strain")) %>% 
+  left_join(phenotypes,by=c("strain")) %>% 
+  filter(strand=="+") %>% 
+  filter(WM_score>0) %>% 
+  mutate(total_length=length+2*100) %>% 
+  group_by(strain) %>% 
+  mutate(ref=as.character(row_number())) %>% 
+  ungroup() %>% 
+  separate(pos,into=c("beg","end")) %>% 
+  mutate(beg=as.double(beg),
+         end=as.double(end)) %>% 
+  filter((beg<=100+length) & (end>100)) %>% 
+  pivot_longer(cols=c("beg","end"),values_to="x") %>% 
+  mutate(x=as.double(x))
+
+length_df_plot <- length_df %>% 
+  semi_join(selected_strain,by=c("strain")) %>% 
+  semi_join(toplot_results,by=c("strain")) %>% 
+  mutate(y=0) %>% 
+  group_by(strain) %>%
+  mutate(endseq=length+2*100) %>% 
+  mutate(begseq=1) %>% 
+  mutate(begprom=101) %>% 
+  mutate(begthreecon=length+100+1) %>% 
+  ungroup() %>% 
+  pivot_longer(cols=c("begseq","begprom","begthreecon","endseq"),values_to="x")
+  
+plot <- toplot_results %>% 
+  ggplot()+
+  geom_line(data=length_df_plot %>% 
+              filter(name %in% c("begseq","begprom")),aes(x,y),col="green",alpha=1)+
+  geom_line(data=length_df_plot %>% 
+              filter(name %in% c("begprom","begthreecon")),aes(x,y),col="blue",alpha=1)+
+  geom_line(data=length_df_plot %>% 
+              filter(name %in% c("begthreecon","endseq")),aes(x,y),col="green",alpha=1)+
+  geom_line(data=toplot_results,aes(x,WM_score,group=ref,col=type),alpha=0.5)+
+  facet_wrap(~strain,scale="free")+
+  theme(legend.position = NULL)
+  #coord_cartesian(ylim=c(-1,1))
+  
+ggsave("all_WM_score_constant_parts.pdf",plot,width=15,height=10)
+```
+
+```{r}
+motevo_results %>% 
+  filter(strand=="+") %>% 
+  filter(WM_score>0) %>% 
+  separate(pos,into=c("beg","end")) %>% 
+  mutate(beg=as.double(beg),end=as.double(end)) %>% 
+  group_by(strain) %>% 
+  arrange(desc(WM_score)) %>% 
+  filter(row_number()==1) %>% 
+  mutate(total_score=beg/length) %>% 
+  ungroup() %>% 
+  distinct(strain,total_score) %>% 
+  left_join(phenotypes,by=c("strain")) %>% 
+  ggplot()+
+  geom_point(aes(total_score,m_production_all,col=type))+
+  theme_cowplot()
+
+motevo_results %>% 
+  filter(strand=="+") %>% 
+  filter(WM_score>0) %>% 
+  separate(pos,into=c("beg","end")) %>% 
+  mutate(beg=as.double(beg),end=as.double(end)) %>% 
+  group_by(strain) %>% 
+  arrange(desc(post_prob)) %>% 
+  filter(row_number()==1) %>% 
+  mutate(total_score=beg/length) %>% 
+  ungroup() %>% 
+  distinct(strain,total_score) %>% 
+  left_join(phenotypes,by=c("strain")) %>% 
+  ggplot()+
+  geom_point(aes(total_score,m_production_all,col=type))+
+  theme_cowplot()
+
+motevo_results %>% 
+  filter(strand=="+") %>% 
+  filter(WM_score>0) %>% 
+  separate(pos,into=c("beg","end")) %>% 
+  mutate(beg=as.double(beg),end=as.double(end)) %>% 
+  group_by(strain) %>% 
+  arrange(desc(post_prob)) %>% 
+  filter(row_number()==1) %>% 
+  mutate(total_score=post_prob) %>% 
+  ungroup() %>% 
+  distinct(strain,total_score) %>% 
+  left_join(phenotypes,by=c("strain")) %>% 
+  ggplot()+
+  geom_point(aes(total_score,m_production_all,col=type))+
+  theme_cowplot()
+
+motevo_results %>% 
+  filter(strand=="+") %>% 
+  filter(WM_score>0) %>% 
+  separate(pos,into=c("beg","end")) %>% 
+  mutate(beg=as.double(beg),end=as.double(end)) %>% 
+  group_by(strain) %>% 
+  arrange(desc(WM_score)) %>% 
+  filter(row_number()==1) %>% 
+  mutate(total_score=beg/length) %>% 
+  ungroup() %>% 
+  distinct(strain,total_score) %>% 
+  left_join(phenotypes,by=c("strain")) %>% 
+  ggplot()+
+  geom_point(aes(total_score,s_ace_glu))+
+  theme_cowplot()
+
+motevo_results %>% 
+  filter(strand=="+") %>% 
+  filter(WM_score>0) %>% 
+  separate(pos,into=c("beg","end")) %>% 
+  mutate(beg=as.double(beg),end=as.double(end)) %>% 
+  group_by(strain) %>% 
+  arrange(desc(WM_score)) %>% 
+  filter(row_number()==1) %>% 
+  mutate(total_score=beg/length) %>% 
+  ungroup() %>% 
+  distinct(strain,total_score) %>% 
+  left_join(phenotypes,by=c("strain")) %>% 
+  ggplot()+
+  geom_point(aes(total_score,s_glu_gluaa))+
+  theme_cowplot()
+```
+
+
+# Deeper investigation
+
+Discussing with Erik, I realized a few things: first, the Sigma70 WM from McKinney, takes into account 41 bp.
+But maybe I should only consider one foot?
+I have other WM, such as sigma70_spacer11. 6 bp, then the linker, then 6 bp again.
+The simplest, I think, would be to only take these 6 bp's: -35 first, and then -10.
+
+# Checking the WM from Kinney and comparing with the one I got from Dorde
+
+```{r}
+correct_wm <- read_delim("./pwm/wm_kinney.txt",delim=" ")
+correct_wm <- correct_wm +(-min(correct_wm))
+correct_wm <- as_tibble(correct_wm) %>% 
+  mutate(PO=row_number()) %>% 
+  select(PO,A,C,G,T)
+dorde_wm <- read_delim("./pwm/sigma70_kinney_backup.txt",delim="   ")
+# Write new wm_kinney_dany
+write_delim(correct_wm,"./pwm/wm_kinney_dany.txt",delim=" ")
+```
+
+Running motevo again.
+```{r}
+# First I tried, only sigma70, with different spacers
+set_id <- "wm_kinney_dany"
+sequence_file <- "extended_proms.fasta"
+source("/scicore/home/nimwegen/rocasu25/Documents/Projects/biozentrum/ouInference_bjoern/run_and_collect_motevo_results.R")
+```
+
+```{r}
+motevo_results %>% 
+  filter(strand=="+") %>% 
+  group_by(strain) %>% 
+  mutate(total_score=log(sum(exp(WM_score)))) %>% 
+  ungroup() %>% 
+  distinct(strain,total_score) %>% 
+  left_join(phenotypes,by=c("strain")) %>% 
+  ggplot()+
+  geom_point(aes(total_score,m_production_all,col=type))+
+  theme_cowplot()
+
+motevo_results %>% 
+  filter(strand=="+") %>% 
+  group_by(strain) %>% 
+  mutate(total_score=log(sum(exp(WM_score)))) %>% 
+  ungroup() %>% 
+  distinct(strain,total_score) %>% 
+  left_join(phenotypes) %>% 
+  ggplot()+
+  geom_point(aes(total_score,s_ace_glu,col=type))+
+  theme_cowplot()
+
+motevo_results %>% 
+  filter(strand=="+") %>% 
+  group_by(strain) %>% 
+  mutate(total_score=log(sum(exp(WM_score)))) %>% 
+  ungroup() %>% 
+  distinct(strain,total_score) %>% 
+  left_join(phenotypes) %>% 
+  ggplot()+
+  geom_point(aes(total_score,s_glu_gluaa,col=type))+
+  theme_cowplot()
+```
+```{r}
+motevo_results %>% 
+  filter(strand=="+") %>% 
+  group_by(strain) %>% 
+  mutate(total_score=max(WM_score)) %>% 
+  ungroup() %>% 
+  distinct(strain,total_score) %>% 
+  left_join(phenotypes,by=c("strain")) %>% 
+  ggplot()+
+  geom_point(aes(total_score,m_production_all,col=type))+
+  theme_cowplot()
+
+motevo_results %>% 
+  filter(strand=="+") %>% 
+  group_by(strain) %>% 
+  mutate(total_score=max(WM_score)) %>% 
+  ungroup() %>% 
+  distinct(strain,total_score) %>% 
+  left_join(phenotypes) %>% 
+  ggplot()+
+  geom_point(aes(total_score,s_ace_glu,col=type))+
+  theme_cowplot()
+
+motevo_results %>% 
+  filter(strand=="+") %>% 
+  group_by(strain) %>% 
+  mutate(total_score=max(WM_score)) %>% 
+  ungroup() %>% 
+  distinct(strain,total_score) %>% 
+  left_join(phenotypes) %>% 
+  ggplot()+
+  geom_point(aes(total_score,s_glu_gluaa,col=type))+
+  theme_cowplot()
+```
+
+```{r}
+motevo_results %>% 
+  filter(strand=="+") %>% 
+  group_by(strain) %>% 
+  mutate(total_score=max(post_prob)) %>% 
+  ungroup() %>% 
+  distinct(strain,total_score) %>% 
+  left_join(phenotypes,by=c("strain")) %>% 
+  ggplot()+
+  geom_point(aes(total_score,m_production_all,col=type))+
+  theme_cowplot()
+
+motevo_results %>% 
+  filter(strand=="+") %>% 
+  group_by(strain) %>% 
+  mutate(total_score=max(post_prob)) %>% 
+  ungroup() %>% 
+  distinct(strain,total_score) %>% 
+  left_join(phenotypes) %>% 
+  ggplot()+
+  geom_point(aes(total_score,s_ace_glu,col=type))+
+  theme_cowplot()
+
+motevo_results %>% 
+  filter(strand=="+") %>% 
+  group_by(strain) %>% 
+  mutate(total_score=max(post_prob)) %>%  
+  ungroup() %>% 
+  distinct(strain,total_score) %>% 
+  left_join(phenotypes) %>% 
+  ggplot()+
+  geom_point(aes(total_score,s_glu_gluaa,col=type))+
+  theme_cowplot()
+```
+No good results either.
+Could look at only one foot? -10?
+
+# Looking at only one foot
+
+```{r}
+# First I tried, only sigma70, with different spacers
+set_id <- "wm_kinney_dany_minus10"
+sequence_file <- "extended_proms.fasta"
+source("/scicore/home/nimwegen/rocasu25/Documents/Projects/biozentrum/ouInference_bjoern/run_and_collect_motevo_results.R")
+```
+
+
+```{r}
+motevo_results %>% 
+  filter(strand=="+") %>% 
+  group_by(strain) %>% 
+  mutate(total_score=max(post_prob)) %>% 
+  ungroup() %>% 
+  distinct(strain,total_score) %>% 
+  left_join(phenotypes,by=c("strain")) %>% 
+  ggplot()+
+  geom_point(aes(total_score,m_production_all,col=type))+
+  theme_cowplot()
+
+motevo_results %>% 
+  filter(strand=="+") %>% 
+  group_by(strain) %>% 
+  mutate(total_score=max(post_prob)) %>% 
+  ungroup() %>% 
+  distinct(strain,total_score) %>% 
+  left_join(phenotypes) %>% 
+  ggplot()+
+  geom_point(aes(total_score,s_ace_glu,col=type))+
+  theme_cowplot()
+
+motevo_results %>% 
+  filter(strand=="+") %>% 
+  group_by(strain) %>% 
+  mutate(total_score=max(post_prob)) %>%  
+  ungroup() %>% 
+  distinct(strain,total_score) %>% 
+  left_join(phenotypes) %>% 
+  ggplot()+
+  geom_point(aes(total_score,s_glu_gluaa,col=type))+
+  theme_cowplot()
+```
+
+```{r}
+motevo_results %>% 
+  filter(strand=="+") %>% 
+  group_by(strain) %>% 
+  mutate(total_score=max(WM_score)) %>% 
+  ungroup() %>% 
+  distinct(strain,total_score) %>% 
+  left_join(phenotypes,by=c("strain")) %>% 
+  ggplot()+
+  geom_point(aes(total_score,m_production_all,col=type))+
+  theme_cowplot()
+
+motevo_results %>% 
+  filter(strand=="+") %>% 
+  group_by(strain) %>% 
+  mutate(total_score=max(WM_score)) %>% 
+  ungroup() %>% 
+  distinct(strain,total_score) %>% 
+  left_join(phenotypes) %>% 
+  ggplot()+
+  geom_point(aes(total_score,s_ace_glu,col=type))+
+  theme_cowplot()
+
+motevo_results %>% 
+  filter(strand=="+") %>% 
+  group_by(strain) %>% 
+  mutate(total_score=max(WM_score)) %>% 
+  ungroup() %>% 
+  distinct(strain,total_score) %>% 
+  left_join(phenotypes) %>% 
+  ggplot()+
+  geom_point(aes(total_score,s_glu_gluaa,col=type))+
+  theme_cowplot()
+```
+Why is it that I am seeing the same score for ... most ! Of the sequences.
+
+```{r}
+motevo_results %>% 
+  group_by(strain) %>% 
+  summarise(max_prob=max(post_prob)) %>% View()
+```
+
+# Looking at -35 foot and -10 foot.
+
+```{r}
+# First I tried, only sigma70, with different spacers
+set_id <- "wm_sigma70_35"
+sequence_file <- "extended_proms.fasta"
+source("/scicore/home/nimwegen/rocasu25/Documents/Projects/biozentrum/ouInference_bjoern/run_and_collect_motevo_results.R")
+```
+
+
+
+
+
+
+```{r}
+motevo_results %>% 
+  filter(strand=="+") %>% 
+  group_by(strain) %>% 
+  mutate(total_score=max(WM_score)) %>% 
+  ungroup() %>% 
+  distinct(strain,total_score) %>% 
+  left_join(phenotypes,by=c("strain")) %>% 
+  ggplot()+
+  geom_point(aes(total_score,m_production_all))+
+  theme_cowplot()
+
+motevo_results %>% 
+  filter(strand=="+") %>% 
+  group_by(strain) %>% 
+  mutate(total_score=max(WM_score)) %>% 
+  ungroup() %>% 
+  distinct(strain,total_score) %>% 
+  left_join(phenotypes) %>% 
+  ggplot()+
+  geom_point(aes(total_score,s_ace_glu))+
+  theme_cowplot()
+
+motevo_results %>% 
+  filter(strand=="+") %>% 
+  group_by(strain) %>% 
+  mutate(total_score=max(WM_score)) %>% 
+  ungroup() %>% 
+  distinct(strain,total_score) %>% 
+  left_join(phenotypes) %>% 
+  ggplot()+
+  geom_point(aes(total_score,s_glu_gluaa))+
+  theme_cowplot()
+```
+
+
+
+```{r}
+motevo_results %>% 
+  filter(strand=="+") %>% 
+  group_by(strain) %>% 
+  mutate(total_score=log(sum(exp(WM_score)))) %>% 
+  ungroup() %>% 
+  distinct(strain,total_score) %>% 
+  left_join(phenotypes) %>% 
+  ggplot()+
+  geom_point(aes(total_score,s_ace_glu))+
+  theme_cowplot()
+```
+```{r}
+
+```
+
+

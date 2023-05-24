@@ -1,0 +1,46 @@
+```{r setup, warning=FALSE}
+datatypes <- c("noprodnoise","nogrowthnoise","nodivisionnoise","nonoise")
+replicas <- c("1","2")
+noise_contribution_data_filtered <- noise_contribution_data_filtered %>% 
+  mutate(replica=ifelse(replica==3,1,replica))
+
+for(d in datatypes){
+  
+  data_toplot <- noise_contribution_data_filtered %>% 
+  filter(!((condition=="glucoseaa020")&(promoter=="med3"))) %>%
+  filter(datatype %in% c("allnoisesources",d)) %>% 
+  mutate(x=concentration) %>% 
+  group_by(condition,promoter,replica,date,datatype) %>%
+  partition(mycluster) %>% 
+  mutate(q25=quantile(x,0.25)) %>% 
+  mutate(q75=quantile(x,0.75)) %>%
+  mutate(q50=quantile(x,0.50)) %>%
+  mutate(mean_x=mean(x)) %>% 
+  collect() %>% 
+  ungroup()
+
+  data_toplot %>% 
+    left_join(label_df,by=c("condition")) %>% 
+    mutate(condition=factor(condition,levels=conditions)) %>% 
+    mutate(promoter=factor(promoter,levels=promoters)) %>% 
+    mutate(conditions_label=factor(condition_label,levels=conditions_labels)) %>% 
+    mutate(replica=factor(as.character(replica),levels=c("1","2","3"))) %>% 
+    ggplot(aes(x=concentration))+
+    geom_freqpoly(aes(y=after_stat(density),col=datatype,group=interaction(condition,promoter,replica,date,datatype)),bins=200)+
+    geom_vline(aes(xintercept=q25,col=datatype),alpha=0.5)+
+    geom_vline(aes(xintercept=q75,col=datatype),alpha=0.5)+
+    theme_cowplot()+
+    scale_x_continuous(trans="log10")+
+    #facet_wrap(fct_relevel(condition_label,levels=conditions_labels)~fct_relevel(promoter,levels=promoters)+fct_relevel(replica,levels=replicas),scale="free")+
+    facet_wrap(fct_relevel(condition_label,levels=conditions_labels)~paste(fct_relevel(promoter,levels=promoters),fct_relevel(replica,levels=replicas),sep=" "),scale="free")+
+    scale_color_manual(values=c25)+
+    ylab("Density")+
+    xlab("Concentration  (#GFP/um)")+
+    theme(text = element_text(size = 8),axis.text = element_text(size = 5),
+          legend.spacing.y = unit(0.05, 'cm'))+
+    labs(col='Parameters')
+  
+  ggsave(sprintf("/scicore/home/nimwegen/rocasu25/Documents/Projects/biozentrum/gfp_fluctuations_project/fig2/concentration_%s.pdf",d),width=40,height=30,units="cm",limitsize = FALSE)
+
+}
+```

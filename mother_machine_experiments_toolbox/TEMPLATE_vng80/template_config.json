@@ -1,0 +1,26 @@
+{
+  "description": "",
+  "gl_regions": [
+    {
+      "first_gl_position_from_top":74 ,
+      "gl_spacing_vertical":106.344 ,
+      "horizontal_range": [
+       100,480
+         
+      ],
+    "gl_exit_orientation": "right"
+    },
+    {
+      "first_gl_position_from_top":74 ,
+      "gl_spacing_vertical":106.344 ,
+      "horizontal_range": [
+       696,1068
+         
+      ],
+    "gl_exit_orientation": "left"
+    }
+  ],
+  "name": "",
+  "pixel_size_micron": 1.0,
+  "template_image_path": "vng80_template_cropped.tif"
+}

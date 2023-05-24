@@ -1,0 +1,2 @@
+date,description,f_start,f_end,condition,t_interval,orientation,data_path,promoter,vector
+20220727,defocused_data,0,Inf,glucose,3,b,/scicore/home/nimwegen/rocasu25/MM_Data/Dany/20220727/20220727_ch_hi1_curated_20220727glu_downwards_1/,hi1,ch

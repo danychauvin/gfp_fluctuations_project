@@ -1,0 +1,2711 @@
+---
+title: "Concentration and production of synthetic promoters in 96 well plates experiments"
+author: "Dany Chauvin"
+date: "4/1/2021"
+output: html_document
+---
+
+# INTRODUCTION
+
+This R notebook is aimed at reproducing data analysis as I did it in April 2021 with three dataset obtained on three different days (replica), together with David.
+
+# LOADING PACKAGES AND FUNCTIONS
+
+```{r message=FALSE, warning=FALSE}
+source("../bulk_experiments_toolbox/load_packages_functions.R")
+source("../bulk_experiments_toolbox/modeling_functions.R")
+source("../bulk_experiments_toolbox/inference_functions.R")
+```
+
+# IMPORTING DATA
+
+```{r message=FALSE, warning=FALSE}
+path_to_data_list <- "./dataList.csv"
+source("../bulk_experiments_toolbox/import_data.R")
+
+mydata <- mydata %>% 
+  mutate(valid=NA) %>% 
+  mutate(well=paste(plate,row,column,strain,sep="_"))
+
+mean_blank_od <- 0.03840125 #Determined in a previous experiment where we looked ad OD of empty wells for entire plates
+mydata <- mydata %>% 
+  mutate(corrected_od=od-mean_blank_od)
+
+mean_blank_fluo <- 35.3075 #Idem
+mydata <- mydata %>% 
+  mutate(corrected_fluo=fluo-mean_blank_fluo) %>% 
+  filter(!grepl("H_7",well)) #Discarding this well which was problematic anyway
+
+mydata_bad <- readr::read_csv("./manualCuration.csv") #Wells with obviously wrong results (cells not growing, or outliers)
+mydata <- mydata %>% 
+  mutate(rowcol=paste(row,column,sep=""))
+
+replica_df <- tibble(description=c("20210312constitexpr3.0","20210316constitexpr3.1","20210204Testrun2"),replica=c(2,3,1))
+
+mydata_curated <- mydata %>% 
+  anti_join(mydata_bad,by=c("description","plate","rowcol")) %>% 
+  left_join(replica_df,by=c("description")) %>% 
+  mutate(well_rep=paste(well,replica,sep="-"))
+```
+
+# INFERRING SLOPES AND INTERCEPT OF FLUO VS OD RELATIONSHIP
+
+We have defined arbitrarily corrected OD ranges where we fit a linear model (two parameters, slope: $\alpha_{tot}$ and intercept" $\beta$). $\alpha_{tot}$ takes into account the contribution of both GFP and autofluorescence.
+
+```{r}
+od_range_df <- tibble(condition=c("acetate","glycerol","glucose","glucoseaa"),
+                      min_corrected_od=c(0.05,0.05,0.05,0.05),
+                      max_corrected_od=c(0.15,0.2,0.4,0.6))
+```
+
+Different wells are characterized by different promoter strength, high ("hi") and medium ("med").
+
+```{r}
+hi_or_med_p2 <- tibble(plate=rep(c("pl1","pl3","pl5","pl7"),each=6),strength=rep(rep(c("med","hi"),each=3),times=4),column=rep(c(7,8,9,10,11,12),times=4))
+hi_or_med_p3 <- tibble(plate=rep(c("pl2","pl4","pl6","pl8"),each=12),strength=rep(rep(c("med","hi"),each=3),times=8),column=rep(c(1,2,3,4,5,6,7,8,9,10,11,12),times=4))
+hi_or_med <- rbind(hi_or_med_p2,hi_or_med_p3)
+```
+
+Inferring slopes and intercepts. Output: data_frame with condition,strain (id est, promoter and vector), replica, well, alpha_tot, sd_alpha, beta, strength. One line per well.
+
+```{r}
+mydata_summary <- mydata_curated %>% 
+    ungroup() %>%
+    left_join(hi_or_med,by=c("plate","column")) %>% 
+    filter(!grepl("empty",strain)) %>% #filter out empty wells
+    left_join(od_range_df,by=c("condition")) %>%
+    filter(max(corrected_od)>min_corrected_od) %>% #to get rid of wells in which there are no growth at all
+    group_by(description,plate,well) %>%
+    arrange(time_min) %>% 
+    mutate(above_max_time=ifelse(corrected_od>=max_corrected_od,time_min,NA)) %>% 
+    mutate(time_limit=min(c(above_max_time,Inf),na.rm=TRUE)) %>% 
+    filter(time_min<time_limit) %>% 
+    mutate(below_min_time=ifelse(corrected_od<=min_corrected_od,time_min,NA)) %>% 
+    mutate(time_limit=max(c(below_min_time,-Inf),na.rm=TRUE)) %>% 
+    filter(time_min>time_limit) %>% 
+    ungroup() %>% 
+    select(-c(above_max_time,time_limit,below_min_time)) %>%
+    group_by(description,well) %>%
+    mutate(p=n(),
+           mean_od=mean(corrected_od),
+           var_od=1/p*sum((corrected_od-mean_od)**2),
+           mean_fluo=mean(fluo),
+           var_fluo=1/p*sum((fluo-mean_fluo)**2),
+           covar_od_fluo=1/p*sum(corrected_od*fluo-mean_od*mean_fluo),
+           alpha_tot=(var_fluo-var_od)/(2*covar_od_fluo)+sqrt(1+((var_fluo-var_od)/(2*covar_od_fluo))**2),#assuming that this is the best slope
+           sd_alpha=compute_error(alpha_tot,var_od,var_fluo,covar_od_fluo),
+           beta=1/p*sum(fluo-alpha_tot*corrected_od))%>%
+  
+    ungroup() %>% 
+    distinct(strain, replica, well,.keep_all=TRUE) %>% 
+  select(condition,strain,replica,well,alpha_tot,sd_alpha,beta,strength)
+```
+
+
+# LOOKING AT SINGLE FITS
+Let's take a loot at the controls.
+What do they look like?
+
+```{r}
+library(RColorBrewer)
+# Définissez le nombre de couleurs que vous voulez
+nb.cols <- 24
+mycolors <- colorRampPalette(brewer.pal(8, "Dark2"))(nb.cols)
+mydata_summary$replica <- factor(mydata_summary$replica,levels = c(1,2,3))
+mydata_curated$replica <- factor(mydata_curated$replica,levels = c(1,2,3))
+
+mydata_to_plot <- mydata_curated %>% 
+    ungroup() %>%
+    filter(!grepl("empty",strain)) %>% #filter out empty wells
+    left_join(od_range_df,by=c("condition")) %>%
+    filter(max(corrected_od)>min_corrected_od) %>% #to get rid of wells in which there are no growth at all
+    group_by(description,plate,well) %>%
+    arrange(time_min) %>% 
+    mutate(above_max_time=ifelse(corrected_od>=max_corrected_od,time_min,NA)) %>% 
+    mutate(time_limit=min(c(above_max_time,Inf),na.rm=TRUE)) %>% 
+    filter(time_min<time_limit) %>% 
+    mutate(below_min_time=ifelse(corrected_od<=min_corrected_od,time_min,NA)) %>% 
+    mutate(time_limit=max(c(below_min_time,-Inf),na.rm=TRUE)) %>% 
+    filter(time_min>time_limit) %>% 
+    ungroup() %>% 
+    select(-c(above_max_time,time_limit,below_min_time)) %>% 
+  left_join(mydata_summary,by=c("strain","replica","well","condition"))
+
+mydata_to_plot$replica <- factor(mydata_to_plot$replica,levels = c(1,2,3))
+mydata_to_plot$condition <- factor(mydata_to_plot$condition,levels = c("acetate","glycerol","glucose","glucoseaa"))
+
+for(s in unique(mydata_to_plot$strain)[1:10]){
+print(mydata_to_plot %>%
+    filter(strain==s) %>%
+    ggplot() +
+    geom_point(aes(corrected_od,fluo,col=condition),alpha=1)+
+    geom_line(aes(corrected_od,corrected_od*alpha_tot+beta,group=interaction(replica,well)),col="red",alpha=0.2)+
+    geom_text(aes(x = -Inf, y = -Inf, label = s),size=5,vjust=-0.2,hjust=-0.2)+
+    facet_wrap(~replica)+
+    xlab("corrected_od")+
+    ylab("fluo")+
+    scale_color_manual(values = mycolors)+
+    theme_cowplot()+
+    xlab("corrected OD")+
+    ylab("GFU (A.U)") 
+)}
+
+for(c in unique(mydata_to_plot$condition)){
+print(mydata_to_plot %>%
+    filter(condition==c) %>% 
+    filter(strain=="MG1655") %>%
+    ggplot() +
+    geom_point(aes(corrected_od,fluo,col=condition),alpha=1)+
+    geom_line(aes(corrected_od,corrected_od*alpha_tot+beta,group=interaction(replica,well)),col="red",alpha=0.2)+
+    #geom_text(aes(x = -Inf, y = -Inf, label = "MG1655"),size=5,vjust=-0.2,hjust=-0.2)+
+    facet_wrap(~replica)+
+    xlab("corrected_od")+
+    ylab("fluo")+
+    scale_color_manual(values = mycolors)+
+    theme_cowplot()+
+    xlab("corrected OD")+
+    ylab("GFU (A.U)") )}
+
+for(c in unique(mydata_to_plot$condition)){
+print(mydata_to_plot %>%
+    filter(condition==c) %>% 
+    filter(strain=="MG1655") %>%
+    ggplot() +
+    geom_point(aes(corrected_od,fluo,col=condition),alpha=1)+
+    geom_line(aes(corrected_od,corrected_od*alpha_tot+beta,group=interaction(replica,well)),col="red",alpha=0.2)+
+    #geom_text(aes(x = -Inf, y = -Inf, label = "MG1655"),size=5,vjust=-0.2,hjust=-0.2)+
+    facet_wrap(~replica)+
+    xlab("corrected_od")+
+    ylab("fluo")+
+    scale_color_manual(values = mycolors)+
+    theme_cowplot()+
+      xlab("corrected OD")+
+    ylab("GFU (A.U)") )}
+
+for(c in unique(mydata_to_plot$condition)){
+print(mydata_to_plot %>%
+    filter(condition==c) %>% 
+    filter(strain=="MG1655") %>%
+    ggplot() +
+    geom_point(aes(corrected_od,fluo,col=condition),alpha=1)+
+    geom_line(aes(corrected_od,corrected_od*alpha_tot+beta,group=interaction(replica,well)),col="red",alpha=0.2)+
+    #geom_text(aes(x = -Inf, y = -Inf, label = "MG1655"),size=5,vjust=-0.2,hjust=-0.2)+
+    facet_wrap(~interaction(replica,well))+
+    xlab("corrected_od")+
+    ylab("fluo")+
+    scale_color_manual(values = mycolors)+
+    theme_cowplot()+
+      xlab("corrected OD")+
+    ylab("GFU (A.U)") )}
+
+for(c in unique(mydata_to_plot$condition)){
+print(mydata_to_plot %>%
+    filter(condition==c) %>% 
+    filter(strain=="MG1655") %>%
+    distinct(replica,well,.keep_all=TRUE) %>% 
+    ggplot() +
+    geom_boxplot(aes(replica,alpha_tot),alpha=1,width=0.1)+
+    geom_jitter(aes(replica,alpha_tot,group=interaction(replica),col=row),width=0.1)+
+    #geom_text(aes(x = -Inf, y = -Inf, label = "MG1655"),size=5,vjust=-0.2,hjust=-0.2)+
+    #facet_wrap(~interaction(replica,well))+
+    xlab("Replica")+
+    ylab("alpha_tot")+
+    scale_color_manual(values = mycolors)+
+    labs(subtitle=c)+
+    theme_cowplot()+
+      xlab("replica")+
+    ylab("GFU (A.U)") )}
+```
+
+
+# COMPUTING GROWTH-RATES IN SINGLE WELLS
+
+Here I fit log(corrected_od) vs time_min.
+I am considering here that there is measurement noise only according in the y axis.
+
+```{r}
+mydata_growthrates_summary <- mydata_curated %>% 
+    ungroup() %>%
+    left_join(hi_or_med,by=c("plate","column")) %>% 
+    filter(!grepl("empty",strain)) %>% #filter out empty wells
+    left_join(od_range_df,by=c("condition")) %>%
+    filter(max(corrected_od)>min_corrected_od) %>% #to get rid of wells in which there are no growth at all
+    group_by(description,plate,well) %>%
+    arrange(time_min) %>% 
+    mutate(above_max_time=ifelse(corrected_od>=max_corrected_od,time_min,NA)) %>% 
+    mutate(time_limit=min(c(above_max_time,Inf),na.rm=TRUE)) %>% 
+    filter(time_min<time_limit) %>% 
+    mutate(below_min_time=ifelse(corrected_od<=min_corrected_od,time_min,NA)) %>% 
+    mutate(time_limit=max(c(below_min_time,-Inf),na.rm=TRUE)) %>% 
+    filter(time_min>time_limit) %>% 
+    ungroup() %>% 
+    select(-c(above_max_time,time_limit,below_min_time)) %>%
+    group_by(description,well) %>%
+    mutate(p=n(),
+             mean_time=mean(time_min),
+             var_time=1/p*sum((time_min-mean_time)**2),
+             mean_l_cod=mean(log(corrected_od),na.rm=TRUE),
+             var_l_cod=1/p*sum((log(corrected_od)-mean_l_cod)**2,na.rm=TRUE),
+             covar_l_cod_time=1/p*sum(time_min*log(corrected_od)-mean_l_cod*mean_time),
+             alpha_tot=covar_l_cod_time/var_time,
+             sd_alpha=compute_error(alpha_tot,var_time,var_l_cod,covar_l_cod_time),
+             beta=1/p*sum(log(corrected_od)-alpha_tot*time_min,na.rm=TRUE))%>%
+    
+      ungroup() %>% 
+      distinct(strain, replica, well,.keep_all=TRUE) %>% 
+    select(condition,strain,replica,well,alpha_tot,sd_alpha,beta,strength)
+```
+
+```{r}
+mydata_growthrates_summary %>% 
+  distinct(condition,replica,well,.keep_all = TRUE) %>% 
+  group_by(condition,replica) %>% 
+  mutate(p=n()) %>% 
+  mutate(mean_doubling=mean(alpha_tot,na.rm=TRUE)*60/log(2)) %>% 
+  #mutate(sd_doubling=sqrt(1/p*sum(sd_alpha**2,na.rm=TRUE))) %>% 
+  mutate(sd_doubling=sd(alpha_tot,na.rm=TRUE)*60/log(2)) %>% 
+  ungroup() %>% 
+  distinct(condition,replica,.keep_all = TRUE) %>% 
+  select(condition,replica,mean_doubling,sd_doubling) %>% 
+  arrange(condition,replica)
+
+```
+
+
+```{r}
+mydata_growthrates_summary %>% 
+  distinct(condition,replica,well,.keep_all = TRUE) %>% 
+  group_by(condition,replica) %>% 
+  mutate(p=n()) %>% 
+  mutate(mean_doubling=mean(alpha_tot,na.rm=TRUE)*60/log(2)) %>% 
+  #mutate(sd_doubling=sqrt(1/p*sum(sd_alpha**2,na.rm=TRUE))) %>% 
+  mutate(sd_doubling=sd(alpha_tot,na.rm=TRUE)*60/log(2)) %>% 
+  ungroup() %>% 
+  distinct(condition,replica,.keep_all = TRUE) %>% 
+  select(condition,replica,mean_doubling,sd_doubling) %>% 
+  arrange(condition,replica)
+
+```
+
+# LOOKING AT GROWTH RATE SINGLE FITS
+
+```{r}
+library(RColorBrewer)
+# Définissez le nombre de couleurs que vous voulez
+nb.cols <- 24
+mycolors <- colorRampPalette(brewer.pal(8, "Dark2"))(nb.cols)
+mydata_growthrates_summary$replica <- factor(mydata_growthrates_summary$replica,levels = c(1,2,3))
+mydata_curated$replica <- factor(mydata_curated$replica,levels = c(1,2,3))
+
+mydata_to_plot <- mydata_curated %>% 
+    ungroup() %>%
+    filter(!grepl("empty",strain)) %>% #filter out empty wells
+    left_join(od_range_df,by=c("condition")) %>%
+    filter(max(corrected_od)>min_corrected_od) %>% #to get rid of wells in which there are no growth at all
+    group_by(description,plate,well) %>%
+    arrange(time_min) %>% 
+    mutate(above_max_time=ifelse(corrected_od>=max_corrected_od,time_min,NA)) %>% 
+    mutate(time_limit=min(c(above_max_time,Inf),na.rm=TRUE)) %>% 
+    filter(time_min<time_limit) %>% 
+    mutate(below_min_time=ifelse(corrected_od<=min_corrected_od,time_min,NA)) %>% 
+    mutate(time_limit=max(c(below_min_time,-Inf),na.rm=TRUE)) %>% 
+    filter(time_min>time_limit) %>% 
+    ungroup() %>% 
+    select(-c(above_max_time,time_limit,below_min_time)) %>% 
+  left_join(mydata_growthrates_summary,by=c("strain","replica","well","condition"))
+
+mydata_to_plot$replica <- factor(mydata_to_plot$replica,levels = c(1,2,3))
+mydata_to_plot$condition <- factor(mydata_to_plot$condition,levels = c("acetate","glycerol","glucose","glucoseaa"))
+
+for(s in unique(mydata_to_plot$strain)[1:10]){
+print(mydata_to_plot %>%
+    filter(strain==s) %>%
+    ggplot() +
+    geom_point(aes(time_min,log(corrected_od),col=condition),alpha=1)+
+    geom_line(aes(time_min,time_min*alpha_tot+beta,group=interaction(replica,well)),col="red",alpha=0.2)+
+    geom_text(aes(x = -Inf, y = -Inf, label = s),size=5,vjust=-0.2,hjust=-0.2)+
+    facet_wrap(~replica)+
+    xlab("time (min)")+
+    ylab("log(corrected od)")+
+    scale_color_manual(values = mycolors)+
+    theme_cowplot()
+)}
+
+for(c in unique(mydata_to_plot$condition)){
+print(mydata_to_plot %>%
+    filter(condition==c) %>% 
+    filter(strain=="MG1655") %>%
+    ggplot() +
+    geom_point(aes(time_min,log(corrected_od),col=condition),alpha=1)+
+    geom_line(aes(time_min,time_min*alpha_tot+beta,group=interaction(replica,well)),col="red",alpha=0.2)+
+    #geom_text(aes(x = -Inf, y = -Inf, label = "MG1655"),size=5,vjust=-0.2,hjust=-0.2)+
+    facet_wrap(~replica)+
+    xlab("time (min)")+
+    ylab("log(corrected od)")+
+    scale_color_manual(values = mycolors)+
+    theme_cowplot())}
+
+for(c in unique(mydata_to_plot$condition)){
+print(mydata_to_plot %>%
+    filter(condition==c) %>% 
+    filter(strain=="MG1655") %>%
+    ggplot() +
+    geom_point(aes(time_min,log(corrected_od),col=condition),alpha=1)+
+    geom_line(aes(time_min,time_min*alpha_tot+beta,group=interaction(replica,well)),col="red",alpha=0.2)+
+    #geom_text(aes(x = -Inf, y = -Inf, label = "MG1655"),size=5,vjust=-0.2,hjust=-0.2)+
+    facet_wrap(~replica)+
+    xlab("time(min)")+
+    ylab("log(corrected od)")+
+    scale_color_manual(values = mycolors)+
+    theme_cowplot())}
+
+for(c in unique(mydata_to_plot$condition)){
+print(mydata_to_plot %>%
+    filter(condition==c) %>% 
+    filter(strain=="MG1655") %>%
+    ggplot() +
+    geom_point(aes(time_min,log(corrected_od),col=condition),alpha=1)+
+    geom_line(aes(time_min,time_min*alpha_tot+beta,group=interaction(replica,well)),col="red",alpha=0.2)+
+    #geom_text(aes(x = -Inf, y = -Inf, label = "MG1655"),size=5,vjust=-0.2,hjust=-0.2)+
+    facet_wrap(~interaction(replica,well))+
+    xlab("time (min)")+
+    ylab("log(corrected od)")+
+    scale_color_manual(values = mycolors)+
+    theme_cowplot())}
+
+for(c in unique(mydata_to_plot$condition)){
+print(mydata_to_plot %>%
+    filter(condition==c) %>% 
+    filter(strain=="MG1655") %>%
+    distinct(replica,well,.keep_all=TRUE) %>% 
+    ggplot() +
+    geom_boxplot(aes(replica,alpha_tot*60/log(2)),alpha=1,width=0.1)+
+    geom_jitter(aes(replica,alpha_tot*60/log(2),group=interaction(replica),col=row),width=0.1)+
+    #geom_text(aes(x = -Inf, y = -Inf, label = "MG1655"),size=5,vjust=-0.2,hjust=-0.2)+
+    #facet_wrap(~interaction(replica,well))+
+    xlab("Replica")+
+    ylab("Doublings per hour")+
+    scale_color_manual(values = mycolors)+
+    labs(subtitle=c)+
+    theme_cowplot())}
+```
+
+In spite of day to day variations, growth rates are consistent with mother machine data.
+
+# AUTOFLUORESCENCE VERSUS GROWTH RATE
+
+```{r}
+mydata_summary$replica <- factor(mydata_summary$replica,levels = c(1,2,3))
+mydata_growthrates_summary$replica <- factor(mydata_growthrates_summary$replica,levels = c(1,2,3))
+
+mydata_curated_cond_for_plot <- mydata_summary %>% 
+  distinct(replica,condition,well,alpha_tot,sd_alpha,strain) %>% 
+  rename(alpha_tot_exp=alpha_tot,
+         sd_alpha_exp=sd_alpha)
+
+mydata_curated_gr_for_plot <- mydata_growthrates_summary %>% 
+  distinct(replica,condition,well,alpha_tot,sd_alpha,strain) %>% 
+  rename(alpha_tot_gr=alpha_tot,
+         sd_alpha_gr=sd_alpha)
+
+conditions <- c("acetate","glycerol","glucose","glucoseaa")
+
+for(c in conditions){print(
+mydata_gr_autofluo <- left_join(mydata_curated_cond_for_plot,mydata_curated_gr_for_plot ,by=c("replica","condition","well","strain")) %>% 
+  filter(strain=="MG1655") %>% 
+  filter(condition==c) %>% 
+  ggplot()+
+  geom_point(aes(alpha_tot_gr*60/log(2),alpha_tot_exp,col=replica))+
+  geom_errorbar(aes(x=alpha_tot_gr*60/log(2),ymax=alpha_tot_exp+sd_alpha_exp,ymin=alpha_tot_exp-sd_alpha_exp,col=replica))+
+  geom_errorbar(aes(y=alpha_tot_exp,xmin=(alpha_tot_gr-sd_alpha_gr)*60/log(2),xmax=(alpha_tot_gr+sd_alpha_gr)*60/log(2),col=replica))+
+  labs(subtitle=c)+
+  theme_cowplot()
+)}
+
+left_join(mydata_curated_cond_for_plot,mydata_curated_gr_for_plot ,by=c("replica","condition","well","strain")) %>% 
+  filter(strain=="MG1655") %>% 
+  #filter(condition==c) %>% 
+  ggplot()+
+  geom_point(aes(alpha_tot_gr*60/log(2),alpha_tot_exp,col=replica))+
+  geom_errorbar(aes(x=alpha_tot_gr*60/log(2),ymax=alpha_tot_exp+sd_alpha_exp,ymin=alpha_tot_exp-sd_alpha_exp,col=replica))+
+  geom_errorbar(aes(y=alpha_tot_exp,xmin=(alpha_tot_gr-sd_alpha_gr)*60/log(2),xmax=(alpha_tot_gr+sd_alpha_gr)*60/log(2),col=replica))+
+  labs(subtitle="all")+
+  theme_cowplot()+
+  xlab("Doublings per hour")+
+  ylab("autofluorescence alpha")
+
+
+left_join(mydata_curated_cond_for_plot,mydata_curated_gr_for_plot ,by=c("replica","condition","well","strain")) %>% 
+  filter(strain=="MG1655") %>% 
+  #filter(condition==c) %>% 
+  ggplot()+
+  geom_point(aes(log(alpha_tot_gr*60/log(2)),log(alpha_tot_exp),col=replica))+
+  geom_errorbar(aes(x=log(alpha_tot_gr*60/log(2)),ymax=log(alpha_tot_exp+sd_alpha_exp),ymin=log(alpha_tot_exp-sd_alpha_exp),col=replica))+
+  geom_errorbar(aes(y=log(alpha_tot_exp),xmin=log((alpha_tot_gr-sd_alpha_gr)*60/log(2)),xmax=log((alpha_tot_gr+sd_alpha_gr)*60/log(2)),col=replica))+
+  labs(subtitle="all")+
+  theme_cowplot()+
+  xlab("log(Doublings per hour)")+
+  ylab("log(autofluorescence alpha)")
+```
+# MODELING AUTOFLUORESCENCE VERSUS GROWTH RATES
+
+I am taking into account both noise in X and Y.
+And plotting max slope and min slope results.
+
+```{r}
+left_join(mydata_curated_cond_for_plot,mydata_curated_gr_for_plot ,by=c("replica","condition","well","strain")) %>% 
+  filter(strain=="MG1655") %>% 
+  mutate(l_gr=log(alpha_tot_gr*60/log(2))) %>% 
+  mutate(l_exp=log(alpha_tot_exp)) %>% 
+  mutate(a=linear_mod_slope(l_exp,l_gr)) %>% 
+  mutate(b=linear_mod_intercept(l_exp,l_gr)) %>%
+  mutate(p=n(),
+           m_l_gr=mean(l_gr),
+           var_l_gr=1/p*sum((l_gr-m_l_gr)**2),
+           m_l_exp=mean(l_exp),
+           var_l_exp=1/p*sum((l_exp-m_l_exp)**2),
+           covar_gr_exp=1/p*sum(l_gr*l_exp-m_l_gr*m_l_exp),
+           slope=(var_l_exp-var_l_gr)/(2*covar_gr_exp)-sqrt(1+((var_l_exp-var_l_gr)/(2*covar_gr_exp))**2),#assuming that this is the best slope
+           sd_slope=compute_error(slope,var_l_gr,var_l_exp,covar_gr_exp),
+           beta=1/p*sum(l_exp-slope*l_gr),
+         beta_max=1/p*sum(l_exp-(slope+sd_slope)*l_gr),
+         beta_min=1/p*sum(l_exp-(slope-sd_slope)*l_gr))%>%
+    ungroup() %>% 
+  ggplot()+
+  geom_point(aes(log(alpha_tot_gr*60/log(2)),log(alpha_tot_exp),col=replica))+
+  geom_line(aes(l_gr,l_gr*slope+beta),col="blue") +
+  geom_line(aes(l_gr,l_gr*(slope+sd_slope)+beta_max),col="yellow") +
+  geom_line(aes(l_gr,l_gr*(slope-sd_slope)+beta_min),col="green") +
+  geom_errorbar(aes(x=log(alpha_tot_gr*60/log(2)),ymax=log(alpha_tot_exp+sd_alpha_exp),ymin=log(alpha_tot_exp-sd_alpha_exp),col=replica))+
+  geom_errorbar(aes(y=log(alpha_tot_exp),xmin=log((alpha_tot_gr-sd_alpha_gr)*60/log(2)),xmax=log((alpha_tot_gr+sd_alpha_gr)*60/log(2)),col=replica))+
+  labs(subtitle="all")+
+  theme_cowplot()+
+  xlab("log(Doublings per hour)")+
+  ylab("log(autofluorescence alpha)")
+```
+```{r}
+exp_vs_gr_results_df <- left_join(mydata_curated_cond_for_plot,mydata_curated_gr_for_plot ,by=c("replica","condition","well","strain")) %>% filter(strain=="MG1655") %>% 
+  mutate(l_gr=log(alpha_tot_gr*60/log(2))) %>% 
+  mutate(l_exp=log(alpha_tot_exp)) %>% 
+  mutate(a=linear_mod_slope(l_exp,l_gr)) %>% 
+  mutate(b=linear_mod_intercept(l_exp,l_gr)) %>%
+  mutate(p=n(),
+           m_l_gr=mean(l_gr),
+           var_l_gr=1/p*sum((l_gr-m_l_gr)**2),
+           m_l_exp=mean(l_exp),
+           var_l_exp=1/p*sum((l_exp-m_l_exp)**2),
+           covar_gr_exp=1/p*sum(l_gr*l_exp-m_l_gr*m_l_exp),
+           slope=(var_l_exp-var_l_gr)/(2*covar_gr_exp)-sqrt(1+((var_l_exp-var_l_gr)/(2*covar_gr_exp))**2),#assuming that this is the best slope
+           sd_slope=compute_error(slope,var_l_gr,var_l_exp,covar_gr_exp),
+           beta=1/p*sum(l_exp-slope*l_gr),
+         beta_max=1/p*sum(l_exp-(slope+sd_slope)*l_gr),
+         beta_min=1/p*sum(l_exp-(slope-sd_slope)*l_gr))%>%
+    ungroup() %>% 
+  filter(row_number()==1) %>% 
+  select(slope,sd_slope,beta,beta_min,beta_max)
+
+exp_vs_gr_results_df
+```
+
+So the slope is very clearly very close to 1. With 20% uncertainty. What I am a bit skeptical about, is that, where I have a lot of noise is also relatively close to the center of mass (glycerol and glucose), and that's also where I have the least error it seems.
+Intuitively I do not like that much. But for sake of simplicity, I will simply go forward. I guess I could consider the maximum error I am seeing at the ends of my relationship as conservative hypothesis regarding the uncertainty.
+
+# COMPUTING RELEVANT QUANTITIES TO COMPUTE THE AUTOFLUORESCENCE IN DIFFERENT WELLS
+
+Using Erik's notes, section 4., I should compute:
+- mean of log(autofluorescence) and log(exponential growth rates)
+- standard deviation of log(autofluorescence) and log(exponential growth rate)
+- covariance of log(autofluorescence) and log(exponential growth rate)
+
+```{r}
+exp_vs_gr_results_df <- left_join(mydata_curated_cond_for_plot,mydata_curated_gr_for_plot ,by=c("replica","condition","well","strain")) %>% filter(strain=="MG1655") %>% 
+  mutate(l_gr=log(alpha_tot_gr*60/log(2))) %>% #here growth rate is in doublings per hour, which is more intuitive
+  mutate(l_exp=log(alpha_tot_exp)) %>% 
+  drop_na() %>% 
+  mutate(p=n(),
+         m_l_gr=mean(l_gr,na.rm=TRUE),
+         m_l_exp=mean(l_exp,na.rm=TRUE),
+         var_l_gr=var(l_gr,na.rm=TRUE),
+         var_l_exp=var(l_exp,na.rm=TRUE),
+         cov_l_gr_l_exp=1/p*sum(l_exp*l_gr-m_l_gr*m_l_exp,na.rm=TRUE)) %>% 
+  filter(row_number()==1) %>% 
+  select(m_l_gr,m_l_exp,var_l_gr,var_l_exp,cov_l_gr_l_exp,p)
+
+exp_vs_gr_results_df
+```
+# SUBSTRACTING AUTOFLUORESCENCE AND COMPUTING GFP CONTRIBUTION, FOLLOWING ERIK'S NOTES
+
+```{r}
+mydata_gr_exp_summary <- left_join(mydata_curated_cond_for_plot,mydata_curated_gr_for_plot ,by=c("replica","condition","well","strain")) %>%
+  filter(!(strain %in% c("MG1655","empty"))) %>% 
+  mutate(l_x=log(alpha_tot_gr*60/log(2)),
+         var_l_x=((sd_alpha_gr*60/log(2))**2)/((alpha_tot_gr*60/log(2))**2)) %>% #here growth rate is in doublings per hour, which is more intuitive
+  #mutate(l_exp=log(alpha_tot_exp)) %>% 
+  mutate(m_l_gr=unique(exp_vs_gr_results_df$m_l_gr),
+         var_l_gr=unique(exp_vs_gr_results_df$var_l_gr),
+         m_l_exp=unique(exp_vs_gr_results_df$m_l_exp),
+         var_l_exp=unique(exp_vs_gr_results_df$var_l_exp),
+         cov_l_gr_l_exp=unique(exp_vs_gr_results_df$cov_l_gr_l_exp),
+         p=unique(exp_vs_gr_results_df$p)) %>% 
+  mutate(l_y=m_l_exp+cov_l_gr_l_exp/(var_l_gr)*(l_x-m_l_gr),
+         r=cov_l_gr_l_exp/(sqrt(var_l_gr*var_l_exp)),
+         var_l_y=var_l_x*(cov_l_gr_l_exp**2/(var_l_gr**2))+var_l_exp*(1-r**2)*(1+(var_l_x+(l_x-m_l_gr)**2)/p))
+```
+
+# CHECKING THE AUTOFLUORESCENCE FIT
+
+```{r}
+mydata_gr_exp_summary %>% 
+  mutate(sd_l_y=sqrt(var_l_y)) %>% 
+  mutate(sd_l_x=sqrt(var_l_x)) %>% 
+  filter(l_x>-2) %>% 
+  #filter(sd_l_x<1) %>% 
+ ggplot()+
+  geom_point(aes(l_x,l_y,col=condition))+
+  #geom_line(aes(l_gr,l_gr*slope+beta),col="blue") +
+  #geom_line(aes(l_gr,l_gr*(slope+sd_slope)+beta_max),col="yellow") +
+  #geom_line(aes(l_gr,l_gr*(slope-sd_slope)+beta_min),col="green") +
+  geom_errorbar(aes(x=l_x,ymax=l_y+sd_l_y,ymin=l_y-sd_l_y,col=condition))+
+  geom_errorbar(aes(y=l_y,xmin=l_x-sd_l_x,xmax=l_x+sd_l_x,col=condition))+
+  #labs(subtitle="all")+
+  #theme_cowplot()+
+  xlab("log(Doublings per hour)")+
+  ylab("log(autofluorescence alpha)")+
+  theme_cowplot()
+```
+I will add another filter on the current data to get rid of the outliers...
+Now I can substract the autofluorescence value and propagate the error on the gfp contribution.
+
+```{r}
+mydata_gr_exp_summary<- mydata_gr_exp_summary %>%
+  mutate(alpha_gfp=alpha_tot_exp-exp(l_y),
+         sd_alpha_autofluo=sqrt(l_y**2*var_l_y),
+         sd_alpha_gfp=sqrt(sd_alpha_autofluo**2+sd_alpha_exp**2))
+```
+# Now plot for all promoters, what it looks like.
+
+```{r}
+mydata_gr_exp_summary %>%
+  filter(log(alpha_tot_gr*60/log(2))>-2) %>% 
+ ggplot()+
+  geom_point(aes(log(alpha_tot_gr*60/log(2)),log(alpha_gfp),col=condition))+
+  #geom_line(aes(l_gr,l_gr*slope+beta),col="blue") +
+  #geom_line(aes(l_gr,l_gr*(slope+sd_slope)+beta_max),col="yellow") +
+  #geom_line(aes(l_gr,l_gr*(slope-sd_slope)+beta_min),col="green") +
+  geom_errorbar(aes(x=log(alpha_tot_gr*60/log(2)),ymax=log(alpha_gfp+sd_alpha_gfp),ymin=log(alpha_gfp-sd_alpha_gfp),col=condition))+
+  geom_errorbar(aes(y=log(alpha_gfp),xmin=log((alpha_tot_gr-sd_alpha_gr)*60/log(2)),xmax=log((alpha_tot_gr+sd_alpha_gr)*60/log(2)),col=condition))+
+  labs(subtitle="all")+
+  theme_cowplot()+
+  xlab("log(Doublings per hour)")+
+  ylab("log(alpha gfp)")
+```
+
+```{r}
+mydata_gr_exp_summary %>%
+  filter(log(alpha_tot_gr*60/log(2))>-2) %>% 
+ ggplot()+
+  geom_point(aes(log(alpha_tot_gr*60/log(2)),log(alpha_gfp),col=condition))+
+  #geom_line(aes(l_gr,l_gr*slope+beta),col="blue") +
+  #geom_line(aes(l_gr,l_gr*(slope+sd_slope)+beta_max),col="yellow") +
+  #geom_line(aes(l_gr,l_gr*(slope-sd_slope)+beta_min),col="green") +
+  geom_errorbar(aes(x=log(alpha_tot_gr*60/log(2)),ymax=log(alpha_gfp+sd_alpha_gfp),ymin=log(alpha_gfp-sd_alpha_gfp),col=condition))+
+  geom_errorbar(aes(y=log(alpha_gfp),xmin=log((alpha_tot_gr-sd_alpha_gr)*60/log(2)),xmax=log((alpha_tot_gr+sd_alpha_gr)*60/log(2)),col=condition))+
+  facet_wrap(~strain,scale="free")+
+  theme_cowplot()+
+  xlab("log(Doublings per hour)")+
+  ylab("log(alpha gfp)")+
+  ggsave("./all_concentration_free_2.pdf",width=12*5,height=7*5,limitsize = FALSE)
+```
+
+```{r}
+mydata_gr_exp_summary %>%
+  filter(log(alpha_tot_gr*60/log(2))>-2) %>% 
+ ggplot()+
+  geom_point(aes(log(alpha_tot_gr*60/log(2)),log(alpha_gfp),col=replica))+
+  #geom_line(aes(l_gr,l_gr*slope+beta),col="blue") +
+  #geom_line(aes(l_gr,l_gr*(slope+sd_slope)+beta_max),col="yellow") +
+  #geom_line(aes(l_gr,l_gr*(slope-sd_slope)+beta_min),col="green") +
+  geom_errorbar(aes(x=log(alpha_tot_gr*60/log(2)),ymax=log(alpha_gfp+sd_alpha_gfp),ymin=log(alpha_gfp-sd_alpha_gfp),col=replica))+
+  geom_errorbar(aes(y=log(alpha_gfp),xmin=log((alpha_tot_gr-sd_alpha_gr)*60/log(2)),xmax=log((alpha_tot_gr+sd_alpha_gr)*60/log(2)),col=replica))+
+  facet_wrap(~strain,scale="free")+
+  theme_cowplot()+
+  xlab("log(Doublings per hour)")+
+  ylab("log(alpha gfp)")+
+  ggsave("./all_concentration_free_replica.pdf",width=12*5,height=7*5,limitsize = FALSE)
+```
+Which does not look so bad now! Actually looks smoother for a lot of wells. Now I could look at the production.
+
+```{r}
+mydata_gr_exp_summary %>%
+  filter(log(alpha_tot_gr*60/log(2))>-2) %>% 
+  mutate(sd_alpha_gfp=((sd_alpha_gfp)+(sd_alpha_gfp))/2) %>% 
+  mutate(q=(alpha_tot_gr*60/log(2))*alpha_gfp,
+         sd_q=q*sqrt((sd_alpha_gr/alpha_tot_gr)**2+(sd_alpha_gfp/alpha_gfp)**2)) %>% 
+ ggplot()+
+  geom_point(aes(log(alpha_tot_gr*60/log(2)),log(q),col=replica))+
+  #geom_line(aes(l_gr,l_gr*slope+beta),col="blue") +
+  #geom_line(aes(l_gr,l_gr*(slope+sd_slope)+beta_max),col="yellow") +
+  #geom_line(aes(l_gr,l_gr*(slope-sd_slope)+beta_min),col="green") +
+  geom_errorbar(aes(x=log(alpha_tot_gr*60/log(2)),ymax=log(q+sd_q),ymin=log(q-sd_q),col=replica))+
+  geom_errorbar(aes(y=log(q),xmin=log((alpha_tot_gr-sd_alpha_gr)*60/log(2)),xmax=log((alpha_tot_gr+sd_alpha_gr)*60/log(2)),col=replica))+
+  facet_wrap(~strain,scale="free")+
+  theme_cowplot()+
+  xlab("log(Doublings per hour)")+
+  ylab("log(q gfp)")+
+  ggsave("./all_production_free_replica.pdf",width=12*5,height=7*5,limitsize = FALSE)
+```
+
+```{r}
+mydata_gr_exp_summary %>%
+  filter(log(alpha_tot_gr*60/log(2))>-2) %>% 
+  mutate(sd_alpha_gfp=((sd_alpha_gfp)+(sd_alpha_gfp))/2) %>% 
+  mutate(q=(alpha_tot_gr*60/log(2))*alpha_gfp,
+         sd_q=q*sqrt((sd_alpha_gr/alpha_tot_gr)**2+(sd_alpha_gfp/alpha_gfp)**2)) %>% 
+ ggplot()+
+  geom_point(aes(alpha_tot_gr*60/log(2),q,col=replica))+
+  #geom_line(aes(l_gr,l_gr*slope+beta),col="blue") +
+  #geom_line(aes(l_gr,l_gr*(slope+sd_slope)+beta_max),col="yellow") +
+  #geom_line(aes(l_gr,l_gr*(slope-sd_slope)+beta_min),col="green") +
+  geom_errorbar(aes(x=alpha_tot_gr*60/log(2),ymax=q+sd_q,ymin=q-sd_q,col=replica))+
+  geom_errorbar(aes(y=q,xmin=(alpha_tot_gr-sd_alpha_gr)*60/log(2),xmax=(alpha_tot_gr+sd_alpha_gr)*60/log(2),col=replica))+
+  facet_wrap(~strain,scale="free")+
+  theme_cowplot()+
+  xlab("Doublings per hour")+
+  ylab("Q (gfp)")+
+  ggsave("./all_production_free_replica.pdf",width=12*5,height=7*5,limitsize = FALSE)
+```
+
+This is what we get, when considering that OD is indeed representing the biomass. But this does not seem to be true.
+
+```{r}
+mydata_gr_exp_summary <- mydata_gr_exp_summary %>%
+  filter(log(alpha_tot_gr*60/log(2))>-2) %>% 
+  mutate(q=alpha_tot_gr*alpha_gfp, #q in GFU/OD/min
+         sd_q=q*sqrt((sd_alpha_gr/alpha_tot_gr)**2+(sd_alpha_gfp/alpha_gfp)**2))
+```
+
+# COMPARISON WITH DATA FROM MOTHER MACHINE EXPERIMENTS
+
+```{r}
+gr_df_scells <- mycells %>% 
+  mutate(alpha_min=alpha*60) %>%  #min
+  mutate(doubling_per_hour=alpha*3600/(log(2))) %>% 
+  group_by(condition) %>% 
+  mutate(mean_alpha=mean(alpha_min,na.rm=TRUE)) %>% 
+  mutate(sd_doubling=sd(alpha_min*60/log(2),na.rm=TRUE)) %>% 
+  mutate(mean_doubling_time=mean_alpha*60/log(2)) %>% 
+  distinct(condition,.keep_all = TRUE ) %>% 
+  ungroup() %>% 
+  select(condition, mean_doubling_time,sd_doubling,doubling_per_hour,alpha_min,cell) %>% 
+  arrange(condition)
+
+gr_df_scells
+```
+
+
+
+```{r}
+library(RColorBrewer)
+# Définissez le nombre de couleurs que vous voulez
+nb.cols <- 18
+mycolors <- colorRampPalette(brewer.pal(8, "Set2"))(nb.cols)
+
+#myframes_to_mycells
+#mycells
+myframes_to_mycells <- myframes_to_mycells %>% 
+  mutate(volume_um=((length_um-width_um)*(width_um/2)**2*3.14)+4/3*3.14*(width_um/2)**3) %>%
+  mutate(concentration_length=gfp_nb/length_um) %>% 
+  mutate(concentration_volume=gfp_nb/volume_um) %>% 
+  group_by(cell) %>% 
+  mutate(sc_mean_concentration_length=mean(concentration_length,na.rm=TRUE)) %>% 
+  mutate(sc_mean_concentration_volume=mean(concentration_volume,na.rm=TRUE)) %>% 
+  mutate(sc_sd_concentration_length=sd(concentration_length,na.rm=TRUE)) %>% 
+  mutate(sc_sd_concentration_volume=sd(concentration_volume,na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  group_by(promoter,condition) %>% 
+  mutate(mean_concentration_length=mean(concentration_length,na.rm=TRUE)) %>% 
+  mutate(mean_concentration_volume=mean(concentration_volume,na.rm=TRUE)) %>% 
+  mutate(sd_concentration_length=sd(concentration_length,na.rm=TRUE)) %>% 
+  mutate(sd_concentration_volume=sd(concentration_volume,na.rm=TRUE))
+
+gr_df <- mycells %>% 
+  mutate(alpha_min=alpha*60) %>%  #min
+  group_by(condition,promoter) %>% 
+  mutate(mean_alpha=mean(alpha_min,na.rm=TRUE)) %>% 
+  mutate(sd_alpha=sd(alpha_min,na.rm=TRUE)) %>% 
+  mutate(mean_doubling_time=mean_alpha*3600/log(2)) %>% 
+  distinct(condition,promoter,.keep_all = TRUE ) %>% 
+  select(condition, promoter, mean_doubling_time,mean_alpha,sd_alpha) %>% 
+  ungroup()
+
+gr_df_scells <- mycells %>% 
+  mutate(alpha_min=alpha*60) %>%  #min
+  mutate(doubling_per_hour=alpha*3600/(log(2))) %>% 
+  group_by(condition,promoter) %>% 
+  mutate(mean_alpha=mean(alpha_min,na.rm=TRUE)) %>% 
+  mutate(sd_alpha=sd(alpha_min,na.rm=TRUE)) %>% 
+  mutate(mean_doubling_time=mean_alpha*60/log(2)) %>% 
+  #distinct(condition,promoter,.keep_all = TRUE ) %>% 
+  ungroup() %>% 
+  select(condition, promoter, mean_doubling_time,mean_alpha,sd_alpha,doubling_per_hour,alpha_min,cell)
+
+```
+
+```{r}
+myframes_to_mycells %>% 
+  left_join(gr_df,by=c("condition","promoter")) %>% 
+  distinct(promoter,condition,.keep_all=TRUE) %>%
+  ggplot()+
+  geom_point(aes(log(mean_doubling_time),log(mean_concentration_length),col=promoter))+
+  geom_line(aes(log(mean_doubling_time),log(mean_concentration_length),col=promoter))+
+  scale_color_manual(values = mycolors)+
+  theme_cowplot()+
+  xlab("log(Doublings per hour)")+
+  ylab("log(<Concentration>) (length based)")
+  #facet_wrap(~promoter)
+  
+myframes_to_mycells %>% 
+  left_join(gr_df,by=c("condition","promoter")) %>% 
+  distinct(promoter,condition,.keep_all=TRUE) %>%
+  ggplot()+
+  geom_point(aes(log(mean_doubling_time),log(mean_concentration_volume),col=promoter))+
+  geom_line(aes(log(mean_doubling_time),log(mean_concentration_volume),col=promoter))+
+  scale_fill_manual(values = mycolors) +
+  #facet_wrap(~promoter)+
+  scale_color_manual(values = mycolors) +
+  theme_cowplot()+
+  xlab("log(Doublings per hour)")+
+  ylab("log(<Concentration>) (volume based)")
+
+myframes_to_mycells %>% 
+  left_join(gr_df_scells,by=c("condition","promoter","cell")) %>% 
+  #distinct(promoter,condition,.keep_all=TRUE) %>%
+  ggplot()+
+  geom_point(aes(log(mean_doubling_time),log(mean_concentration_volume*mean_alpha),col=promoter))+
+  geom_point(aes(log(doubling_per_hour),log(sc_mean_concentration_volume*alpha_min),col=promoter),alpha=0.01)+
+  geom_line(aes(log(mean_doubling_time),log(mean_concentration_volume*mean_alpha),col=promoter))+
+  scale_fill_manual(values = mycolors) +
+  #facet_wrap(~promoter)+
+  scale_color_manual(values = mycolors) +
+  theme_cowplot()+
+  xlab("log(Doublings per hour)")+
+  ylab("log(<Concentration>) (volume based)")
+
+myframes_to_mycells %>% 
+  left_join(gr_df_scells,by=c("condition","promoter","cell")) %>% 
+  #distinct(promoter,condition,.keep_all=TRUE) %>%
+  ggplot()+
+  geom_point(aes(mean_doubling_time,mean_concentration_volume*mean_alpha,col=condition))+
+  geom_point(aes(doubling_per_hour,sc_mean_concentration_volume*alpha_min,col=condition),alpha=0.01)+
+  geom_line(aes(mean_doubling_time,mean_concentration_volume*mean_alpha,col=condition))+
+  scale_fill_manual(values = mycolors) +
+  facet_wrap(~promoter,scale="free")+
+  #scale_color_manual(values = mycolors) +
+  theme_cowplot()+
+  xlab("Doublings per hour)")+
+  ylab("<Production> (volume based)")
+
+myframes_to_mycells %>% 
+  left_join(gr_df_scells,by=c("condition","promoter","cell")) %>% 
+  #distinct(promoter,condition,.keep_all=TRUE) %>%
+  ggplot()+
+  geom_point(aes(mean_doubling_time,mean_concentration_volume,col=condition))+
+  geom_point(aes(doubling_per_hour,sc_mean_concentration_volume,col=condition),alpha=0.01)+
+  geom_line(aes(mean_doubling_time,mean_concentration_volume,col=condition))+
+  scale_fill_manual(values = mycolors) +
+  facet_wrap(~promoter,scale="free")+
+  #scale_color_manual(values = mycolors) +
+  theme_cowplot()+
+  xlab("Doublings per hour")+
+  ylab("<Concentration> (volume based)")
+
+
+myframes_to_mycells %>% 
+  left_join(gr_df_scells,by=c("condition","promoter","cell")) %>% 
+  #distinct(promoter,condition,.keep_all=TRUE) %>%
+  ggplot()+
+  geom_point(aes(log(mean_doubling_time),log(mean_concentration_volume*mean_alpha),col=condition))+
+  geom_point(aes(log(doubling_per_hour),log(sc_mean_concentration_volume*alpha_min),col=condition),alpha=0.01)+
+  geom_line(aes(log(mean_doubling_time),log(mean_concentration_volume*mean_alpha),col=condition))+
+  scale_fill_manual(values = mycolors) +
+  facet_wrap(~promoter,scale="free")+
+  #scale_color_manual(values = mycolors) +
+  theme_cowplot()+
+  xlab("log(Doublings per hour))")+
+  ylab("log(<Production>) (volume based)")
+```
+
+```{r}
+myframes_to_mycells %>% 
+  left_join(gr_df,by=c("condition","promoter")) %>% 
+  distinct(promoter,condition,.keep_all=TRUE) %>%
+  ggplot()+
+  geom_point(aes(log(mean_doubling_time),log(mean_concentration_volume*mean_alpha),col=promoter))+
+  geom_line(aes(log(mean_doubling_time),log(mean_concentration_volume*mean_alpha),col=promoter))+
+  scale_fill_manual(values = mycolors) +
+  #facet_wrap(~promoter)+
+  scale_color_manual(values = mycolors) +
+  theme_cowplot()+
+  xlab("log(Doublings per hour)")+
+  ylab("log(<Production>) (volume based)")
+
+myframes_to_mycells %>% 
+  left_join(gr_df,by=c("condition","promoter")) %>% 
+  distinct(promoter,condition,.keep_all=TRUE) %>%
+  ggplot()+
+  geom_point(aes(mean_doubling_time,mean_concentration_volume*mean_alpha,col=promoter))+
+  geom_line(aes(mean_doubling_time,mean_concentration_volume*mean_alpha,col=promoter))+
+  scale_fill_manual(values = mycolors) +
+  #facet_wrap(~promoter)+
+  scale_color_manual(values = mycolors) +
+  theme_cowplot()+
+  xlab("Doublings per hour")+
+  ylab("<Production> (volume based)")
+```
+
+
+
+
+
+
+```{r}
+myconcentrations <- myframes_to_mycells %>%
+  distinct(condition,promoter,.keep_all = TRUE) %>% 
+  left_join(gr_df,by=c("condition","promoter")) %>% 
+  select(condition,promoter,mean_concentration_length,mean_concentration_volume,sd_concentration_length,sd_concentration_volume,mean_doubling_time,mean_alpha,sd_alpha) %>% 
+  mutate(q_mm=mean_alpha*mean_concentration_volume,
+         sd_q_mm=sqrt((sd_alpha/mean_alpha)**2+(sd_concentration_volume/mean_concentration_volume)**2))
+
+promoters_of_interest <- list("hi1","hi3","med2","med3","rpsB","rpmB","rplN","rrnB")
+```
+
+
+```{r}
+#No need to go for a reference, I can simply check all ratios
+library(RColorBrewer)
+# Définissez le nombre de couleurs que vous voulez
+nb.cols <- 18
+mycolors <- colorRampPalette(brewer.pal(8, "Set2"))(nb.cols)
+
+myconcentrations$condition <- factor(myconcentrations$condition, levels = c("acetate","glycerol","glucose","glucoseaa"))
+
+mydata_wells <- mydata_gr_exp_summary %>%
+  separate(strain,into=c("vector","promoter")) %>%
+  filter(promoter %in% promoters_of_interest) %>% 
+  filter(vector=="pl") %>% 
+  distinct(promoter,condition,well,replica,.keep_all = TRUE) %>% 
+  select(promoter,condition,well,q,sd_q,replica,alpha_gfp,sd_alpha_gfp)
+    
+myconcentrations %>% 
+  arrange(condition) %>% 
+  ungroup() %>% 
+  left_join(mydata_wells,by=c("promoter","condition")) %>%
+  #mutate(ratio=mean_concentration_volume/alpha_gfp) %>%
+  group_by(condition) %>% 
+  mutate(lc_mm=log(mean_concentration_volume),
+         lc=log(alpha_gfp)) %>% 
+  mutate(p=n(),
+           mean_lc_mm=mean(lc_mm,na.rm=TRUE),
+           var_lc_mm=1/p*sum((lc_mm-mean_lc_mm)**2,na.rm=TRUE),
+           mean_lc=mean(lc,na.rm=TRUE),
+           var_lc=1/p*sum((lc-mean_lc)**2,na.rm=TRUE),
+           covar_lc_mm_lc=1/p*sum(lc_mm*lc-mean_lc_mm*mean_lc,na.rm=TRUE),
+           slope_mm_bulk=(var_lc-var_lc_mm)/(2*covar_lc_mm_lc)+sqrt(1+((var_lc-var_lc_mm)/(2*covar_lc_mm_lc))**2),#assuming that this is the best slope
+           sd_alpha=compute_error(slope_mm_bulk,var_lc_mm,var_lc,covar_lc_mm_lc),
+           beta=1/p*sum(lc-slope_mm_bulk*lc_mm,na.rm=TRUE)) %>%
+    ungroup() %>% 
+  ggplot()+
+  geom_point(aes(lc_mm,lc,col=promoter),size=4)+
+  geom_line(aes(lc_mm,lc_mm*slope_mm_bulk+beta)) +
+  geom_errorbar(aes(x=log(mean_concentration_volume),ymax=log(alpha_gfp+sd_alpha_gfp),ymin=log(alpha_gfp-sd_alpha_gfp)))+
+  geom_errorbarh(aes(y=log(alpha_gfp),xmax=log(mean_concentration_volume+sd_concentration_volume),xmin=log(mean_concentration_volume-sd_concentration_volume)))+
+  #stat_smooth(aes(log(mean_concentration_volume),log(alpha_gfp)),method="lm", fullrange=TRUE,col='blue',alpha=0.2)+
+  #  ggpubr::stat_cor(aes(log(mean_concentration_volume),log(alpha_gfp)),method = "pearson",size=4, label.y.npc = 0.8,label.x.npc = 0)+
+  #  ggpubr::stat_regline_equation(aes(log(mean_concentration_volume),log(alpha_gfp)),size=4,label.y.npc = 1,label.x.npc = 0)+
+  facet_wrap(~condition,scale="free")+
+  scale_color_manual(values = mycolors)+
+  theme_cowplot()+
+  xlab("log(<Concentration>), mother Machine, #GFP/um3")+
+  ylab("log(<alpha_gfp>), bulk, GFU/OD")+
+  labs(subtitle=("Bulk (plasmid) vs Mother Machine (chromosome) "))
+```
+
+```{r}
+#No need to go for a reference, I can simply check all ratios
+library(RColorBrewer)
+# Définissez le nombre de couleurs que vous voulez
+nb.cols <- 18
+mycolors <- colorRampPalette(brewer.pal(8, "Set2"))(nb.cols)
+
+myconcentrations$condition <- factor(myconcentrations$condition, levels = c("acetate","glycerol","glucose","glucoseaa"))
+
+mydata_wells <- mydata_gr_exp_summary %>%
+  separate(strain,into=c("vector","promoter")) %>%
+  filter(promoter %in% promoters_of_interest) %>% 
+  filter(vector=="pl") %>% 
+  distinct(promoter,condition,well,replica,.keep_all = TRUE) %>% 
+  select(promoter,condition,well,q,sd_q,replica,alpha_gfp,sd_alpha_gfp)
+    
+myconcentrations %>% 
+  arrange(condition) %>% 
+  ungroup() %>% 
+  left_join(mydata_wells,by=c("promoter","condition")) %>%
+  #mutate(ratio=mean_concentration_volume/alpha_gfp) %>%
+  group_by(condition) %>% 
+  mutate(lc_mm=mean_concentration_volume,
+         lc=alpha_gfp) %>% 
+  mutate(p=n(),
+           mean_lc_mm=mean(lc_mm,na.rm=TRUE),
+           var_lc_mm=1/p*sum((lc_mm-mean_lc_mm)**2,na.rm=TRUE),
+           mean_lc=mean(lc,na.rm=TRUE),
+           var_lc=1/p*sum((lc-mean_lc)**2,na.rm=TRUE),
+           covar_lc_mm_lc=1/p*sum(lc_mm*lc-mean_lc_mm*mean_lc,na.rm=TRUE),
+           slope_mm_bulk=(var_lc-var_lc_mm)/(2*covar_lc_mm_lc)+sqrt(1+((var_lc-var_lc_mm)/(2*covar_lc_mm_lc))**2),#assuming that this is the best slope
+           sd_alpha=compute_error(slope_mm_bulk,var_lc_mm,var_lc,covar_lc_mm_lc),
+           beta=0) %>% #1/p*sum(lc-slope_mm_bulk*lc_mm,na.rm=TRUE)) %>%
+    ungroup() %>% 
+  ggplot()+
+  geom_point(aes(lc_mm,lc,col=promoter),size=4)+
+  geom_line(aes(lc_mm,lc_mm*slope_mm_bulk+beta)) +
+  geom_errorbar(aes(x=mean_concentration_volume,ymax=alpha_gfp+sd_alpha_gfp,ymin=alpha_gfp-sd_alpha_gfp))+
+  geom_errorbarh(aes(y=alpha_gfp,xmax=mean_concentration_volume+sd_concentration_volume,xmin=mean_concentration_volume-sd_concentration_volume))+
+  #stat_smooth(aes(log(mean_concentration_volume),log(alpha_gfp)),method="lm", fullrange=TRUE,col='blue',alpha=0.2)+
+  #  ggpubr::stat_cor(aes(log(mean_concentration_volume),log(alpha_gfp)),method = "pearson",size=4, label.y.npc = 0.8,label.x.npc = 0)+
+  #  ggpubr::stat_regline_equation(aes(log(mean_concentration_volume),log(alpha_gfp)),size=4,label.y.npc = 1,label.x.npc = 0)+
+  facet_wrap(~condition,scale="free")+
+  scale_color_manual(values = mycolors)+
+  theme_cowplot()+
+  xlab("<Concentration>, mother Machine, #GFP/um3")+
+  ylab("<alpha_gfp>, bulk, GFU/OD")+
+  labs(subtitle=("Bulk (plasmid) vs Mother Machine (chromosome) "))
+```
+
+
+
+
+
+```{r}
+#No need to go for a reference, I can simply check all ratios
+library(RColorBrewer)
+# Définissez le nombre de couleurs que vous voulez
+nb.cols <- 18
+mycolors <- colorRampPalette(brewer.pal(8, "Set1"))(nb.cols)
+
+myframes_to_mycells %>% 
+  left_join(gr_df_scells,by=c("condition","promoter","cell")) %>% 
+  #distinct(promoter,condition,.keep_all=TRUE) %>%
+  ggplot()+
+  geom_point(aes(log(mean_doubling_time),log(mean_concentration_volume),col=promoter))+
+  geom_point(aes(log(doubling_per_hour),log(sc_mean_concentration_volume),col=promoter),alpha=0.01)+
+  geom_line(aes(log(mean_doubling_time),log(mean_concentration_volume),col=promoter))+
+  scale_fill_manual(values = mycolors) +
+  facet_wrap(~condition,scale="free")+
+  scale_color_manual(values = mycolors) +
+  theme_cowplot()+
+  xlab("log(Doublings per hour)")+
+  ylab("log(Concentration) (volume based)")
+```
+
+```{r}
+#No need to go for a reference, I can simply check all ratios
+library(RColorBrewer)
+# Définissez le nombre de couleurs que vous voulez
+nb.cols <- 18
+mycolors <- colorRampPalette(brewer.pal(8, "Set1"))(nb.cols)
+
+mydata_gr_exp_summary$condition <- factor(mydata_gr_exp_summary$condition, levels = c("acetate","glycerol","glucose","glucoseaa"))
+
+mydata_gr_exp_summary %>%
+  separate(strain,into=c("vector","promoter")) %>%
+  filter(promoter %in% promoters_of_interest) %>% 
+  filter(vector=="pl") %>% 
+  distinct(promoter,condition,well,replica,.keep_all = TRUE) %>% 
+  select(promoter,condition,well,q,sd_q,replica,alpha_gfp,sd_alpha_gfp,alpha_tot_gr,sd_alpha_gr) %>% 
+  ggplot()+
+  #geom_point(aes(alpha_gr*60/log(2),log(alpha_gfp),col=promoter))+
+  geom_point(aes(log(alpha_tot_gr*60/log(2)),log(alpha_gfp),col=condition),alpha=1)+
+  geom_errorbar(aes(x=log(alpha_tot_gr*60/log(2)),ymax=log(alpha_gfp+sd_alpha_gfp),ymin=log(alpha_gfp-sd_alpha_gfp),col=condition))+
+  geom_errorbarh(aes(y=log(alpha_gfp),xmax=log((alpha_tot_gr+sd_alpha_gr)*60/log(2)),xmin=log((alpha_tot_gr-sd_alpha_gr)*60/log(2)),col=condition))+
+   #stat_smooth(aes(log(alpha_tot_gr*60/log(2)),log(alpha_gfp)),method="lm", fullrange=TRUE,col='blue',alpha=0.2)+
+    #ggpubr::stat_cor(aes(log(alpha_tot_gr*60/log(2)),log(alpha_gfp)),method = "pearson",size=4, label.y.npc = 0.8,label.x.npc = 0)+
+    #ggpubr::stat_regline_equation(aes(log(alpha_tot_gr*60/log(2)),log(alpha_gfp)),size=4,label.y.npc = 1,label.x.npc = 0)+
+  #geom_line(aes(mean_doubling_time,mean_concentration_volume,col=promoter))+
+  scale_fill_manual(values = mycolors) +
+  facet_wrap(~condition,scale="free")+
+  #facet_wrap(~interaction(condition,promoter),scale="free")+
+  scale_color_manual(values = mycolors) +
+  theme_cowplot()+
+  xlab("log(Doublings per hour)")+
+  ylab("log(Concentration (volume based)")
+```
+```{r}
+#No need to go for a reference, I can simply check all ratios
+library(RColorBrewer)
+# Définissez le nombre de couleurs que vous voulez
+nb.cols <- 18
+mycolors <- colorRampPalette(brewer.pal(8, "Set1"))(nb.cols)
+
+mydata_gr_exp_summary$condition <- factor(mydata_gr_exp_summary$condition, levels = c("acetate","glycerol","glucose","glucoseaa"))
+
+mydata_gr_exp_summary %>%
+  separate(strain,into=c("vector","promoter")) %>%
+  filter(promoter %in% promoters_of_interest) %>% 
+  filter(vector=="pl") %>% 
+  distinct(promoter,condition,well,replica,.keep_all = TRUE) %>% 
+  select(promoter,condition,well,q,sd_q,replica,alpha_gfp,sd_alpha_gfp,alpha_tot_gr,sd_alpha_gr) %>% 
+  ggplot()+
+  #geom_point(aes(alpha_gr*60/log(2),log(alpha_gfp),col=promoter))+
+  geom_point(aes(log(alpha_tot_gr*60/log(2)),log(alpha_gfp),col=promoter),alpha=1)+
+  geom_errorbar(aes(x=log(alpha_tot_gr*60/log(2)),ymax=log(alpha_gfp+sd_alpha_gfp),ymin=log(alpha_gfp-sd_alpha_gfp),col=promoter))+
+  geom_errorbarh(aes(y=log(alpha_gfp),xmax=log((alpha_tot_gr+sd_alpha_gr)*60/log(2)),xmin=log((alpha_tot_gr-sd_alpha_gr)*60/log(2)),col=promoter))+
+   #stat_smooth(aes(log(alpha_tot_gr*60/log(2)),log(alpha_gfp)),method="lm", fullrange=TRUE,col='blue',alpha=0.2)+
+    #ggpubr::stat_cor(aes(log(alpha_tot_gr*60/log(2)),log(alpha_gfp)),method = "pearson",size=4, label.y.npc = 0.8,label.x.npc = 0)+
+    #ggpubr::stat_regline_equation(aes(log(alpha_tot_gr*60/log(2)),log(alpha_gfp)),size=4,label.y.npc = 1,label.x.npc = 0)+
+  #geom_line(aes(mean_doubling_time,mean_concentration_volume,col=promoter))+
+  scale_fill_manual(values = mycolors) +
+  facet_wrap(~condition,scale="free")+
+  #facet_wrap(~interaction(condition,promoter),scale="free")+
+  scale_color_manual(values = mycolors) +
+  theme_cowplot()+
+  xlab("log(Doublings per hour)")+
+  ylab("log(Concentration (volume based)")
+```
+
+
+# STRATIFYING BY PROMOTERS AND CONDITIONS
+
+```{r}
+#No need to go for a reference, I can simply check all ratios
+library(RColorBrewer)
+# Définissez le nombre de couleurs que vous voulez
+nb.cols <- 18
+mycolors <- colorRampPalette(brewer.pal(8, "Set2"))(nb.cols)
+
+myframes_to_mycells %>% 
+  left_join(gr_df_scells,by=c("condition","promoter","cell")) %>% 
+  #distinct(promoter,condition,.keep_all=TRUE) %>%
+  ggplot()+
+  geom_point(aes(log(mean_doubling_time),log(mean_concentration_volume),col=condition),size=4,shape="+",col="black")+
+  geom_point(aes(log(doubling_per_hour),log(sc_mean_concentration_volume),col=condition),alpha=0.01)+
+  #geom_line(aes(mean_doubling_time,log(mean_concentration_volume),col=promoter))+
+  stat_smooth(aes(log(doubling_per_hour),log(sc_mean_concentration_volume)),method="lm", fullrange=TRUE,col='blue',alpha=0.2)+
+    ggpubr::stat_cor(aes(log(doubling_per_hour),log(sc_mean_concentration_volume)),method = "pearson",size=4, label.y.npc = 0.8,label.x.npc = 0)+
+    ggpubr::stat_regline_equation(aes(log(doubling_per_hour),log(sc_mean_concentration_volume)),size=4,label.y.npc = 1,label.x.npc = 0)+
+  scale_fill_manual(values = mycolors) +
+  facet_wrap(~interaction(condition,promoter),scale="free")+
+  scale_color_manual(values = mycolors) +
+  theme_cowplot()+
+  xlab("Doublings per hour")+
+  ylab("log(Concentration) (volume based)")
+```
+
+```{r}
+#No need to go for a reference, I can simply check all ratios
+library(RColorBrewer)
+# Définissez le nombre de couleurs que vous voulez
+nb.cols <- 18
+mycolors <- colorRampPalette(brewer.pal(8, "Set2"))(nb.cols)
+
+myconcentrations$condition <- factor(myconcentrations$condition, levels = c("acetate","glycerol","glucose","glucoseaa"))
+
+mydata_gr_exp_summary %>%
+  separate(strain,into=c("vector","promoter")) %>%
+  filter(promoter %in% promoters_of_interest) %>% 
+  filter(vector=="pl") %>% 
+  distinct(promoter,condition,well,replica,.keep_all = TRUE) %>% 
+  select(promoter,condition,well,q,sd_q,replica,alpha_gfp,sd_alpha_gfp,alpha_tot_gr,sd_alpha_gr) %>% 
+  ggplot()+
+  #geom_point(aes(alpha_gr*60/log(2),log(alpha_gfp),col=promoter))+
+  geom_point(aes(alpha_tot_gr*60/log(2),log(alpha_gfp),col=promoter),alpha=1)+
+  geom_errorbar(aes(x=alpha_tot_gr*60/log(2),ymax=log(alpha_gfp+sd_alpha_gfp),ymin=log(alpha_gfp-sd_alpha_gfp),col=promoter))+
+  geom_errorbarh(aes(y=log(alpha_gfp),xmax=(alpha_tot_gr+sd_alpha_gr)*60/log(2),xmin=(alpha_tot_gr-sd_alpha_gr)*60/log(2),col=promoter))+
+  #geom_line(aes(mean_doubling_time,mean_concentration_volume,col=promoter))+
+  scale_fill_manual(values = mycolors) +
+  facet_wrap(~interaction(condition,promoter),scale="free")+
+  scale_color_manual(values = mycolors) +
+  theme_cowplot()+
+  xlab("Doublings per hour")+
+  ylab("log(Concentration (volume based)")
+```
+
+
+
+
+
+```{r}
+#No need to go for a reference, I can simply check all ratios
+library(RColorBrewer)
+# Définissez le nombre de couleurs que vous voulez
+nb.cols <- 18
+mycolors <- colorRampPalette(brewer.pal(8, "Set2"))(nb.cols)
+
+myconcentrations$condition <- factor(myconcentrations$condition, levels = c("acetate","glycerol","glucose","glucoseaa"))
+
+mydata_wells <- mydata_gr_exp_summary %>%
+  separate(strain,into=c("vector","promoter")) %>%
+  filter(promoter %in% promoters_of_interest) %>% 
+  filter(vector=="pl") %>% 
+  distinct(promoter,condition,well,replica,.keep_all = TRUE) %>% 
+  select(promoter,condition,well,q,sd_q,replica,)
+    
+myconcentrations %>% 
+  arrange(condition) %>% 
+  ungroup() %>% 
+  left_join(mydata_wells,by=c("promoter","condition")) %>%
+  #mutate(ratio=mean_concentration_volume/alpha_gfp) %>%
+  ggplot()+
+  geom_point(aes(log(q_mm),log(q),col=promoter),size=4)+
+  geom_errorbar(aes(x=log(q_mm),ymax=log(q+sd_q),ymin=log(q-sd_q)))+
+  geom_errorbarh(aes(y=log(q),xmax=log(q_mm+sd_q_mm),xmin=log(q_mm-sd_q_mm)))+
+  stat_smooth(aes(log(q_mm),log(q)),method="lm", fullrange=TRUE,col='blue',alpha=0.2)+
+    ggpubr::stat_cor(aes(log(q_mm),log(q)),method = "pearson",size=4, label.y.npc = 0.8,label.x.npc = 0)+
+    ggpubr::stat_regline_equation(aes(log(q_mm),log(q)),size=4,label.y.npc = 1,label.x.npc = 0)+
+  facet_wrap(~condition,scale="free")+
+  scale_color_manual(values = mycolors)+
+  theme_cowplot()+
+  xlab("log(<Production>), mother Machine, #GFP/um3/min")+
+  ylab("log(<Production>), bulk, GFU/OD/min")+
+  labs(subtitle=("Bulk (plasmid) vs Mother Machine (chromosome) "))
+```
+
+With proper computation of the slope...
+
+
+```{r}
+#No need to go for a reference, I can simply check all ratios
+library(RColorBrewer)
+# Définissez le nombre de couleurs que vous voulez
+nb.cols <- 18
+mycolors <- colorRampPalette(brewer.pal(8, "Set2"))(nb.cols)
+
+myconcentrations$condition <- factor(myconcentrations$condition, levels = c("acetate","glycerol","glucose","glucoseaa"))
+
+mydata_wells <- mydata_gr_exp_summary %>%
+  separate(strain,into=c("vector","promoter")) %>%
+  filter(promoter %in% promoters_of_interest) %>% 
+  filter(vector=="pl") %>% 
+  distinct(promoter,condition,well,replica,.keep_all = TRUE) %>% 
+  select(promoter,condition,well,q,sd_q,replica)
+    
+myconcentrations %>% 
+  arrange(condition) %>% 
+  ungroup() %>% 
+  left_join(mydata_wells,by=c("promoter","condition")) %>%
+  mutate(lq_mm=log(q_mm),
+         lq=log(q)) %>% 
+  group_by(condition) %>% 
+  #mutate(ratio=mean_concentration_volume/alpha_gfp) %>%
+  mutate(p=n(),
+           mean_lq_mm=mean(lq_mm,na.rm=TRUE),
+           var_lq_mm=1/p*sum((lq_mm-mean_lq_mm)**2,na.rm=TRUE),
+           mean_lq=mean(lq,na.rm=TRUE),
+           var_lq=1/p*sum((lq-mean_lq)**2,na.rm=TRUE),
+           covar_lq_mm_lq=1/p*sum(lq_mm*lq-mean_lq_mm*mean_lq,na.rm=TRUE),
+           slope_mm_bulk=(var_lq-var_lq_mm)/(2*covar_lq_mm_lq)+sqrt(1+((var_lq-var_lq_mm)/(2*covar_lq_mm_lq))**2),#assuming that this is the best slope
+           sd_alpha=compute_error(slope_mm_bulk,var_lq_mm,var_lq,covar_lq_mm_lq),
+           beta=1/p*sum(lq-slope_mm_bulk*lq_mm,na.rm=TRUE)) %>%
+    ungroup() %>% 
+    #distinct(condition,promoter, replica, well,.keep_all=TRUE)
+  #select(condition,strain,replica,well,slope_mm_bulk,beta) %>% 
+  ggplot()+
+  geom_point(aes(q_mm,q,col=promoter),size=4)+
+  geom_line(aes(q_mm,exp(beta)*q_mm**(slope_mm_bulk)),col="red")+
+  geom_errorbar(aes(x=q_mm,ymax=q+sd_q,ymin=q-sd_q))+
+  geom_errorbarh(aes(y=q,xmax=q_mm+sd_q_mm,xmin=q_mm-sd_q_mm))+
+  #stat_smooth(aes(q_mm,q),method="lm", fullrange=TRUE,col='blue',alpha=0.2)+
+    #ggpubr::stat_cor(aes(logq_mm),log(q)),method = "pearson",size=4, label.y.npc = 0.8,label.x.npc = 0)+
+    #ggpubr::stat_regline_equation(aes(log(q_mm),log(q)),size=4,label.y.npc = 1,label.x.npc = 0)+
+  facet_wrap(~condition,scale="free")+
+  scale_color_manual(values = mycolors)+
+  theme_cowplot()+
+  xlab("log(<Production>), mother Machine, #GFP/um3/min")+
+  ylab("log(<Production>), bulk, GFU/OD/min")+
+  labs(subtitle=("Bulk (plasmid) vs Mother Machine (chromosome) "))
+```
+Write a routine for a better estimation of the slope there. A good model would be y=A(1-exp(-Bx)).
+How to apply multiple model to the data?
+
+```{r}
+mydata_wells <- mydata_gr_exp_summary %>%
+  separate(strain,into=c("vector","promoter")) %>%
+  filter(promoter %in% promoters_of_interest) %>% 
+  filter(vector=="pl") %>% 
+  distinct(promoter,condition,well,replica,.keep_all = TRUE) %>% 
+  select(promoter,condition,well,q,sd_q,replica,alpha_gfp,sd_alpha_gfp)
+
+tofit <- myconcentrations %>% 
+  arrange(condition) %>% 
+  ungroup() %>% 
+  left_join(mydata_wells,by=c("promoter","condition")) %>%
+  mutate(lq_mm=log(q_mm),
+         lq=log(q))
+
+model_results_df <- tibble(condition=c("acetate","glycerol","glucose","glucoseaa"),alpha=c("","","",""),beta=c("","","",""))
+
+for(c in unique(myconcentrations$condition)){
+  data <- tofit %>% 
+    filter(condition==c)
+  
+  alpha.0 <- max(data$alpha_gfp,na.rm=TRUE) * 1.1
+  model.0 <- lm(log(- alpha_gfp + alpha.0) ~ mean_concentration_volume, data=data)
+  #alpha.0 <- -exp(coef(model.0)[1])
+  beta.0 <- coef(model.0)[2]
+  
+  start <- list(alpha = alpha.0, beta = beta.0)
+  model <- nls(alpha_gfp ~ alpha * (1- exp(beta * mean_concentration_volume)), data = data, start = start)
+  plot(data$mean_concentration_volume, data$alpha_gfp)
+  lines(data$mean_concentration_volume, predict(model, list(x = data$mean_concentration_volume)), col = 'skyblue', lwd = 3)
+  print(c)
+  print(model)
+  
+  model_results_df$alpha[model_results_df$condition==c] <- coef(model)[[1]]
+  model_results_df$beta[model_results_df$condition==c] <- coef(model)[[2]]
+}
+
+model_results_df <- model_results_df %>% 
+  mutate(xmax=c(60000,120000,120000,60000))
+```
+
+
+
+```{r}
+#No need to go for a reference, I can simply check all ratios
+library(RColorBrewer)
+# Définissez le nombre de couleurs que vous voulez
+nb.cols <- 18
+mycolors <- colorRampPalette(brewer.pal(8, "Set2"))(nb.cols)
+
+myconcentrations$condition <- factor(myconcentrations$condition, levels = c("acetate","glycerol","glucose","glucoseaa"))
+
+mydata_wells <- mydata_gr_exp_summary %>%
+  separate(strain,into=c("vector","promoter")) %>%
+  filter(promoter %in% promoters_of_interest) %>% 
+  filter(vector=="pl") %>% 
+  distinct(promoter,condition,well,replica,.keep_all = TRUE) %>% 
+  select(promoter,condition,well,q,sd_q,replica,alpha_gfp,sd_alpha_gfp)
+    
+myconcentrations %>% 
+  arrange(condition) %>% 
+  ungroup() %>% 
+  left_join(mydata_wells,by=c("promoter","condition")) %>%
+  #mutate(ratio=mean_concentration_volume/alpha_gfp) %>%
+  ggplot()+
+  geom_point(aes(mean_concentration_volume,alpha_gfp,col=promoter),size=4)+
+  geom_errorbar(aes(x=mean_concentration_volume,ymax=alpha_gfp+sd_alpha_gfp,ymin=alpha_gfp-sd_alpha_gfp))+
+  geom_errorbarh(aes(y=alpha_gfp,xmax=mean_concentration_volume+sd_concentration_volume,xmin=mean_concentration_volume-sd_concentration_volume))+
+  stat_smooth(aes(mean_concentration_volume,alpha_gfp),method="lm", fullrange=TRUE,col='blue',alpha=0.2)+
+    ggpubr::stat_cor(aes(mean_concentration_volume,alpha_gfp),method = "pearson",size=4, label.y.npc = 0.8,label.x.npc = 0)+
+    ggpubr::stat_regline_equation(aes(mean_concentration_volume,alpha_gfp),size=4,label.y.npc = 1,label.x.npc = 0)+
+  facet_wrap(~condition,scale="free")+
+  scale_color_manual(values = mycolors)+
+  theme_cowplot()+
+  xlab("<Concentration>, mother Machine, #GFP/um3")+
+  ylab("<alpha_gfp>, bulk, GFU/OD")+
+  labs(subtitle=("Bulk (plasmid) vs Mother Machine (chromosome) "))
+```
+# LINEAR FIT ON CHROMOSOMAL SPECIES
+Actually better...
+No saturation...
+
+```{r}
+#No need to go for a reference, I can simply check all ratios
+library(RColorBrewer)
+# Définissez le nombre de couleurs que vous voulez
+nb.cols <- 18
+mycolors <- colorRampPalette(brewer.pal(8, "Set2"))(nb.cols)
+
+myconcentrations$condition <- factor(myconcentrations$condition, levels = c("acetate","glycerol","glucose","glucoseaa"))
+
+mydata_wells <- mydata_gr_exp_summary %>%
+  separate(strain,into=c("vector","promoter")) %>%
+  filter(promoter %in% promoters_of_interest) %>% 
+  filter(vector=="ch") %>% 
+  filter(!((promoter=="med2") & (condition=="acetate") & (replica==3))) %>% 
+  distinct(promoter,condition,well,replica,.keep_all = TRUE) %>% 
+  select(promoter,condition,well,q,sd_q,replica,alpha_gfp,sd_alpha_gfp)
+    
+myconcentrations %>% 
+  arrange(condition) %>% 
+  ungroup() %>% 
+  left_join(mydata_wells,by=c("promoter","condition")) %>%
+  #mutate(ratio=mean_concentration_volume/alpha_gfp) %>%
+  ggplot()+
+  geom_point(aes(mean_concentration_volume,alpha_gfp,col=promoter),size=4)+
+  geom_errorbar(aes(x=mean_concentration_volume,ymax=alpha_gfp+sd_alpha_gfp,ymin=alpha_gfp-sd_alpha_gfp))+
+  geom_errorbarh(aes(y=alpha_gfp,xmax=mean_concentration_volume+sd_concentration_volume,xmin=mean_concentration_volume-sd_concentration_volume))+
+  stat_smooth(aes(mean_concentration_volume,alpha_gfp),formula=y~x+0,method="lm", fullrange=TRUE,col='blue',alpha=0.2)+
+    ggpubr::stat_cor(aes(mean_concentration_volume,alpha_gfp),method = "pearson",size=4, label.y.npc = 0.8,label.x.npc = 0)+
+    ggpubr::stat_regline_equation(aes(mean_concentration_volume,alpha_gfp),formula=y~x+0,size=4,label.y.npc = 1,label.x.npc = 0)+
+  facet_wrap(~condition,scale="free")+
+  scale_color_manual(values = mycolors)+
+  theme_cowplot()+
+  xlab("<Concentration>, mother Machine, #GFP/um3")+
+  ylab("<alpha_gfp>, bulk, GFU/OD")+
+  labs(subtitle=("Bulk (chromosomal) vs Mother Machine (chromosome) "))
+```
+
+Same fit but with David results
+acetate: 3783466
+glycerol: 3877561
+glucose: 2703263
+unit: (cells/ul)/od
+
+```{r}
+conversion_table <- tibble(condition=c("acetate","glycerol","glucose"),cell_ul_od=c(3783466,3877561,2703263))
+conversion_table <- tibble(condition=c("acetate","glycerol","glucose"),cell_ul_od=c(3557293,3672777,2454829))
+#
+
+cell_vol_df <- myframes_to_mycells %>% 
+  group_by(condition) %>% 
+  mutate(volume_um=((length_um-width_um)*(width_um/2)**2*3.14)+4/3*3.14*(width_um/2)**3,
+         mean_vol=mean(volume_um,na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  distinct(condition,mean_vol) %>% 
+  left_join(conversion_table,by=c("condition"))
+
+#No need to go for a reference, I can simply check all ratios
+library(RColorBrewer)
+# Définissez le nombre de couleurs que vous voulez
+nb.cols <- 18
+mycolors <- colorRampPalette(brewer.pal(8, "Set2"))(nb.cols)
+
+myconcentrations$condition <- factor(myconcentrations$condition, levels = c("acetate","glycerol","glucose","glucoseaa"))
+
+mydata_wells <- mydata_gr_exp_summary %>%
+  separate(strain,into=c("vector","promoter")) %>%
+  filter(promoter %in% promoters_of_interest) %>% 
+  filter(vector=="ch") %>% 
+  #filter(replica==3) %>% 
+  filter(!((promoter=="med2") & (condition=="acetate") & (replica==3))) %>% 
+  distinct(promoter,condition,well,replica,.keep_all = TRUE) %>% 
+  left_join(cell_vol_df,by=c("condition")) %>% 
+  filter(condition %in% c("acetate","glycerol","glucose")) %>% 
+  mutate(alpha_gfp=alpha_gfp/(cell_ul_od*200*mean_vol),
+         sd_alpha_gfp=sd_alpha_gfp/(cell_ul_od*200*mean_vol)) %>% #GFU/OD vs GFU/um3
+  select(promoter,condition,well,q,sd_q,replica,alpha_gfp,sd_alpha_gfp)
+    
+myconcentrations %>% 
+  arrange(condition) %>% 
+  filter(condition %in% c("acetate","glycerol","glucose")) %>% 
+  ungroup() %>% 
+  left_join(mydata_wells,by=c("promoter","condition")) %>%
+  #mutate(ratio=mean_concentration_volume/alpha_gfp) %>%
+  ggplot()+
+  geom_point(aes(mean_concentration_volume,alpha_gfp,col=promoter),size=4)+
+  geom_errorbar(aes(x=mean_concentration_volume,ymax=alpha_gfp+sd_alpha_gfp,ymin=alpha_gfp-sd_alpha_gfp))+
+  geom_errorbarh(aes(y=alpha_gfp,xmax=mean_concentration_volume+sd_concentration_volume,xmin=mean_concentration_volume-sd_concentration_volume))+
+  stat_smooth(aes(mean_concentration_volume,alpha_gfp),formula=y~x+0,method="lm", fullrange=TRUE,col='blue',alpha=0.2)+
+    ggpubr::stat_cor(aes(mean_concentration_volume,alpha_gfp),method = "pearson",size=4, label.y.npc = 0.8,label.x.npc = 0)+
+    ggpubr::stat_regline_equation(aes(mean_concentration_volume,alpha_gfp),formula=y~x+0,size=4,label.y.npc = 1,label.x.npc = 0)+
+  facet_wrap(~condition,scale="free")+
+  scale_color_manual(values = mycolors)+
+  theme_cowplot()+
+  xlab("<Concentration>, mother Machine, #GFP/um3")+
+  ylab("<alpha_gfp>, bulk, GFU/OD")+
+  labs(subtitle=("Bulk (chromosomal) vs Mother Machine (chromosome) "))
+```
+# SAME FIT FOR MEAN_GFP / CELL
+
+```{r}
+myconcentrations <- myframes_to_mycells %>%
+  distinct(condition,promoter,.keep_all = TRUE) %>% 
+  left_join(gr_df,by=c("condition","promoter")) %>% 
+  group_by(condition,promoter) %>% 
+  mutate(mean_gfp=mean(gfp_nb,na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  select(condition,promoter,mean_concentration_length,mean_concentration_volume,sd_concentration_length,sd_concentration_volume,mean_doubling_time,mean_alpha,sd_alpha,mean_gfp) %>% 
+  mutate(q_mm=mean_alpha*mean_concentration_volume,
+         sd_q_mm=sqrt((sd_alpha/mean_alpha)**2+(sd_concentration_volume/mean_concentration_volume)**2))
+
+promoters_of_interest <- list("hi1","hi3","med2","med3","rpsB","rpmB","rplN","rrnB")
+```
+
+```{r}
+#conversion_table <- tibble(condition=c("acetate","glycerol","glucose"),cell_ul_od=c(3783466,3877561,2703263))
+conversion_table <- tibble(condition=c("acetate","glycerol","glucose"),cell_ul_od=c(3557293,3672777,2454829))
+#
+
+cell_vol_df <- myframes_to_mycells %>% 
+  group_by(condition) %>% 
+  mutate(volume_um=((length_um-width_um)*(width_um/2)**2*3.14)+4/3*3.14*(width_um/2)**3,
+         mean_vol=mean(volume_um,na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  distinct(condition,mean_vol) %>% 
+  left_join(conversion_table,by=c("condition"))
+
+#No need to go for a reference, I can simply check all ratios
+library(RColorBrewer)
+# Définissez le nombre de couleurs que vous voulez
+nb.cols <- 18
+mycolors <- colorRampPalette(brewer.pal(8, "Set2"))(nb.cols)
+
+myconcentrations$condition <- factor(myconcentrations$condition, levels = c("acetate","glycerol","glucose","glucoseaa"))
+
+mydata_wells <- mydata_gr_exp_summary %>%
+  separate(strain,into=c("vector","promoter")) %>%
+  filter(promoter %in% promoters_of_interest) %>% 
+  filter(vector=="ch") %>% 
+  filter(replica==3) %>% 
+  filter(!((promoter=="med2") & (condition=="acetate") & (replica==3))) %>% 
+  distinct(promoter,condition,well,replica,.keep_all = TRUE) %>% 
+  left_join(cell_vol_df,by=c("condition")) %>% 
+  filter(condition %in% c("acetate","glycerol","glucose")) %>% 
+  mutate(alpha_gfp=alpha_gfp/(cell_ul_od*200),
+         sd_alpha_gfp=sd_alpha_gfp/(cell_ul_od*200)) %>% #GFU/OD vs GFU/cell
+  select(promoter,condition,well,q,sd_q,replica,alpha_gfp,sd_alpha_gfp)
+    
+myconcentrations %>% 
+  arrange(condition) %>% 
+  filter(condition %in% c("acetate","glycerol","glucose")) %>% 
+  ungroup() %>% 
+  left_join(mydata_wells,by=c("promoter","condition")) %>%
+  #mutate(ratio=mean_concentration_volume/alpha_gfp) %>%
+  ggplot()+
+  geom_point(aes(mean_gfp,alpha_gfp,col=promoter),size=4)+
+  #geom_errorbar(aes(x=mean_gfp,ymax=alpha_gfp+sd_alpha_gfp,ymin=alpha_gfp-sd_alpha_gfp))+
+  #geom_errorbarh(aes(y=alpha_gfp,xmax=mean_concentration_volume+sd_concentration_volume,xmin=mean_concentration_volume-sd_concentration_volume))+
+  stat_smooth(aes(mean_gfp,alpha_gfp),formula=y~x+0,method="lm", fullrange=TRUE,col='blue',alpha=0.2)+
+    ggpubr::stat_cor(aes(mean_gfp,alpha_gfp),method = "pearson",size=4, label.y.npc = 0.8,label.x.npc = 0)+
+    ggpubr::stat_regline_equation(aes(mean_gfp,alpha_gfp),formula=y~x+0,size=4,label.y.npc = 1,label.x.npc = 0)+
+  facet_wrap(~condition,scale="free")+
+  scale_color_manual(values = mycolors)+
+  theme_cowplot()+
+  xlab("<Concentration>, mother Machine, #GFP/um3")+
+  ylab("<alpha_gfp>, bulk, GFU/OD")+
+  labs(subtitle=("Bulk (chromosomal) vs Mother Machine (chromosome) "))
+```
+
+# NOW WITH EVERYTHING SUPERIMPOSED
+
+```{r}
+#conversion_table <- tibble(condition=c("acetate","glycerol","glucose"),cell_ul_od=c(3783466,3877561,2703263))
+conversion_table <- tibble(condition=c("acetate","glycerol","glucose","glucoseaa"),cell_ul_od=c(3557293,3672777,2454829,2241553))
+#
+
+cell_vol_df <- myframes_to_mycells %>% 
+  group_by(condition) %>% 
+  mutate(volume_um=((length_um-width_um)*(width_um/2)**2*3.14)+4/3*3.14*(width_um/2)**3,
+         mean_vol=mean(volume_um,na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  distinct(condition,mean_vol) %>% 
+  left_join(conversion_table,by=c("condition"))
+
+#No need to go for a reference, I can simply check all ratios
+library(RColorBrewer)
+# Définissez le nombre de couleurs que vous voulez
+nb.cols <- 18
+mycolors <- colorRampPalette(brewer.pal(8, "Set1"))(nb.cols)
+
+myconcentrations$condition <- factor(myconcentrations$condition, levels = c("acetate","glycerol","glucose","glucoseaa"))
+
+mydata_wells <- mydata_gr_exp_summary %>%
+  separate(strain,into=c("vector","promoter")) %>%
+  filter(promoter %in% promoters_of_interest) %>%
+  filter(vector=="ch") %>% 
+  #filter(replica==3) %>% 
+  filter(!((promoter=="med2") & (condition=="acetate") & (replica==3))) %>% 
+  distinct(promoter,condition,well,replica,.keep_all = TRUE) %>% 
+  left_join(cell_vol_df,by=c("condition")) %>% 
+  #filter(condition %in% c("acetate","glycerol","glucose")) %>% 
+  mutate(alpha_gfp=alpha_gfp/(cell_ul_od*200*mean_vol),
+         sd_alpha_gfp=sd_alpha_gfp/(cell_ul_od*200*mean_vol)) %>% #GFU/OD vs GFU/cell
+  select(promoter,condition,well,q,sd_q,replica,alpha_gfp,sd_alpha_gfp)
+    
+myconcentrations %>% 
+  arrange(condition) %>% 
+  #filter(condition %in% c("acetate","glycerol","glucose")) %>% 
+  ungroup() %>% 
+  left_join(mydata_wells,by=c("promoter","condition")) %>%
+  #mutate(ratio=mean_concentration_volume/alpha_gfp) %>%
+  ggplot()+
+  geom_point(aes(mean_concentration_volume,alpha_gfp,col=condition),size=4)+
+  #geom_errorbar(aes(x=mean_gfp,ymax=alpha_gfp+sd_alpha_gfp,ymin=alpha_gfp-sd_alpha_gfp))+
+  #geom_errorbarh(aes(y=alpha_gfp,xmax=mean_concentration_volume+sd_concentration_volume,xmin=mean_concentration_volume-sd_concentration_volume))+
+  #stat_smooth(aes(mean_gfp,alpha_gfp),formula=y~x+0,method="lm", fullrange=TRUE,col='blue',alpha=0.2)+
+    #ggpubr::stat_cor(aes(mean_gfp,alpha_gfp),method = "pearson",size=4, label.y.npc = 0.8,label.x.npc = 0)+
+    #ggpubr::stat_regline_equation(aes(mean_gfp,alpha_gfp),formula=y~x+0,size=4,label.y.npc = 1,label.x.npc = 0)+
+  #facet_wrap(~condition,scale="free")+
+  scale_color_manual(values = mycolors)+
+  theme_cowplot()+
+  xlab("<Concentration>, mother Machine, #GFP/um3")+
+  ylab("<alpha_gfp>, bulk, GFU/OD")+
+  labs(subtitle=("Bulk (chromosomal) vs Mother Machine (chromosome) "))
+```
+
+# SUPERIMPOSED LOG
+
+```{r}
+#conversion_table <- tibble(condition=c("acetate","glycerol","glucose"),cell_ul_od=c(3783466,3877561,2703263))
+conversion_table <- tibble(condition=c("acetate","glycerol","glucose","glucoseaa"),cell_ul_od=c(3557293,3672777,2454829,2241553))
+#
+
+cell_vol_df <- myframes_to_mycells %>% 
+  group_by(condition) %>% 
+  mutate(volume_um=((length_um-width_um)*(width_um/2)**2*3.14)+4/3*3.14*(width_um/2)**3,
+         mean_vol=mean(volume_um,na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  distinct(condition,mean_vol) %>% 
+  left_join(conversion_table,by=c("condition"))
+
+#No need to go for a reference, I can simply check all ratios
+library(RColorBrewer)
+# Définissez le nombre de couleurs que vous voulez
+nb.cols <- 18
+mycolors <- colorRampPalette(brewer.pal(8, "Set1"))(nb.cols)
+
+myconcentrations$condition <- factor(myconcentrations$condition, levels = c("acetate","glycerol","glucose","glucoseaa"))
+
+mydata_wells <- mydata_gr_exp_summary %>%
+  separate(strain,into=c("vector","promoter")) %>%
+  filter(promoter %in% promoters_of_interest) %>% 
+  filter(vector=="ch") %>% 
+  filter(replica %in% c(1,2,3)) %>% 
+  filter(!((promoter=="med2") & (condition=="acetate") & (replica==3))) %>% 
+  distinct(promoter,condition,well,replica,.keep_all = TRUE) %>% 
+  left_join(cell_vol_df,by=c("condition")) %>% 
+  #filter(condition %in% c("acetate","glycerol","glucose")) %>% 
+  mutate(alpha_gfp=alpha_gfp/(cell_ul_od*200),
+         sd_alpha_gfp=sd_alpha_gfp/(cell_ul_od*200)) %>% #GFU/OD vs GFU/cell
+  select(promoter,condition,well,q,sd_q,replica,alpha_gfp,sd_alpha_gfp)
+    
+myconcentrations %>% 
+  arrange(condition) %>% 
+  #filter(condition %in% c("acetate","glycerol","glucose")) %>% 
+  ungroup() %>% 
+  left_join(mydata_wells,by=c("promoter","condition")) %>%
+  #mutate(ratio=mean_concentration_volume/alpha_gfp) %>%
+  ggplot()+
+  geom_point(aes(log(mean_gfp),log(alpha_gfp),col=condition),size=4)+
+  #geom_errorbar(aes(x=mean_gfp,ymax=alpha_gfp+sd_alpha_sgfp,ymin=alpha_gfp-sd_alpha_gfp))+
+  #geom_errorbarh(aes(y=alpha_gfp,xmax=mean_concentration_volume+sd_concentration_volume,xmin=mean_concentration_volume-sd_concentration_volume))+
+  #stat_smooth(aes(mean_gfp,alpha_gfp),formula=y~x+0,method="lm", fullrange=TRUE,col='blue',alpha=0.2)+
+    #ggpubr::stat_cor(aes(mean_gfp,alpha_gfp),method = "pearson",size=4, label.y.npc = 0.8,label.x.npc = 0)+
+    #ggpubr::stat_regline_equation(aes(mean_gfp,alpha_gfp),formula=y~x+0,size=4,label.y.npc = 1,label.x.npc = 0)+
+  #facet_wrap(~condition,scale="free")+
+  scale_color_manual(values = mycolors)+
+  theme_cowplot()+
+  xlab("<Concentration>, mother Machine, #GFP/um3")+
+  ylab("<alpha_gfp>, bulk, GFU/OD")+
+  labs(subtitle=("Bulk (chromosomal) vs Mother Machine (chromosome) "))
+```
+
+# SUPERIMPOSED LIN
+
+```{r}
+#conversion_table <- tibble(condition=c("acetate","glycerol","glucose"),cell_ul_od=c(3783466,3877561,2703263))
+conversion_table <- tibble(condition=c("acetate","glycerol","glucose","glucoseaa"),cell_ul_od=c(3557293,3672777,2454829,2241553))
+
+#
+
+cell_vol_df <- myframes_to_mycells %>% 
+  group_by(condition) %>% 
+  mutate(volume_um=((length_um-width_um)*(width_um/2)**2*3.14)+4/3*3.14*(width_um/2)**3,
+         mean_vol=mean(volume_um,na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  distinct(condition,mean_vol) %>% 
+  left_join(conversion_table,by=c("condition"))
+
+#No need to go for a reference, I can simply check all ratios
+library(RColorBrewer)
+# Définissez le nombre de couleurs que vous voulez
+nb.cols <- 18
+mycolors <- colorRampPalette(brewer.pal(8, "Set1"))(nb.cols)
+
+myconcentrations$condition <- factor(myconcentrations$condition, levels = c("acetate","glycerol","glucose","glucoseaa"))
+
+mydata_wells <- mydata_gr_exp_summary %>%
+  separate(strain,into=c("vector","promoter")) %>%
+  filter(promoter %in% promoters_of_interest) %>% 
+  filter(vector=="ch") %>% 
+  filter(replica %in% c(1,2,3)) %>% 
+  filter(!((promoter=="med2") & (condition=="acetate") & (replica==3))) %>% 
+  distinct(promoter,condition,well,replica,.keep_all = TRUE) %>% 
+  left_join(cell_vol_df,by=c("condition")) %>% 
+  #filter(condition %in% c("acetate","glycerol","glucose")) %>% 
+  mutate(alpha_gfp=alpha_gfp/(cell_ul_od*200),
+         sd_alpha_gfp=sd_alpha_gfp/(cell_ul_od*200)) %>% #GFU/OD vs GFU/cell
+  select(promoter,condition,well,q,sd_q,replica,alpha_gfp,sd_alpha_gfp)
+    
+myconcentrations %>% 
+  arrange(condition) %>% 
+  #filter(condition %in% c("acetate","glycerol","glucose")) %>% 
+  ungroup() %>% 
+  left_join(mydata_wells,by=c("promoter","condition")) %>%
+  #mutate(ratio=mean_concentration_volume/alpha_gfp) %>%
+  ggplot()+
+  geom_point(aes(mean_gfp,alpha_gfp,col=condition),size=4)+
+  #geom_errorbar(aes(x=mean_gfp,ymax=alpha_gfp+sd_alpha_sgfp,ymin=alpha_gfp-sd_alpha_gfp))+
+  #geom_errorbarh(aes(y=alpha_gfp,xmax=mean_concentration_volume+sd_concentration_volume,xmin=mean_concentration_volume-sd_concentration_volume))+
+  #stat_smooth(aes(mean_gfp,alpha_gfp),formula=y~x+0,method="lm", fullrange=TRUE,col='blue',alpha=0.2)+
+    #ggpubr::stat_cor(aes(mean_gfp,alpha_gfp),method = "pearson",size=4, label.y.npc = 0.8,label.x.npc = 0)+
+    #ggpubr::stat_regline_equation(aes(mean_gfp,alpha_gfp),formula=y~x+0,size=4,label.y.npc = 1,label.x.npc = 0)+
+  #facet_wrap(~condition,scale="free")+
+  scale_color_manual(values = mycolors)+
+  theme_cowplot()+
+  xlab("<Concentration>, mother Machine, #GFP/um3")+
+  ylab("<alpha_gfp>, bulk, GFU/OD")+
+  labs(subtitle=("Bulk (chromosomal) vs Mother Machine (chromosome) "))
+```
+
+#WITHOUT THE FACS SCALING FACTOR LOG
+
+```{r}
+#conversion_table <- tibble(condition=c("acetate","glycerol","glucose"),cell_ul_od=c(3783466,3877561,2703263))
+conversion_table <- tibble(condition=c("acetate","glycerol","glucose","glucoseaa"),cell_ul_od=c(3557293,3672777,2454829,2241553))
+
+
+cell_vol_df <- myframes_to_mycells %>% 
+  group_by(condition) %>% 
+  mutate(volume_um=((length_um-width_um)*(width_um/2)**2*3.14)+4/3*3.14*(width_um/2)**3,
+         mean_vol=mean(volume_um,na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  distinct(condition,mean_vol) %>% 
+  left_join(conversion_table,by=c("condition"))
+
+#No need to go for a reference, I can simply check all ratios
+library(RColorBrewer)
+# Définissez le nombre de couleurs que vous voulez
+nb.cols <- 18
+mycolors <- colorRampPalette(brewer.pal(8, "Set1"))(nb.cols)
+
+myconcentrations$condition <- factor(myconcentrations$condition, levels = c("acetate","glycerol","glucose","glucoseaa"))
+
+mydata_wells <- mydata_gr_exp_summary %>%
+  separate(strain,into=c("vector","promoter")) %>%
+  filter(promoter %in% promoters_of_interest) %>% 
+  filter(vector=="ch") %>% 
+  filter(replica %in% c(1,2,3)) %>% 
+  filter(!((promoter=="med2") & (condition=="acetate") & (replica==3))) %>% 
+  distinct(promoter,condition,well,replica,.keep_all = TRUE) %>% 
+  left_join(cell_vol_df,by=c("condition")) %>% 
+  #filter(condition %in% c("acetate","glycerol","glucose")) %>% 
+  mutate(alpha_gfp=alpha_gfp,
+         sd_alpha_gfp=sd_alpha_gfp) %>% #GFU/OD vs GFU/cell
+  select(promoter,condition,well,q,sd_q,replica,alpha_gfp,sd_alpha_gfp)
+    
+myconcentrations %>% 
+  arrange(condition) %>% 
+  #filter(condition %in% c("acetate","glycerol","glucose")) %>% 
+  ungroup() %>% 
+  left_join(mydata_wells,by=c("promoter","condition")) %>%
+  #mutate(ratio=mean_concentration_volume/alpha_gfp) %>%
+  ggplot()+
+  geom_point(aes(log(mean_gfp),log(alpha_gfp),col=condition),size=4)+
+  #geom_errorbar(aes(x=mean_gfp,ymax=alpha_gfp+sd_alpha_sgfp,ymin=alpha_gfp-sd_alpha_gfp))+
+  #geom_errorbarh(aes(y=alpha_gfp,xmax=mean_concentration_volume+sd_concentration_volume,xmin=mean_concentration_volume-sd_concentration_volume))+
+  #stat_smooth(aes(mean_gfp,alpha_gfp),formula=y~x+0,method="lm", fullrange=TRUE,col='blue',alpha=0.2)+
+    #ggpubr::stat_cor(aes(mean_gfp,alpha_gfp),method = "pearson",size=4, label.y.npc = 0.8,label.x.npc = 0)+
+    #ggpubr::stat_regline_equation(aes(mean_gfp,alpha_gfp),formula=y~x+0,size=4,label.y.npc = 1,label.x.npc = 0)+
+  #facet_wrap(~condition,scale="free")+
+  scale_color_manual(values = mycolors)+
+  theme_cowplot()+
+  xlab("<Concentration>, mother Machine, #GFP/um3")+
+  ylab("<alpha_gfp>, bulk, GFU/OD")+
+  labs(subtitle=("Bulk (chromosomal) vs Mother Machine (chromosome) "))
+```
+
+I have the feeling that everything more or less fall on the same line. Which means that, using this, experimental results in different condition become comparable?
+
+#WITHOUT THE FACS SCALING FACTOR LIN
+
+```{r}
+conversion_table <- tibble(condition=c("acetate","glycerol","glucose"),cell_ul_od=c(3783466,3877561,2703263))
+#conversion_table <- tibble(condition=c("acetate","glycerol","glucose"),cell_ul_od=c(3557293,3672777,2454829))
+#
+
+cell_vol_df <- myframes_to_mycells %>% 
+  group_by(condition) %>% 
+  mutate(volume_um=((length_um-width_um)*(width_um/2)**2*3.14)+4/3*3.14*(width_um/2)**3,
+         mean_vol=mean(volume_um,na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  distinct(condition,mean_vol) %>% 
+  left_join(conversion_table,by=c("condition"))
+
+#No need to go for a reference, I can simply check all ratios
+library(RColorBrewer)
+# Définissez le nombre de couleurs que vous voulez
+nb.cols <- 18
+mycolors <- colorRampPalette(brewer.pal(8, "Set1"))(nb.cols)
+
+myconcentrations$condition <- factor(myconcentrations$condition, levels = c("acetate","glycerol","glucose","glucoseaa"))
+
+mydata_wells <- mydata_gr_exp_summary %>%
+  separate(strain,into=c("vector","promoter")) %>%
+  filter(promoter %in% promoters_of_interest) %>% 
+  filter(vector=="ch") %>% 
+  filter(replica %in% c(1,2,3)) %>% 
+  filter(!((promoter=="med2") & (condition=="acetate") & (replica==3))) %>% 
+  distinct(promoter,condition,well,replica,.keep_all = TRUE) %>% 
+  left_join(cell_vol_df,by=c("condition")) %>% 
+  #filter(condition %in% c("acetate","glycerol","glucose")) %>% 
+  mutate(alpha_gfp=alpha_gfp,
+         sd_alpha_gfp=sd_alpha_gfp) %>% #GFU/OD vs GFU/cell
+  select(promoter,condition,well,q,sd_q,replica,alpha_gfp,sd_alpha_gfp)
+    
+myconcentrations %>% 
+  arrange(condition) %>% 
+  #filter(condition %in% c("acetate","glycerol","glucose")) %>% 
+  ungroup() %>% 
+  left_join(mydata_wells,by=c("promoter","condition")) %>%
+  #mutate(ratio=mean_concentration_volume/alpha_gfp) %>%
+  ggplot()+
+  geom_point(aes(mean_gfp,alpha_gfp,col=condition),size=4)+
+  #geom_errorbar(aes(x=mean_gfp,ymax=alpha_gfp+sd_alpha_sgfp,ymin=alpha_gfp-sd_alpha_gfp))+
+  #geom_errorbarh(aes(y=alpha_gfp,xmax=mean_concentration_volume+sd_concentration_volume,xmin=mean_concentration_volume-sd_concentration_volume))+
+  #stat_smooth(aes(mean_gfp,alpha_gfp),formula=y~x+0,method="lm", fullrange=TRUE,col='blue',alpha=0.2)+
+    #ggpubr::stat_cor(aes(mean_gfp,alpha_gfp),method = "pearson",size=4, label.y.npc = 0.8,label.x.npc = 0)+
+    #ggpubr::stat_regline_equation(aes(mean_gfp,alpha_gfp),formula=y~x+0,size=4,label.y.npc = 1,label.x.npc = 0)+
+  #facet_wrap(~condition,scale="free")+
+  scale_color_manual(values = mycolors)+
+  theme_cowplot()+
+  xlab("<Concentration>, mother Machine, #GFP/um3")+
+  ylab("<alpha_gfp>, bulk, GFU/OD")+
+  labs(subtitle=("Bulk (chromosomal) vs Mother Machine (chromosome) "))
+```
+
+# TRYING TO DECIPHER WHAT IS GOING ON
+
+Maybe the safest thing to do, is to compare these different measurements, without doing anything to the data.
+
+```{r}
+#conversion_table <- tibble(condition=c("acetate","glycerol","glucose"),cell_ul_od=c(3783466,3877561,2703263))
+#conversion_table <- tibble(condition=c("acetate","glycerol","glucose"),cell_ul_od=c(3557293,3672777,2454829))
+#
+
+cell_vol_df <- myframes_to_mycells %>% 
+  group_by(condition) %>% 
+  mutate(volume_um=((length_um-width_um)*(width_um/2)**2*3.14)+4/3*3.14*(width_um/2)**3,
+         mean_vol=mean(volume_um,na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  distinct(condition,mean_vol) %>% 
+  left_join(conversion_table,by=c("condition"))
+
+#No need to go for a reference, I can simply check all ratios
+library(RColorBrewer)
+# Définissez le nombre de couleurs que vous voulez
+nb.cols <- 18
+mycolors <- colorRampPalette(brewer.pal(8, "Set1"))(nb.cols)
+
+myconcentrations$condition <- factor(myconcentrations$condition, levels = c("acetate","glycerol","glucose","glucoseaa"))
+
+mydata_wells <- mydata_gr_exp_summary %>%
+  separate(strain,into=c("vector","promoter")) %>%
+  filter(promoter %in% promoters_of_interest) %>% 
+  filter(vector=="ch") %>% 
+  filter(replica %in% c(1,2,3)) %>% 
+  filter(!((promoter=="med2") & (condition=="acetate") & (replica==3))) %>% 
+  distinct(promoter,condition,well,replica,.keep_all = TRUE) %>% 
+  left_join(cell_vol_df,by=c("condition")) %>% 
+  #filter(condition %in% c("acetate","glycerol","glucose")) %>% 
+  mutate(alpha_gfp=alpha_gfp,
+         sd_alpha_gfp=sd_alpha_gfp) %>% #GFU/OD vs GFU/cell
+  select(promoter,condition,well,q,sd_q,replica,alpha_gfp,sd_alpha_gfp)
+    
+myconcentrations %>% 
+  arrange(condition) %>% 
+  #filter(condition %in% c("acetate","glycerol","glucose")) %>% 
+  ungroup() %>% 
+  left_join(mydata_wells,by=c("promoter","condition")) %>%
+  #mutate(ratio=mean_concentration_volume/alpha_gfp) %>%
+  ggplot()+
+  geom_point(aes(mean_concentration_volume,alpha_gfp,col=condition),size=4)+
+  #geom_errorbar(aes(x=mean_gfp,ymax=alpha_gfp+sd_alpha_sgfp,ymin=alpha_gfp-sd_alpha_gfp))+
+  #geom_errorbarh(aes(y=alpha_gfp,xmax=mean_concentration_volume+sd_concentration_volume,xmin=mean_concentration_volume-sd_concentration_volume))+
+  #stat_smooth(aes(mean_gfp,alpha_gfp),formula=y~x+0,method="lm", fullrange=TRUE,col='blue',alpha=0.2)+
+    #ggpubr::stat_cor(aes(mean_gfp,alpha_gfp),method = "pearson",size=4, label.y.npc = 0.8,label.x.npc = 0)+
+    #ggpubr::stat_regline_equation(aes(mean_gfp,alpha_gfp),formula=y~x+0,size=4,label.y.npc = 1,label.x.npc = 0)+
+  #facet_wrap(~condition,scale="free")+
+  scale_color_manual(values = mycolors)+
+  theme_cowplot()+
+  xlab("<Concentration>, mother Machine, #GFP/um3")+
+  ylab("<alpha_gfp>, bulk, GFU/OD")+
+  labs(subtitle=("Bulk (chromosomal) vs Mother Machine (chromosome) "))
+
+myconcentrations %>% 
+  arrange(condition) %>% 
+  #filter(condition %in% c("acetate","glycerol","glucose")) %>% 
+  ungroup() %>% 
+  left_join(mydata_wells,by=c("promoter","condition")) %>%
+  #mutate(ratio=mean_concentration_volume/alpha_gfp) %>%
+  ggplot()+
+  geom_point(aes(mean_concentration_volume,alpha_gfp,col=promoter),size=4)+
+  #geom_errorbar(aes(x=mean_gfp,ymax=alpha_gfp+sd_alpha_sgfp,ymin=alpha_gfp-sd_alpha_gfp))+
+  #geom_errorbarh(aes(y=alpha_gfp,xmax=mean_concentration_volume+sd_concentration_volume,xmin=mean_concentration_volume-sd_concentration_volume))+
+  stat_smooth(aes(mean_concentration_volume,alpha_gfp),formula=y~x+0,method="lm", fullrange=TRUE,col='blue',alpha=0.2)+
+    ggpubr::stat_cor(aes(mean_concentration_volume,alpha_gfp),method = "pearson",size=4, label.y.npc = 0.8,label.x.npc = 0)+
+    ggpubr::stat_regline_equation(aes(mean_concentration_volume,alpha_gfp),formula=y~x+0,size=4,label.y.npc = 1,label.x.npc = 0)+
+  facet_wrap(~interaction(condition,replica))+
+  scale_color_manual(values = mycolors)+
+  theme_cowplot()+
+  xlab("<Concentration>, mother Machine, #GFP/um3")+
+  ylab("<alpha_gfp>, bulk, GFU/OD")+
+  labs(subtitle=("Bulk (chromosomal) vs Mother Machine (chromosome) "))
+
+myconcentrations %>% 
+  arrange(condition) %>% 
+  #filter(condition %in% c("acetate","glycerol","glucose")) %>% 
+  ungroup() %>% 
+  left_join(mydata_wells,by=c("promoter","condition")) %>%
+  #mutate(ratio=mean_concentration_volume/alpha_gfp) %>%
+  ggplot()+
+  geom_point(aes(mean_concentration_volume,alpha_gfp,col=condition),size=4)+
+  #geom_errorbar(aes(x=mean_gfp,ymax=alpha_gfp+sd_alpha_sgfp,ymin=alpha_gfp-sd_alpha_gfp))+
+  #geom_errorbarh(aes(y=alpha_gfp,xmax=mean_concentration_volume+sd_concentration_volume,xmin=mean_concentration_volume-sd_concentration_volume))+
+  stat_smooth(aes(mean_concentration_volume,alpha_gfp),formula=y~x+0,method="lm", fullrange=TRUE,col='blue',alpha=0.2)+
+    ggpubr::stat_cor(aes(mean_concentration_volume,alpha_gfp),method = "pearson",size=4, label.y.npc = 0.8,label.x.npc = 0)+
+    ggpubr::stat_regline_equation(aes(mean_concentration_volume,alpha_gfp),formula=y~x+0,size=4,label.y.npc = 1,label.x.npc = 0)+
+  facet_wrap(~interaction(promoter),scale="free")+  scale_color_manual(values = mycolors)+
+  theme_cowplot()+
+  xlab("<Concentration>, mother Machine, #GFP/um3")+
+  ylab("<alpha_gfp>, bulk, GFU/OD")+
+  labs(subtitle=("Bulk (chromosomal) vs Mother Machine (chromosome) "))
+
+mydata_wells <- mydata_gr_exp_summary %>%
+  separate(strain,into=c("vector","promoter")) %>%
+  filter(promoter %in% promoters_of_interest) %>% 
+  filter(vector=="pl") %>% 
+  filter(replica %in% c(1,2,3)) %>% 
+  filter(!((promoter=="med2") & (condition=="acetate") & (replica==3))) %>% 
+  distinct(promoter,condition,well,replica,.keep_all = TRUE) %>% 
+  left_join(cell_vol_df,by=c("condition")) %>% 
+  #filter(condition %in% c("acetate","glycerol","glucose")) %>% 
+  mutate(alpha_gfp=alpha_gfp,
+         sd_alpha_gfp=sd_alpha_gfp) %>% #GFU/OD vs GFU/cell
+  select(promoter,condition,well,q,sd_q,replica,alpha_gfp,sd_alpha_gfp)
+
+myconcentrations %>% 
+  arrange(condition) %>% 
+  #filter(condition %in% c("acetate","glycerol","glucose")) %>% 
+  ungroup() %>% 
+  left_join(mydata_wells,by=c("promoter","condition")) %>%
+  #mutate(ratio=mean_concentration_volume/alpha_gfp) %>%
+  ggplot()+
+  geom_point(aes(mean_concentration_volume,alpha_gfp,col=condition),size=4)+
+  #geom_errorbar(aes(x=mean_gfp,ymax=alpha_gfp+sd_alpha_sgfp,ymin=alpha_gfp-sd_alpha_gfp))+
+  #geom_errorbarh(aes(y=alpha_gfp,xmax=mean_concentration_volume+sd_concentration_volume,xmin=mean_concentration_volume-sd_concentration_volume))+
+  stat_smooth(aes(mean_concentration_volume,alpha_gfp),formula=y~x+0,method="lm", fullrange=TRUE,col='blue',alpha=0.2)+
+    ggpubr::stat_cor(aes(mean_concentration_volume,alpha_gfp),method = "pearson",size=4, label.y.npc = 0.8,label.x.npc = 0)+
+    ggpubr::stat_regline_equation(aes(mean_concentration_volume,alpha_gfp),formula=y~x+0,size=4,label.y.npc = 1,label.x.npc = 0)+
+  facet_wrap(~interaction(promoter,replicate),scale="free")+
+  scale_color_manual(values = mycolors)+
+  theme_cowplot()+
+  xlab("<Concentration>, mother Machine, #GFP/um3")+
+  ylab("<alpha_gfp>, bulk, GFU/OD")+
+  labs(subtitle=("Bulk (plasmid) vs Mother Machine (chromosome) "))
+```
+Things appear non monotonous...
+Condition by conditions things seem very robust.
+Actually, between replicates, some systematic biases appear.
+Such as: hi1 is always below the expected value as per alpha_gfp.
+And rrnB is always slightly above.
+
+
+
+
+
+
+
+When cells grow faster, cells are getting bigger. So alpha_gfp should go down in comparison with mean_gfp.
+Now what happens if I look instead at mean_concentration?
+
+```{r}
+#conversion_table <- tibble(condition=c("acetate","glycerol","glucose"),cell_ul_od=c(3783466,3877561,2703263))
+#conversion_table <- tibble(condition=c("acetate","glycerol","glucose"),cell_ul_od=c(3557293,3672777,2454829))
+#
+
+cell_vol_df <- myframes_to_mycells %>% 
+  group_by(condition) %>% 
+  mutate(volume_um=((length_um-width_um)*(width_um/2)**2*3.14)+4/3*3.14*(width_um/2)**3,
+         mean_vol=mean(volume_um,na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  distinct(condition,mean_vol) %>% 
+  left_join(conversion_table,by=c("condition"))
+
+#No need to go for a reference, I can simply check all ratios
+library(RColorBrewer)
+# Définissez le nombre de couleurs que vous voulez
+nb.cols <- 18
+mycolors <- colorRampPalette(brewer.pal(8, "Set1"))(nb.cols)
+
+myconcentrations$condition <- factor(myconcentrations$condition, levels = c("acetate","glycerol","glucose","glucoseaa"))
+
+mydata_wells <- mydata_gr_exp_summary %>%
+  separate(strain,into=c("vector","promoter")) %>%
+  filter(promoter %in% promoters_of_interest) %>% 
+  filter(vector=="ch") %>% 
+  filter(replica %in% c(1,2,3)) %>% 
+  filter(!((promoter=="med2") & (condition=="acetate") & (replica==3))) %>% 
+  distinct(promoter,condition,well,replica,.keep_all = TRUE) %>% 
+  left_join(cell_vol_df,by=c("condition")) %>% 
+  #filter(condition %in% c("acetate","glycerol","glucose")) %>% 
+  mutate(alpha_gfp=alpha_gfp,
+         sd_alpha_gfp=sd_alpha_gfp) %>% #GFU/OD vs GFU/cell
+  select(promoter,condition,well,q,sd_q,replica,alpha_gfp,sd_alpha_gfp)
+    
+myconcentrations %>% 
+  arrange(condition) %>% 
+  #filter(condition %in% c("acetate","glycerol","glucose")) %>% 
+  ungroup() %>% 
+  left_join(mydata_wells,by=c("promoter","condition")) %>%
+  #mutate(ratio=mean_concentration_volume/alpha_gfp) %>%
+  ggplot()+
+  geom_point(aes(mean_concentration_length,alpha_gfp,col=condition),size=4)+
+  #geom_errorbar(aes(x=mean_gfp,ymax=alpha_gfp+sd_alpha_sgfp,ymin=alpha_gfp-sd_alpha_gfp))+
+  #geom_errorbarh(aes(y=alpha_gfp,xmax=mean_concentration_volume+sd_concentration_volume,xmin=mean_concentration_volume-sd_concentration_volume))+
+  #stat_smooth(aes(mean_gfp,alpha_gfp),formula=y~x+0,method="lm", fullrange=TRUE,col='blue',alpha=0.2)+
+    #ggpubr::stat_cor(aes(mean_gfp,alpha_gfp),method = "pearson",size=4, label.y.npc = 0.8,label.x.npc = 0)+
+    #ggpubr::stat_regline_equation(aes(mean_gfp,alpha_gfp),formula=y~x+0,size=4,label.y.npc = 1,label.x.npc = 0)+
+  #facet_wrap(~condition,scale="free")+
+  scale_color_manual(values = mycolors)+
+  theme_cowplot()+
+  xlab("<Concentration>, mother Machine, #GFP/um3")+
+  ylab("<alpha_gfp>, bulk, GFU/OD")+
+  labs(subtitle=("Bulk (chromosomal) vs Mother Machine (chromosome) "))
+
+myconcentrations %>% 
+  arrange(condition) %>% 
+  #filter(condition %in% c("acetate","glycerol","glucose")) %>% 
+  ungroup() %>% 
+  left_join(mydata_wells,by=c("promoter","condition")) %>%
+  #mutate(ratio=mean_concentration_volume/alpha_gfp) %>%
+  ggplot()+
+  geom_point(aes(mean_concentration_length,alpha_gfp,col=condition),size=4)+
+  #geom_errorbar(aes(x=mean_gfp,ymax=alpha_gfp+sd_alpha_sgfp,ymin=alpha_gfp-sd_alpha_gfp))+
+  #geom_errorbarh(aes(y=alpha_gfp,xmax=mean_concentration_volume+sd_concentration_volume,xmin=mean_concentration_volume-sd_concentration_volume))+
+  stat_smooth(aes(mean_concentration_length,alpha_gfp),formula=y~x+0,method="lm", fullrange=TRUE,col='blue',alpha=0.2)+
+    ggpubr::stat_cor(aes(mean_concentration_length,alpha_gfp),method = "pearson",size=4, label.y.npc = 0.8,label.x.npc = 0)+
+    ggpubr::stat_regline_equation(aes(mean_concentration_length,alpha_gfp),formula=y~x+0,size=4,label.y.npc = 1,label.x.npc = 0)+
+  facet_wrap(~condition)+
+  scale_color_manual(values = mycolors)+
+  theme_cowplot()+
+  xlab("<Concentration>, mother Machine, #GFP/um3")+
+  ylab("<alpha_gfp>, bulk, GFU/OD")+
+  labs(subtitle=("Bulk (chromosomal) vs Mother Machine (chromosome) "))
+```
+
+
+# NOW WITH EVERYTHING SUPERIMPOSED PL
+
+```{r}
+#conversion_table <- tibble(condition=c("acetate","glycerol","glucose"),cell_ul_od=c(3783466,3877561,2703263))
+conversion_table <- tibble(condition=c("acetate","glycerol","glucose"),cell_ul_od=c(3557293,3672777,2454829))
+#
+
+cell_vol_df <- myframes_to_mycells %>% 
+  group_by(condition) %>% 
+  mutate(volume_um=((length_um-width_um)*(width_um/2)**2*3.14)+4/3*3.14*(width_um/2)**3,
+         mean_vol=mean(volume_um,na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  distinct(condition,mean_vol) %>% 
+  left_join(conversion_table,by=c("condition"))
+
+#No need to go for a reference, I can simply check all ratios
+library(RColorBrewer)
+# Définissez le nombre de couleurs que vous voulez
+nb.cols <- 18
+mycolors <- colorRampPalette(brewer.pal(8, "Set2"))(nb.cols)
+
+myconcentrations$condition <- factor(myconcentrations$condition, levels = c("acetate","glycerol","glucose","glucoseaa"))
+
+mydata_wells <- mydata_gr_exp_summary %>%
+  separate(strain,into=c("vector","promoter")) %>%
+  filter(promoter %in% promoters_of_interest) %>%
+  filter(vector=="pl") %>% 
+  #filter(replica==3) %>% 
+  filter(!((promoter=="med2") & (condition=="acetate") & (replica==3))) %>% 
+  distinct(promoter,condition,well,replica,.keep_all = TRUE) %>% 
+  left_join(cell_vol_df,by=c("condition")) %>% 
+  filter(condition %in% c("acetate","glycerol","glucose")) %>% 
+  mutate(alpha_gfp=alpha_gfp/(cell_ul_od*200*mean_vol),
+         sd_alpha_gfp=sd_alpha_gfp/(cell_ul_od*200*mean_vol)) %>% #GFU/OD vs GFU/cell
+  select(promoter,condition,well,q,sd_q,replica,alpha_gfp,sd_alpha_gfp)
+    
+myconcentrations %>% 
+  arrange(condition) %>% 
+  filter(condition %in% c("acetate","glycerol","glucose")) %>% 
+  ungroup() %>% 
+  left_join(mydata_wells,by=c("promoter","condition")) %>%
+  #mutate(ratio=mean_concentration_volume/alpha_gfp) %>%
+  ggplot()+
+  geom_point(aes(mean_concentration_volume,alpha_gfp,col=condition),size=4)+
+  #geom_errorbar(aes(x=mean_gfp,ymax=alpha_gfp+sd_alpha_gfp,ymin=alpha_gfp-sd_alpha_gfp))+
+  #geom_errorbarh(aes(y=alpha_gfp,xmax=mean_concentration_volume+sd_concentration_volume,xmin=mean_concentration_volume-sd_concentration_volume))+
+  #stat_smooth(aes(mean_gfp,alpha_gfp),formula=y~x+0,method="lm", fullrange=TRUE,col='blue',alpha=0.2)+
+    #ggpubr::stat_cor(aes(mean_gfp,alpha_gfp),method = "pearson",size=4, label.y.npc = 0.8,label.x.npc = 0)+
+    #ggpubr::stat_regline_equation(aes(mean_gfp,alpha_gfp),formula=y~x+0,size=4,label.y.npc = 1,label.x.npc = 0)+
+  #facet_wrap(~condition,scale="free")+
+  scale_color_manual(values = mycolors)+
+  theme_cowplot()+
+  xlab("<Concentration>, mother Machine, #GFP/um3")+
+  ylab("<alpha_gfp>, bulk, GFU/OD")+
+  labs(subtitle=("Bulk (chromosomal) vs Mother Machine (chromosome) "))
+```
+
+
+```{r}
+#conversion_table <- tibble(condition=c("acetate","glycerol","glucose"),cell_ul_od=c(3783466,3877561,2703263))
+conversion_table <- tibble(condition=c("acetate","glycerol","glucose"),cell_ul_od=c(3557293,3672777,2454829))
+#
+
+cell_vol_df <- myframes_to_mycells %>% 
+  group_by(condition) %>% 
+  mutate(volume_um=((length_um-width_um)*(width_um/2)**2*3.14)+4/3*3.14*(width_um/2)**3,
+         mean_vol=mean(volume_um,na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  distinct(condition,mean_vol) %>% 
+  left_join(conversion_table,by=c("condition"))
+
+#No need to go for a reference, I can simply check all ratios
+library(RColorBrewer)
+# Définissez le nombre de couleurs que vous voulez
+nb.cols <- 18
+mycolors <- colorRampPalette(brewer.pal(8, "Set2"))(nb.cols)
+
+myconcentrations$condition <- factor(myconcentrations$condition, levels = c("acetate","glycerol","glucose","glucoseaa"))
+
+mydata_wells <- mydata_gr_exp_summary %>%
+  separate(strain,into=c("vector","promoter")) %>%
+  filter(promoter %in% promoters_of_interest) %>%
+  filter(vector=="pl") %>% 
+  #filter(replica==3) %>% 
+  filter(!((promoter=="med2") & (condition=="acetate") & (replica==3))) %>% 
+  distinct(promoter,condition,well,replica,.keep_all = TRUE) %>% 
+  left_join(cell_vol_df,by=c("condition")) %>% 
+  filter(condition %in% c("acetate","glycerol","glucose")) %>% 
+  mutate(alpha_gfp=alpha_gfp,
+         sd_alpha_gfp=sd_alpha_gfp) %>% #GFU/OD vs GFU/cell
+  select(promoter,condition,well,q,sd_q,replica,alpha_gfp,sd_alpha_gfp)
+    
+myconcentrations %>% 
+  arrange(condition) %>% 
+  filter(condition %in% c("acetate","glycerol","glucose")) %>% 
+  ungroup() %>% 
+  left_join(mydata_wells,by=c("promoter","condition")) %>%
+  #mutate(ratio=mean_concentration_volume/alpha_gfp) %>%
+  ggplot()+
+  geom_point(aes(mean_concentration_volume,alpha_gfp,col=condition),size=4)+
+  #geom_errorbar(aes(x=mean_gfp,ymax=alpha_gfp+sd_alpha_gfp,ymin=alpha_gfp-sd_alpha_gfp))+
+  #geom_errorbarh(aes(y=alpha_gfp,xmax=mean_concentration_volume+sd_concentration_volume,xmin=mean_concentration_volume-sd_concentration_volume))+
+  #stat_smooth(aes(mean_gfp,alpha_gfp),formula=y~x+0,method="lm", fullrange=TRUE,col='blue',alpha=0.2)+
+    #ggpubr::stat_cor(aes(mean_gfp,alpha_gfp),method = "pearson",size=4, label.y.npc = 0.8,label.x.npc = 0)+
+    #ggpubr::stat_regline_equation(aes(mean_gfp,alpha_gfp),formula=y~x+0,size=4,label.y.npc = 1,label.x.npc = 0)+
+  #facet_wrap(~condition,scale="free")+
+  scale_color_manual(values = mycolors)+
+  theme_cowplot()+
+  xlab("<Concentration>, mother Machine, #GFP/um3")+
+  ylab("<alpha_gfp>, bulk, GFU/OD")+
+  labs(subtitle=("Bulk (chromosomal) vs Mother Machine (chromosome) "))
+```
+```{r}
+#conversion_table <- tibble(condition=c("acetate","glycerol","glucose"),cell_ul_od=c(3783466,3877561,2703263))
+conversion_table <- tibble(condition=c("acetate","glycerol","glucose"),cell_ul_od=c(3557293,3672777,2454829))
+#
+
+cell_vol_df <- myframes_to_mycells %>% 
+  group_by(condition) %>% 
+  mutate(volume_um=((length_um-width_um)*(width_um/2)**2*3.14)+4/3*3.14*(width_um/2)**3,
+         mean_vol=mean(volume_um,na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  distinct(condition,mean_vol) %>% 
+  left_join(conversion_table,by=c("condition"))
+
+#No need to go for a reference, I can simply check all ratios
+library(RColorBrewer)
+# Définissez le nombre de couleurs que vous voulez
+nb.cols <- 18
+mycolors <- colorRampPalette(brewer.pal(8, "Set2"))(nb.cols)
+
+myconcentrations$condition <- factor(myconcentrations$condition, levels = c("acetate","glycerol","glucose","glucoseaa"))
+
+mydata_wells <- mydata_gr_exp_summary %>%
+  separate(strain,into=c("vector","promoter")) %>%
+  filter(promoter %in% promoters_of_interest) %>%
+  filter(vector=="pl") %>% 
+  #filter(replica==3) %>% 
+  filter(!((promoter=="med2") & (condition=="acetate") & (replica==3))) %>% 
+  distinct(promoter,condition,well,replica,.keep_all = TRUE) %>% 
+  left_join(cell_vol_df,by=c("condition")) %>% 
+  filter(condition %in% c("acetate","glycerol","glucose")) %>% 
+  mutate(alpha_gfp=alpha_gfp/(cell_ul_od*200),
+         sd_alpha_gfp=sd_alpha_gfp/(cell_ul_od*200)) %>% #GFU/OD vs GFU/cell
+  select(promoter,condition,well,q,sd_q,replica,alpha_gfp,sd_alpha_gfp)
+    
+myconcentrations %>% 
+  arrange(condition) %>% 
+  filter(condition %in% c("acetate","glycerol","glucose")) %>% 
+  ungroup() %>% 
+  left_join(mydata_wells,by=c("promoter","condition")) %>%
+  #mutate(ratio=mean_concentration_volume/alpha_gfp) %>%
+  ggplot()+
+  geom_point(aes(mean_concentration_volume,alpha_gfp,col=condition),size=4)+
+  #geom_errorbar(aes(x=mean_gfp,ymax=alpha_gfp+sd_alpha_gfp,ymin=alpha_gfp-sd_alpha_gfp))+
+  #geom_errorbarh(aes(y=alpha_gfp,xmax=mean_concentration_volume+sd_concentration_volume,xmin=mean_concentration_volume-sd_concentration_volume))+
+  #stat_smooth(aes(mean_gfp,alpha_gfp),formula=y~x+0,method="lm", fullrange=TRUE,col='blue',alpha=0.2)+
+    #ggpubr::stat_cor(aes(mean_gfp,alpha_gfp),method = "pearson",size=4, label.y.npc = 0.8,label.x.npc = 0)+
+    #ggpubr::stat_regline_equation(aes(mean_gfp,alpha_gfp),formula=y~x+0,size=4,label.y.npc = 1,label.x.npc = 0)+
+  #facet_wrap(~condition,scale="free")+
+  scale_color_manual(values = mycolors)+
+  theme_cowplot()+
+  xlab("<Concentration>, mother Machine, #GFP/um3")+
+  ylab("<alpha_gfp>, bulk, GFU/OD")+
+  labs(subtitle=("Bulk (chromosomal) vs Mother Machine (chromosome) "))
+```
+
+
+
+
+# SUPERIMPOSED LOG, PL, GFU PER CELL
+
+```{r}
+#conversion_table <- tibble(condition=c("acetate","glycerol","glucose"),cell_ul_od=c(3783466,3877561,2703263))
+conversion_table <- tibble(condition=c("acetate","glycerol","glucose"),cell_ul_od=c(3557293,3672777,2454829))
+#
+
+cell_vol_df <- myframes_to_mycells %>% 
+  group_by(condition) %>% 
+  mutate(volume_um=((length_um-width_um)*(width_um/2)**2*3.14)+4/3*3.14*(width_um/2)**3,
+         mean_vol=mean(volume_um,na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  distinct(condition,mean_vol) %>% 
+  left_join(conversion_table,by=c("condition"))
+
+#No need to go for a reference, I can simply check all ratios
+library(RColorBrewer)
+# Définissez le nombre de couleurs que vous voulez
+nb.cols <- 18
+mycolors <- colorRampPalette(brewer.pal(8, "Set2"))(nb.cols)
+
+myconcentrations$condition <- factor(myconcentrations$condition, levels = c("acetate","glycerol","glucose","glucoseaa"))
+
+mydata_wells <- mydata_gr_exp_summary %>%
+  separate(strain,into=c("vector","promoter")) %>%
+  filter(promoter %in% promoters_of_interest) %>% 
+  filter(vector=="ch") %>% 
+  filter(replica %in% c(1,2,3)) %>% 
+  filter(!((promoter=="med2") & (condition=="acetate") & (replica==3))) %>% 
+  distinct(promoter,condition,well,replica,.keep_all = TRUE) %>% 
+  left_join(cell_vol_df,by=c("condition")) %>% 
+  filter(condition %in% c("acetate","glycerol","glucose")) %>% 
+  mutate(alpha_gfp=alpha_gfp/(cell_ul_od*200),
+         sd_alpha_gfp=sd_alpha_gfp/(cell_ul_od*200)) %>% #GFU/OD vs GFU/cell
+  select(promoter,condition,well,q,sd_q,replica,alpha_gfp,sd_alpha_gfp)
+    
+myconcentrations %>% 
+  arrange(condition) %>% 
+  filter(condition %in% c("acetate","glycerol","glucose")) %>% 
+  ungroup() %>% 
+  left_join(mydata_wells,by=c("promoter","condition")) %>%
+  #mutate(ratio=mean_concentration_volume/alpha_gfp) %>%
+  ggplot()+
+  geom_point(aes(log(mean_gfp),log(alpha_gfp),col=condition),size=4)+
+  #geom_errorbar(aes(x=mean_gfp,ymax=alpha_gfp+sd_alpha_sgfp,ymin=alpha_gfp-sd_alpha_gfp))+
+  #geom_errorbarh(aes(y=alpha_gfp,xmax=mean_concentration_volume+sd_concentration_volume,xmin=mean_concentration_volume-sd_concentration_volume))+
+  #stat_smooth(aes(mean_gfp,alpha_gfp),formula=y~x+0,method="lm", fullrange=TRUE,col='blue',alpha=0.2)+
+    #ggpubr::stat_cor(aes(mean_gfp,alpha_gfp),method = "pearson",size=4, label.y.npc = 0.8,label.x.npc = 0)+
+    #ggpubr::stat_regline_equation(aes(mean_gfp,alpha_gfp),formula=y~x+0,size=4,label.y.npc = 1,label.x.npc = 0)+
+  #facet_wrap(~condition,scale="free")+
+  scale_color_manual(values = mycolors)+
+  theme_cowplot()+
+  xlab("<Concentration>, mother Machine, #GFP/um3")+
+  ylab("<alpha_gfp>, bulk, GFU/OD")+
+  labs(subtitle=("Bulk (chromosomal) vs Mother Machine (chromosome) "))
+```
+
+# SUPERIMPOSED LIN
+
+```{r}
+#conversion_table <- tibble(condition=c("acetate","glycerol","glucose"),cell_ul_od=c(3783466,3877561,2703263))
+conversion_table <- tibble(condition=c("acetate","glycerol","glucose"),cell_ul_od=c(3557293,3672777,2454829))
+#
+
+cell_vol_df <- myframes_to_mycells %>% 
+  group_by(condition) %>% 
+  mutate(volume_um=((length_um-width_um)*(width_um/2)**2*3.14)+4/3*3.14*(width_um/2)**3,
+         mean_vol=mean(volume_um,na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  distinct(condition,mean_vol) %>% 
+  left_join(conversion_table,by=c("condition"))
+
+#No need to go for a reference, I can simply check all ratios
+library(RColorBrewer)
+# Définissez le nombre de couleurs que vous voulez
+nb.cols <- 18
+mycolors <- colorRampPalette(brewer.pal(8, "Set2"))(nb.cols)
+
+myconcentrations$condition <- factor(myconcentrations$condition, levels = c("acetate","glycerol","glucose","glucoseaa"))
+
+mydata_wells <- mydata_gr_exp_summary %>%
+  separate(strain,into=c("vector","promoter")) %>%
+  filter(promoter %in% promoters_of_interest) %>% 
+  filter(vector=="ch") %>% 
+  filter(replica %in% c(1,2,3)) %>% 
+  filter(!((promoter=="med2") & (condition=="acetate") & (replica==3))) %>% 
+  distinct(promoter,condition,well,replica,.keep_all = TRUE) %>% 
+  left_join(cell_vol_df,by=c("condition")) %>% 
+  filter(condition %in% c("acetate","glycerol","glucose")) %>% 
+  mutate(alpha_gfp=alpha_gfp/(cell_ul_od*200),
+         sd_alpha_gfp=sd_alpha_gfp/(cell_ul_od*200)) %>% #GFU/OD vs GFU/cell
+  select(promoter,condition,well,q,sd_q,replica,alpha_gfp,sd_alpha_gfp)
+    
+myconcentrations %>% 
+  arrange(condition) %>% 
+  filter(condition %in% c("acetate","glycerol","glucose")) %>% 
+  ungroup() %>% 
+  left_join(mydata_wells,by=c("promoter","condition")) %>%
+  #mutate(ratio=mean_concentration_volume/alpha_gfp) %>%
+  ggplot()+
+  geom_point(aes(mean_gfp,alpha_gfp,col=condition),size=4)+
+  #geom_errorbar(aes(x=mean_gfp,ymax=alpha_gfp+sd_alpha_sgfp,ymin=alpha_gfp-sd_alpha_gfp))+
+  #geom_errorbarh(aes(y=alpha_gfp,xmax=mean_concentration_volume+sd_concentration_volume,xmin=mean_concentration_volume-sd_concentration_volume))+
+  #stat_smooth(aes(mean_gfp,alpha_gfp),formula=y~x+0,method="lm", fullrange=TRUE,col='blue',alpha=0.2)+
+    #ggpubr::stat_cor(aes(mean_gfp,alpha_gfp),method = "pearson",size=4, label.y.npc = 0.8,label.x.npc = 0)+
+    #ggpubr::stat_regline_equation(aes(mean_gfp,alpha_gfp),formula=y~x+0,size=4,label.y.npc = 1,label.x.npc = 0)+
+  #facet_wrap(~condition,scale="free")+
+  scale_color_manual(values = mycolors)+
+  theme_cowplot()+
+  xlab("<Concentration>, mother Machine, #GFP/um3")+
+  ylab("<alpha_gfp>, bulk, GFU/OD")+
+  labs(subtitle=("Bulk (chromosomal) vs Mother Machine (chromosome) "))
+```
+
+
+#WITHOUT THE FACS SCALING FACTOR LOG
+
+```{r}
+conversion_table <- tibble(condition=c("acetate","glycerol","glucose"),cell_ul_od=c(3783466,3877561,2703263))
+#conversion_table <- tibble(condition=c("acetate","glycerol","glucose"),cell_ul_od=c(3557293,3672777,2454829))
+#
+
+cell_vol_df <- myframes_to_mycells %>% 
+  group_by(condition) %>% 
+  mutate(volume_um=((length_um-width_um)*(width_um/2)**2*3.14)+4/3*3.14*(width_um/2)**3,
+         mean_vol=mean(volume_um,na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  distinct(condition,mean_vol) %>% 
+  left_join(conversion_table,by=c("condition"))
+
+#No need to go for a reference, I can simply check all ratios
+library(RColorBrewer)
+# Définissez le nombre de couleurs que vous voulez
+nb.cols <- 18
+mycolors <- colorRampPalette(brewer.pal(8, "Set2"))(nb.cols)
+
+myconcentrations$condition <- factor(myconcentrations$condition, levels = c("acetate","glycerol","glucose","glucoseaa"))
+
+mydata_wells <- mydata_gr_exp_summary %>%
+  separate(strain,into=c("vector","promoter")) %>%
+  filter(promoter %in% promoters_of_interest) %>% 
+  filter(vector=="ch") %>% 
+  filter(replica %in% c(1,2,3)) %>% 
+  filter(!((promoter=="med2") & (condition=="acetate") & (replica==3))) %>% 
+  distinct(promoter,condition,well,replica,.keep_all = TRUE) %>% 
+  left_join(cell_vol_df,by=c("condition")) %>% 
+  filter(condition %in% c("acetate","glycerol","glucose")) %>% 
+  mutate(alpha_gfp=alpha_gfp,
+         sd_alpha_gfp=sd_alpha_gfp) %>% #GFU/OD vs GFU/cell
+  select(promoter,condition,well,q,sd_q,replica,alpha_gfp,sd_alpha_gfp)
+    
+myconcentrations %>% 
+  arrange(condition) %>% 
+  filter(condition %in% c("acetate","glycerol","glucose")) %>% 
+  ungroup() %>% 
+  left_join(mydata_wells,by=c("promoter","condition")) %>%
+  #mutate(ratio=mean_concentration_volume/alpha_gfp) %>%
+  ggplot()+
+  geom_point(aes(log(mean_gfp),log(alpha_gfp),col=condition),size=4)+
+  #geom_errorbar(aes(x=mean_gfp,ymax=alpha_gfp+sd_alpha_sgfp,ymin=alpha_gfp-sd_alpha_gfp))+
+  #geom_errorbarh(aes(y=alpha_gfp,xmax=mean_concentration_volume+sd_concentration_volume,xmin=mean_concentration_volume-sd_concentration_volume))+
+  #stat_smooth(aes(mean_gfp,alpha_gfp),formula=y~x+0,method="lm", fullrange=TRUE,col='blue',alpha=0.2)+
+    #ggpubr::stat_cor(aes(mean_gfp,alpha_gfp),method = "pearson",size=4, label.y.npc = 0.8,label.x.npc = 0)+
+    #ggpubr::stat_regline_equation(aes(mean_gfp,alpha_gfp),formula=y~x+0,size=4,label.y.npc = 1,label.x.npc = 0)+
+  #facet_wrap(~condition,scale="free")+
+  scale_color_manual(values = mycolors)+
+  theme_cowplot()+
+  xlab("<Concentration>, mother Machine, #GFP/um3")+
+  ylab("<alpha_gfp>, bulk, GFU/OD")+
+  labs(subtitle=("Bulk (chromosomal) vs Mother Machine (chromosome) "))
+```
+
+I have the feeling that everything more or less fall on the same line. Which means that, using this, experimental results in different condition become comparable?
+
+#WITHOUT THE FACS SCALING FACTOR LIN
+
+```{r}
+conversion_table <- tibble(condition=c("acetate","glycerol","glucose"),cell_ul_od=c(3783466,3877561,2703263))
+#conversion_table <- tibble(condition=c("acetate","glycerol","glucose"),cell_ul_od=c(3557293,3672777,2454829))
+#
+
+cell_vol_df <- myframes_to_mycells %>% 
+  group_by(condition) %>% 
+  mutate(volume_um=((length_um-width_um)*(width_um/2)**2*3.14)+4/3*3.14*(width_um/2)**3,
+         mean_vol=mean(volume_um,na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  distinct(condition,mean_vol) %>% 
+  left_join(conversion_table,by=c("condition"))
+
+#No need to go for a reference, I can simply check all ratios
+library(RColorBrewer)
+# Définissez le nombre de couleurs que vous voulez
+nb.cols <- 18
+mycolors <- colorRampPalette(brewer.pal(8, "Set2"))(nb.cols)
+
+myconcentrations$condition <- factor(myconcentrations$condition, levels = c("acetate","glycerol","glucose","glucoseaa"))
+
+mydata_wells <- mydata_gr_exp_summary %>%
+  separate(strain,into=c("vector","promoter")) %>%
+  filter(promoter %in% promoters_of_interest) %>% 
+  filter(vector=="ch") %>% 
+  filter(replica %in% c(1,2,3)) %>% 
+  filter(!((promoter=="med2") & (condition=="acetate") & (replica==3))) %>% 
+  distinct(promoter,condition,well,replica,.keep_all = TRUE) %>% 
+  left_join(cell_vol_df,by=c("condition")) %>% 
+  filter(condition %in% c("acetate","glycerol","glucose")) %>% 
+  mutate(alpha_gfp=alpha_gfp,
+         sd_alpha_gfp=sd_alpha_gfp) %>% #GFU/OD vs GFU/cell
+  select(promoter,condition,well,q,sd_q,replica,alpha_gfp,sd_alpha_gfp)
+    
+myconcentrations %>% 
+  arrange(condition) %>% 
+  filter(condition %in% c("acetate","glycerol","glucose")) %>% 
+  ungroup() %>% 
+  left_join(mydata_wells,by=c("promoter","condition")) %>%
+  #mutate(ratio=mean_concentration_volume/alpha_gfp) %>%
+  ggplot()+
+  geom_point(aes(mean_gfp,alpha_gfp,col=condition),size=4)+
+  #geom_errorbar(aes(x=mean_gfp,ymax=alpha_gfp+sd_alpha_sgfp,ymin=alpha_gfp-sd_alpha_gfp))+
+  #geom_errorbarh(aes(y=alpha_gfp,xmax=mean_concentration_volume+sd_concentration_volume,xmin=mean_concentration_volume-sd_concentration_volume))+
+  #stat_smooth(aes(mean_gfp,alpha_gfp),formula=y~x+0,method="lm", fullrange=TRUE,col='blue',alpha=0.2)+
+    #ggpubr::stat_cor(aes(mean_gfp,alpha_gfp),method = "pearson",size=4, label.y.npc = 0.8,label.x.npc = 0)+
+    #ggpubr::stat_regline_equation(aes(mean_gfp,alpha_gfp),formula=y~x+0,size=4,label.y.npc = 1,label.x.npc = 0)+
+  #facet_wrap(~condition,scale="free")+
+  scale_color_manual(values = mycolors)+
+  theme_cowplot()+
+  xlab("<Concentration>, mother Machine, #GFP/um3")+
+  ylab("<alpha_gfp>, bulk, GFU/OD")+
+  labs(subtitle=("Bulk (chromosomal) vs Mother Machine (chromosome) "))
+```
+
+
+```{r}
+#No need to go for a reference, I can simply check all ratios
+library(RColorBrewer)
+# Définissez le nombre de couleurs que vous voulez
+nb.cols <- 18
+mycolors <- colorRampPalette(brewer.pal(8, "Set1"))(nb.cols)
+
+myconcentrations$condition <- factor(myconcentrations$condition, levels = c("acetate","glycerol","glucose","glucoseaa"))
+
+mydata_wells <- mydata_gr_exp_summary %>%
+  separate(strain,into=c("vector","promoter")) %>%
+  filter(promoter %in% promoters_of_interest) %>% 
+  filter(vector=="pl") %>% 
+  distinct(promoter,condition,well,replica,.keep_all = TRUE) %>% 
+  select(promoter,condition,well,q,sd_q,replica,alpha_gfp,sd_alpha_gfp)
+    
+for(c in unique(myconcentrations$condition)){
+p1 <- myconcentrations %>% 
+  filter(condition==c) %>% 
+  arrange(condition) %>% 
+  ungroup() %>% 
+  left_join(mydata_wells,by=c("promoter","condition")) %>%
+  ggplot()+
+  geom_point(aes(mean_concentration_volume,alpha_gfp,col=promoter),size=4)+
+  geom_errorbar(aes(x=mean_concentration_volume,ymax=alpha_gfp+sd_alpha_gfp,ymin=alpha_gfp-sd_alpha_gfp))+
+  geom_errorbarh(aes(y=alpha_gfp,xmax=mean_concentration_volume+sd_concentration_volume,xmin=mean_concentration_volume-sd_concentration_volume))+
+  #geom_abline(aes(slope=1,intercept=0))+
+  facet_wrap(~condition,scale="free")+
+  scale_color_manual(values = mycolors)+
+  theme_cowplot()+
+  xlab("<Concentration>, mother Machine, #GFP/um3/min")+
+  ylab("<Concentration>, bulk, GFU/OD/min")+
+  labs(subtitle=(sprintf("Bulk (plasmid) vs Mother Machine (chromosome), %s",c)))
+
+xm <- model_results_df$xmax[model_results_df$condition==c]
+.x <- seq(0,xm,length.out=50)
+.alpha <- as.double(model_results_df$alpha[model_results_df$condition==c])
+.beta <- as.double(model_results_df$beta[model_results_df$condition==c])
+.b <- .beta*.x
+.y <- .alpha*(1-exp(.b))
+dd <- tibble(.x,.y)
+print(p1+geom_line(data=dd,aes(x=.x,y=.y),col="red")+
+        geom_line(data=dd,aes(x=.x,y=-.x*(.alpha*.beta))))
+}
+```
+
+```{r}
+model_results_df %>% 
+  mutate(alpha=as.double(alpha)) %>% 
+  mutate(beta=as.double(beta)) %>% 
+  mutate(slope_origin=-alpha*beta)
+```
+
+Are there experiments much better than the other ones?
+This slope at origin should be in agreement with FACS data from David.
+
+Different replica giving different results (1 and 2 only).
+Between acetate and the rest, it is pretty high.
+
+```{r}
+#No need to go for a reference, I can simply check all ratios
+library(RColorBrewer)
+# Définissez le nombre de couleurs que vous voulez
+nb.cols <- 18
+mycolors <- colorRampPalette(brewer.pal(8, "Set1"))(nb.cols)
+
+myconcentrations$condition <- factor(myconcentrations$condition, levels = c("acetate","glycerol","glucose","glucoseaa"))
+
+mydata_wells <- mydata_gr_exp_summary %>%
+  separate(strain,into=c("vector","promoter")) %>%
+  filter(promoter %in% promoters_of_interest) %>% 
+  filter(vector=="pl") %>% 
+  distinct(promoter,condition,well,replica,.keep_all = TRUE) %>% 
+  select(promoter,condition,well,q,sd_q,replica,alpha_gfp,sd_alpha_gfp)
+    
+for(c in unique(myconcentrations$condition)){
+p1 <- myconcentrations %>% 
+  filter(condition==c) %>% 
+  arrange(condition) %>% 
+  ungroup() %>% 
+  left_join(mydata_wells,by=c("promoter","condition")) %>%
+  ggplot()+
+  geom_point(aes(q_mm,q,col=promoter),size=4)+
+  #geom_line(aes(q_mm,exp(beta)*q_mm**(slope_mm_bulk)),col="red")+
+  geom_errorbar(aes(x=q_mm,ymax=q+sd_q,ymin=q-sd_q))+
+  geom_errorbarh(aes(y=q,xmax=q_mm+sd_q_mm,xmin=q_mm-sd_q_mm))+
+  #stat_smooth(aes(q_mm,q),method="lm", fullrange=TRUE,col='blue',alpha=0.2)+
+    #ggpubr::stat_cor(aes(logq_mm),log(q)),method = "pearson",size=4, label.y.npc = 0.8,label.x.npc = 0)+
+    #ggpubr::stat_regline_equation(aes(log(q_mm),log(q)),size=4,label.y.npc = 1,label.x.npc = 0)+
+  facet_wrap(~condition,scale="free")+
+  scale_color_manual(values = mycolors)+
+  theme_cowplot()+
+  xlab("log(<Production>), mother Machine, #GFP/um3/min")+
+  ylab("log(<Production>), bulk, GFU/OD/min")+
+  labs(subtitle=(sprintf("Bulk (plasmid) vs Mother Machine (chromosome), %s",c)))
+
+xm <- model_results_df$xmax[model_results_df$condition==c]
+.x <- seq(0,xm,length.out=50)
+.alpha <- as.double(model_results_df$alpha[model_results_df$condition==c])
+.beta <- as.double(model_results_df$beta[model_results_df$condition==c])
+.b <- .beta*.x
+.y <- .alpha*(1-exp(.b))
+dd <- tibble(.x,.y)
+print(p1+geom_line(data=dd,aes(x=.x,y=.y),col="red"))
+}
+```
+That's clearly better, but again, I have to specify some error bars.
+I think this relationship is coming from the fact that the spectro, somehow is saturated. It does not have a linear response. That or the fact that the microscope is unsaturated... which I do not believe.
+Here, I will simply add a scaling factor to the production.
+
+So given, a known Q, I should be able to tell, what is the real production. I therefore need to revert that relationship.
+
+So that I can predict the production (in terms of #GFP/um/min) as a function of the production in the spectro.
+
+```{r}
+#No need to go for a reference, I can simply check all ratios
+library(RColorBrewer)
+# Définissez le nombre de couleurs que vous voulez
+nb.cols <- 18
+mycolors <- colorRampPalette(brewer.pal(8, "Set2"))(nb.cols)
+
+myconcentrations$condition <- factor(myconcentrations$condition, levels = c("acetate","glycerol","glucose","glucoseaa"))
+
+mydata_wells <- mydata_gr_exp_summary %>%
+  separate(strain,into=c("vector","promoter")) %>%
+  filter(promoter %in% promoters_of_interest) %>% 
+  filter(vector=="pl") %>% 
+  distinct(promoter,condition,well,replica,.keep_all = TRUE) %>% 
+  select(promoter,condition,well,q,sd_q,replica)
+    
+for(c in unique(myconcentrations$condition)){
+p1 <- myconcentrations %>% 
+  filter(condition==c) %>% 
+  arrange(condition) %>% 
+  ungroup() %>% 
+  left_join(mydata_wells,by=c("promoter","condition")) %>%
+  ggplot()+
+  geom_point(aes(q_mm,q,col=replica),size=4)+
+  #geom_line(aes(q_mm,exp(beta)*q_mm**(slope_mm_bulk)),col="red")+
+  geom_errorbar(aes(x=q_mm,ymax=q+sd_q,ymin=q-sd_q))+
+  geom_errorbarh(aes(y=q,xmax=q_mm+sd_q_mm,xmin=q_mm-sd_q_mm))+
+  #stat_smooth(aes(q_mm,q),method="lm", fullrange=TRUE,col='blue',alpha=0.2)+
+    #ggpubr::stat_cor(aes(logq_mm),log(q)),method = "pearson",size=4, label.y.npc = 0.8,label.x.npc = 0)+
+    #ggpubr::stat_regline_equation(aes(log(q_mm),log(q)),size=4,label.y.npc = 1,label.x.npc = 0)+
+  facet_wrap(~condition,scale="free")+
+  scale_color_manual(values = mycolors)+
+  theme_cowplot()+
+  xlab("log(<Production>), mother Machine, #GFP/um3/min")+
+  ylab("log(<Production>), bulk, GFU/OD/min")+
+  labs(subtitle=(sprintf("Bulk (plasmid) vs Mother Machine (chromosome), %s",c)))
+
+xm <- model_results_df$xmax[model_results_df$condition==c]
+.x <- seq(0,xm,length.out=50)
+.alpha <- as.double(model_results_df$alpha[model_results_df$condition==c])
+.beta <- as.double(model_results_df$beta[model_results_df$condition==c])
+.b <- .beta*.x
+.y <- .alpha*(1-exp(.b))
+dd <- tibble(.x,.y)
+print(p1+geom_line(data=dd,aes(x=.x,y=.y),col="red"))
+}
+```
+
+That's what I am afraid of. There are systematic variations. I guess I can simply apply this relationship to the uncertainty I have. And propagate the error.
+
+
+If this is due to fluorescence level, I should have less of a problem with chromosomal species.
+# TESTING THE FIT ON CHROMOSOMAL SPECIES
+
+```{r}
+mydata_wells <- mydata_gr_exp_summary %>%
+  separate(strain,into=c("vector","promoter")) %>%
+  filter(promoter %in% promoters_of_interest) %>% 
+  filter(vector=="ch") %>% 
+  distinct(promoter,condition,well,replica,.keep_all = TRUE) %>% 
+  select(promoter,condition,well,q,sd_q,replica,alpha_gfp,sd_alpha_gfp)
+
+tofit <- myconcentrations %>% 
+  arrange(condition) %>% 
+  ungroup() %>% 
+  left_join(mydata_wells,by=c("promoter","condition")) %>%
+  mutate(lq_mm=log(q_mm),
+         lq=log(q))
+
+model_results_df <- tibble(condition=c("acetate","glycerol","glucose","glucoseaa"),alpha=c("","","",""),beta=c("","","",""))
+
+for(c in unique(myconcentrations$condition)){
+  data <- tofit %>% 
+    filter(condition==c)
+  
+  alpha.0 <- max(data$alpha_gfp,na.rm=TRUE) * 1.1
+  model.0 <- lm(log(- alpha_gfp + alpha.0) ~ mean_concentration_volume, data=data)
+  #alpha.0 <- -exp(coef(model.0)[1])
+  beta.0 <- coef(model.0)[2]
+  
+  start <- list(alpha = alpha.0, beta = beta.0)
+  model <- nls(alpha_gfp ~ alpha * (1- exp(beta * mean_concentration_volume)), data = data, start = start)
+  plot(data$mean_concentration_volume, data$alpha_gfp)
+  lines(data$mean_concentration_volume, predict(model, list(x = data$mean_concentration_volume)), col = 'skyblue', lwd = 3)
+  print(c)
+  print(model)
+  
+  model_results_df$alpha[model_results_df$condition==c] <- coef(model)[[1]]
+  model_results_df$beta[model_results_df$condition==c] <- coef(model)[[2]]
+}
+
+model_results_df <- model_results_df %>% 
+  mutate(xmax=c(60000,120000,120000,60000))
+```
+
+```{r}
+#No need to go for a reference, I can simply check all ratios
+library(RColorBrewer)
+# Définissez le nombre de couleurs que vous voulez
+nb.cols <- 18
+mycolors <- colorRampPalette(brewer.pal(8, "Set1"))(nb.cols)
+
+myconcentrations$condition <- factor(myconcentrations$condition, levels = c("acetate","glycerol","glucose","glucoseaa"))
+
+mydata_wells <- mydata_gr_exp_summary %>%
+  separate(strain,into=c("vector","promoter")) %>%
+  filter(promoter %in% promoters_of_interest) %>% 
+  filter(vector=="pl") %>% 
+  distinct(promoter,condition,well,replica,.keep_all = TRUE) %>% 
+  select(promoter,condition,well,q,sd_q,replica,alpha_gfp,sd_alpha_gfp)
+    
+for(c in unique(myconcentrations$condition)){
+p1 <- myconcentrations %>% 
+  filter(condition==c) %>% 
+  arrange(condition) %>% 
+  ungroup() %>% 
+  left_join(mydata_wells,by=c("promoter","condition")) %>%
+  ggplot()+
+  geom_point(aes(mean_concentration_volume,alpha_gfp,col=promoter),size=4)+
+  geom_errorbar(aes(x=mean_concentration_volume,ymax=alpha_gfp+sd_alpha_gfp,ymin=alpha_gfp-sd_alpha_gfp))+
+  geom_errorbarh(aes(y=alpha_gfp,xmax=mean_concentration_volume+sd_concentration_volume,xmin=mean_concentration_volume-sd_concentration_volume))+
+  #geom_abline(aes(slope=1,intercept=0))+
+  facet_wrap(~condition,scale="free")+
+  scale_color_manual(values = mycolors)+
+  theme_cowplot()+
+  xlab("<Concentration>, mother Machine, #GFP/um3/min")+
+  ylab("<Concentration>, bulk, GFU/OD/min")+
+  labs(subtitle=(sprintf("Bulk (plasmid) vs Mother Machine (chromosome), %s",c)))
+
+xm <- model_results_df$xmax[model_results_df$condition==c]
+.x <- seq(0,xm,length.out=50)
+.alpha <- as.double(model_results_df$alpha[model_results_df$condition==c])
+.beta <- as.double(model_results_df$beta[model_results_df$condition==c])
+.b <- .beta*.x
+.y <- .alpha*(1-exp(.b))
+dd <- tibble(.x,.y)
+print(p1+geom_line(data=dd,aes(x=.x,y=.y),col="red")+
+        geom_line(data=dd,aes(x=.x,y=-.x*(.alpha*.beta))))
+}
+```
+
+
+Using simple differential calculus. It comes...
+
+```{r}
+model_results_df$beta <- as.double(model_results_df$beta)
+model_results_df$alpha <- as.double(model_results_df$alpha)
+model_results_df <- model_results_df %>% 
+  rename(b=beta,a=alpha)
+
+# From there, we want to build up
+
+mydata_gr_exp_summary_final <- mydata_gr_exp_summary %>%
+  left_join(model_results_df,by=c("condition")) %>% 
+  #separate(strain,into=c("vector","promoter")) %>%
+  #distinct(promoter,condition,well,replica,.keep_all = TRUE) %>% 
+  #select(promoter,condition,well,q,sd_q,replica,a,b) %>% 
+  mutate(true_c=(log(a)-log(a-alpha_gfp))/(-b),
+         sd_true_c=1/(-b*(a-alpha_gfp))*sd_q)
+```
+
+Now we can plot, estimated true_q, from the data.
+
+```{r}
+mydata_gr_exp_summary_final %>%
+ ggplot()+
+  geom_point(aes(alpha_tot_gr*60/log(2),true_q,col=replica))+
+  #geom_line(aes(l_gr,l_gr*slope+beta),col="blue") +
+  #geom_line(aes(l_gr,l_gr*(slope+sd_slope)+beta_max),col="yellow") +
+  #geom_line(aes(l_gr,l_gr*(slope-sd_slope)+beta_min),col="green") +
+  geom_errorbar(aes(x=alpha_tot_gr*60/log(2),ymax=true_q+sd_true_q,ymin=true_q-sd_true_q,col=replica))+
+  geom_errorbar(aes(y=true_q,xmin=(alpha_tot_gr-sd_alpha_gr)*60/log(2),xmax=(alpha_tot_gr+sd_alpha_gr)*60/log(2),col=replica))+
+  facet_wrap(~strain,scale="free")+
+  theme_cowplot()+
+  xlab("Doublings per hour")+
+  ylab("Q (gfp)")+
+  ggsave("./all_production_free_replica_true_q.pdf",width=12*5,height=7*5,limitsize = FALSE)
+```
+
+```{r}
+mydata_gr_exp_summary_final %>%
+ ggplot()+
+  geom_point(aes(log(alpha_tot_gr*60/log(2)),log(true_q),col=replica))+
+  #geom_line(aes(l_gr,l_gr*slope+beta),col="blue") +
+  #geom_line(aes(l_gr,l_gr*(slope+sd_slope)+beta_max),col="yellow") +
+  #geom_line(aes(l_gr,l_gr*(slope-sd_slope)+beta_min),col="green") +
+  geom_errorbar(aes(x=log(alpha_tot_gr*60/log(2)),ymax=log(true_q+sd_true_q),ymin=log(true_q-sd_true_q),col=replica))+
+  geom_errorbar(aes(y=log(true_q),xmin=log((alpha_tot_gr-sd_alpha_gr)*60/log(2)),xmax=log((alpha_tot_gr+sd_alpha_gr)*60/log(2)),col=replica))+
+  facet_wrap(~strain,scale="free")+
+  theme_cowplot()+
+  xlab("log(Doublings per hour)")+
+  ylab("log(Q (gfp))")+
+  ggsave("./all_production_free_replica_true_q_log.pdf",width=12*5,height=7*5,limitsize = FALSE)
+```
+```{r}
+mydata_gr_exp_summary_final %>%
+ ggplot()+
+  geom_point(aes(log(alpha_tot_gr*60/log(2)),log(true_q),col=replica,alpha=0.2))+
+  #geom_line(aes(l_gr,l_gr*slope+beta),col="blue") +
+  #geom_line(aes(l_gr,l_gr*(slope+sd_slope)+beta_max),col="yellow") +
+  #geom_line(aes(l_gr,l_gr*(slope-sd_slope)+beta_min),col="green") +
+  geom_errorbar(aes(x=log(alpha_tot_gr*60/log(2)),ymax=log(true_q+sd_true_q),ymin=log(true_q-sd_true_q),col=replica),alpha=0.2)+
+  geom_errorbar(aes(y=log(true_q),xmin=log((alpha_tot_gr-sd_alpha_gr)*60/log(2)),xmax=log((alpha_tot_gr+sd_alpha_gr)*60/log(2)),col=replica),alpha=0.2)+
+  #facet_wrap(~strain,scale="free")+
+  theme_cowplot()+
+  xlab("log(Doublings per hour)")+
+  ylab("log(Q (gfp))")
+  #ggsave("./all_production_free_replica_true_q_log.pdf",width=12*5,height=7*5,limitsize = FALSE)
+```

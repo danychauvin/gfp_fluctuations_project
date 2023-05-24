@@ -1,0 +1,17 @@
+{
+  "description": "",
+  "gl_regions": [
+    {
+      "first_gl_position_from_top": 54,
+      "gl_spacing_vertical": 106.1401,
+      "horizontal_range": [
+        0,
+        334
+      ],
+	"gl_exit_orientation": "right"
+    }
+  ],
+  "name": "",
+  "pixel_size_micron": 1.0,
+  "template_image_path": "./template_image__20220716_zstacks_hi1_500_1_MMStack.ome-1.tif"
+}

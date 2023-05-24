@@ -1,0 +1,360 @@
+---
+title: "Comparing_models.Rmd"
+author: "Dany Chauvin"
+date: "6/4/2021"
+output: html_document
+---
+
+# IMPORTING DATA
+
+```{r message=FALSE,warning=FALSE}
+#Load the first data set
+source("./loadFunctionsAndPackages.R")
+path_to_MM_data_summary <- "./dataLists/hi1_only.csv"
+
+source("./readMMData_20220113.R")
+source("./transformMMData.R")
+
+myframes_to_mycells <- myframes_to_mycells %>% 
+   mutate(strain='MG1655')
+```
+
+# COMPARISON OF TRACES FOR GLUCOSE FOR A FEW TRACES
+
+Test in glucose, where the tilting can be ignored.
+
+```{r}
+selected_cells <- myframes_to_mycells %>%
+  filter(condition=="glucose") %>% 
+  ungroup() %>% 
+  distinct(cell) %>% 
+  sample_n(10)
+
+dl <- 0.065
+
+myframes_to_mycells %>% 
+  semi_join(selected_cells,by=c("cell")) %>% 
+  mutate(oriented_bbox_width_um=oriented_bbox_width_px*dl,
+         oriented_bbox_length_um=oriented_bbox_length_px*dl) %>% 
+  mutate(bbox_length_px=(vertical_bottom-vertical_top),
+         bbox_length_um=bbox_length_px*dl) %>% 
+  mutate(true_frame=frame+1) %>% 
+  ggplot()+
+  geom_point(aes(true_frame,oriented_bbox_length_um),col="red",alpha=0.5)+
+  geom_point(aes(true_frame,bbox_length_um),col="blue",alpha=0.5)+
+  geom_point(aes(true_frame,length_um),col="orange",alpha=0.5)+
+  facet_wrap(~cell,scale="free")
+
+myframes_to_mycells %>% 
+  semi_join(selected_cells,by=c("cell")) %>% 
+  mutate(oriented_bbox_width_um=oriented_bbox_width_px*dl,
+         oriented_bbox_length_um=oriented_bbox_length_px*dl) %>% 
+  mutate(bbox_length_px=(vertical_bottom-vertical_top),
+         bbox_length_um=bbox_length_px*dl) %>% 
+  mutate(bbox_rad=(90/360*2*pi)-oriented_bbox_orientation_angle_rad) %>% 
+  mutate(true_frame=frame+1) %>% 
+  ggplot()+
+  geom_point(aes(true_frame,bbox_rad),col="red",alpha=0.5)+
+  #geom_point(aes(true_frame,bbox_length_um),col="blue",alpha=0.5)+
+  geom_point(aes(true_frame,tilt_radian),col="orange",alpha=0.5)+
+  facet_wrap(~cell,scale="free")
+```
+
+# COMPARISON FOR GLYCEROL DATA FOR A FEW TRACES
+
+```{r}
+selected_cells <- myframes_to_mycells %>%
+  filter(condition=="glycerol") %>% 
+  ungroup() %>% 
+  distinct(cell) %>% 
+  sample_n(10)
+
+dl <- 0.065
+
+myframes_to_mycells %>% 
+  semi_join(selected_cells,by=c("cell")) %>% 
+  mutate(oriented_bbox_width_um=oriented_bbox_width_px*dl,
+         oriented_bbox_length_um=oriented_bbox_length_px*dl) %>% 
+  mutate(bbox_length_px=(vertical_bottom-vertical_top),
+         bbox_length_um=bbox_length_px*dl) %>% 
+  mutate(true_frame=frame+1) %>% 
+  ggplot()+
+  geom_point(aes(true_frame,oriented_bbox_length_um),col="red",alpha=0.5)+
+  geom_point(aes(true_frame,bbox_length_um),col="blue",alpha=0.5)+
+  geom_point(aes(true_frame,length_um),col="orange",alpha=0.5)+
+  facet_wrap(~cell,scale="free")
+
+myframes_to_mycells %>% 
+  semi_join(selected_cells,by=c("cell")) %>% 
+  mutate(oriented_bbox_width_um=oriented_bbox_width_px*dl,
+         oriented_bbox_length_um=oriented_bbox_length_px*dl) %>% 
+  mutate(bbox_length_px=(vertical_bottom-vertical_top),
+         bbox_length_um=bbox_length_px*dl) %>% 
+  mutate(bbox_rad=(90/360*2*pi)-oriented_bbox_orientation_angle_rad) %>% 
+  mutate(true_frame=frame+1) %>% 
+  ggplot()+
+  geom_point(aes(true_frame,bbox_rad),col="red",alpha=0.5)+
+  #geom_point(aes(true_frame,bbox_length_um),col="blue",alpha=0.5)+
+  geom_point(aes(true_frame,tilt_radian),col="orange",alpha=0.5)+
+  facet_wrap(~cell,scale="free")
+```
+
+# COMPARISON FOR GLYCEROL DATA FOR A FEW TRACES
+
+```{r}
+selected_cells <- myframes_to_mycells %>%
+  filter(condition=="acetate") %>% 
+  ungroup() %>% 
+  distinct(cell) %>% 
+  sample_n(10)
+
+dl <- 0.065
+
+myframes_to_mycells %>% 
+  semi_join(selected_cells,by=c("cell")) %>% 
+  mutate(oriented_bbox_width_um=oriented_bbox_width_px*dl,
+         oriented_bbox_length_um=oriented_bbox_length_px*dl) %>% 
+  mutate(bbox_length_px=(vertical_bottom-vertical_top),
+         bbox_length_um=bbox_length_px*dl) %>% 
+  mutate(true_frame=frame+1) %>% 
+  ggplot()+
+  geom_point(aes(true_frame,oriented_bbox_length_um),col="red",alpha=0.5)+
+  geom_point(aes(true_frame,bbox_length_um),col="blue",alpha=0.5)+
+  geom_point(aes(true_frame,length_um),col="orange",alpha=0.5)+
+  facet_wrap(~cell,scale="free")
+
+myframes_to_mycells %>% 
+  semi_join(selected_cells,by=c("cell")) %>% 
+  mutate(oriented_bbox_width_um=oriented_bbox_width_px*dl,
+         oriented_bbox_length_um=oriented_bbox_length_px*dl) %>% 
+  mutate(bbox_length_px=(vertical_bottom-vertical_top),
+         bbox_length_um=bbox_length_px*dl) %>% 
+  mutate(bbox_rad=(90/360*2*pi)-oriented_bbox_orientation_angle_rad) %>% 
+  mutate(true_frame=frame+1) %>% 
+  ggplot()+
+  geom_point(aes(true_frame,bbox_rad),col="red",alpha=0.5)+
+  #geom_point(aes(true_frame,bbox_length_um),col="blue",alpha=0.5)+
+  geom_point(aes(true_frame,tilt_radian),col="orange",alpha=0.5)+
+  facet_wrap(~cell,scale="free")
+```
+
+# COMPARISON FOR ALL TRACES IN THIS DATA SET
+
+```{r}
+selected_cells <- myframes_to_mycells %>%
+  #filter(condition=="glucose") %>% 
+  ungroup() %>% 
+  distinct(cell)
+  #sample_n(10)
+
+dl <- 0.065
+
+myframes_to_mycells %>% 
+  semi_join(selected_cells,by=c("cell")) %>% 
+  mutate(oriented_bbox_width_um=oriented_bbox_width_px*dl,
+         oriented_bbox_length_um=oriented_bbox_length_px*dl) %>% 
+  mutate(bbox_length_px=(vertical_bottom-vertical_top),
+         bbox_length_um=bbox_length_px*dl) %>% 
+  mutate(true_frame=frame+1) %>% 
+  ggplot()+
+  #geom_point(aes(length_um,oriented_bbox_length_um),col="black",alpha=0.5)+
+  geom_point(aes(bbox_length_um,oriented_bbox_length_um),col="red",alpha=0.1)+
+  geom_abline(aes(slope=1,intercept=0))+
+  #geom_point(aes(true_frame,length_um),col="orange",alpha=0.5)+
+  facet_wrap(~condition,scale="free")
+
+myframes_to_mycells %>% 
+  semi_join(selected_cells,by=c("cell")) %>% 
+  mutate(oriented_bbox_width_um=oriented_bbox_width_px*dl,
+         oriented_bbox_length_um=oriented_bbox_length_px*dl) %>% 
+  mutate(bbox_length_px=(vertical_bottom-vertical_top),
+         bbox_length_um=bbox_length_px*dl) %>% 
+  mutate(bbox_rad=(90/360*2*pi)-oriented_bbox_orientation_angle_rad) %>% 
+  mutate(true_frame=frame+1) %>% 
+  ggplot()+
+  geom_point(aes(tilt_radian,bbox_rad),col="black",alpha=0.5)+
+  #geom_point(aes(true_frame,bbox_length_um),col="blue",alpha=0.5)+
+  #geom_point(aes(true_frame,tilt_radian),col="orange",alpha=0.5)+
+  facet_wrap(~condition,scale="free")
+```
+
+# LOOKING MORE CLOSELY AT TILT DISTRIBUTION
+
+```{r}
+myframes_to_mycells <- myframes_to_mycells %>% 
+  mutate(oriented_bbox_width_um=oriented_bbox_width_px*dl,
+         oriented_bbox_length_um=oriented_bbox_length_px*dl) %>% 
+  mutate(bbox_length_px=(vertical_bottom-vertical_top),
+         bbox_length_um=bbox_length_px*dl) %>% 
+  mutate(bbox_rad=(90/360*2*pi)-oriented_bbox_orientation_angle_rad) %>% 
+  mutate(true_frame=frame+1)
+```
+
+```{r}
+# getting the vector of interest.
+df <- myframes_to_mycells %>% 
+  filter(condition=="glucose") %>% .$bbox_rad
+
+summary(df)
+
+breakVec <-  seq(-3e-1,3e-1,by=1e-2)
+dev.new(width=4, height=4)
+h <- hist(df, breaks = breakVec, density = 10,freq=TRUE,prob=FALSE,ylab="Counts",main="",xaxp=c(-3e-1,3e-1,10))
+h$counts = log10(h$counts)
+plot(h,ylim=c(0,4),ylab='log10(Counts)',main="",xlab="bbox_tilt_rad")
+title("Glucose")
+```
+
+```{r}
+# getting the vector of interest.
+df <- myframes_to_mycells %>% 
+  filter(condition=="glucose") %>% .$tilt_radian
+
+summary(df)
+
+breakVec <-  seq(-3e-1,3e-1,by=1e-2)
+dev.new(width=4, height=4)
+h <- hist(df, breaks = breakVec, density = 10,freq=TRUE,prob=FALSE,ylab="Counts",main="",xaxp=c(-3e-1,3e-1,10))
+h$counts = log10(h$counts)
+plot(h,ylim=c(0,4),ylab='log10(Counts)',main="",xlab="ellipse_tilt_rad")
+title("Glucose")
+```
+
+```{r}
+# getting the vector of interest.
+df <- myframes_to_mycells %>% 
+  filter(condition=="glycerol") %>% .$bbox_rad
+
+summary(df)
+
+breakVec <-  seq(-3e-1,3e-1,by=1e-2)
+dev.new(width=4, height=4)
+h <- hist(df, breaks = breakVec, density = 10,freq=TRUE,prob=FALSE,ylab="Counts",main="",xaxp=c(-3e-1,3e-1,10))
+h$counts = log10(h$counts)
+plot(h,ylim=c(0,4),ylab='log10(Counts)',main="",xlab="bbox_tilt_rad")
+title("Glycerol")
+```
+
+```{r}
+# getting the vector of interest.
+df <- myframes_to_mycells %>% 
+  filter(condition=="glycerol") %>% .$tilt_radian
+
+summary(df)
+
+breakVec <-  seq(-3e-1,3e-1,by=1e-2)
+dev.new(width=4, height=4)
+h <- hist(df, breaks = breakVec, density = 10,freq=TRUE,prob=FALSE,ylab="Counts",main="",xaxp=c(-3e-1,3e-1,10))
+h$counts = log10(h$counts)
+plot(h,ylim=c(0,4),ylab='log10(Counts)',main="",xlab="ellipse_tilt_rad")
+title("Glycerol")
+```
+
+So for a reason that I do not understand... assymetrical.
+I would need to do it in acetate now.
+
+```{r}
+# getting the vector of interest.
+df <- myframes_to_mycells %>% 
+  filter(condition=="acetate") %>% .$bbox_rad
+
+summary(df)
+
+breakVec <-  seq(-4e-1,4e-1,by=1e-2)
+dev.new(width=4, height=4)
+h <- hist(df, breaks = breakVec, density = 10,freq=TRUE,prob=FALSE,ylab="Counts",main="",xaxp=c(-4e-1,4e-1,10))
+h$counts = log10(h$counts)
+plot(h,ylim=c(0,4),ylab='log10(Counts)',main="",xlab="bbox_tilt_rad")
+title("Acetate")
+```
+
+```{r}
+# getting the vector of interest.
+df <- myframes_to_mycells %>% 
+  filter(condition=="acetate") %>% .$tilt_radian
+
+summary(df)
+
+breakVec <-  seq(-4e-1,4e-1,by=1e-2)
+dev.new(width=4, height=4)
+h <- hist(df, breaks = breakVec, density = 10,freq=TRUE,prob=FALSE,ylab="Counts",main="",xaxp=c(-4e-1,4e-1,10))
+h$counts = log10(h$counts)
+plot(h,ylim=c(0,4),ylab='log10(Counts)',main="",xlab="ellipse_tilt_rad")
+title("Acetate")
+```
+
+Now, I need to look at the overlays.
+
+# COMPARISON CELL BY CELL
+
+First, I have to find a way to establish the correspondence between the cells in the three data sets. Which is something I had done in the past.
+
+```{r}
+#First cells that are the closest to each other between old and augmented
+
+augmented_cells <- myframes_to_mycells_model2 %>% 
+  group_by(cell) %>% 
+  mutate(first_frame=first(frame)) %>% 
+  ungroup() %>% 
+  distinct(cell,gl,first_frame,mean_position_um)
+
+old_cells <- myframes_to_mycells_model1 %>% 
+  group_by(cell) %>% 
+  mutate(first_frame=first(frame)) %>% 
+  ungroup() %>% 
+  distinct(cell,gl,first_frame,mean_position_um)
+
+
+find_closest <- function(df1,df2){
+  
+    closest <- df1 %>%
+      group_by(cell) %>% 
+      do((function(.df){
+        mean_pos_1 <- .df$mean_position_um[[1]]
+        first_frame_1 <- .df$first_frame[[1]]
+        cell_1 <- .df$cell[[1]]
+        gl_1 <- .df$gl[[1]]
+        lc <- df2  %>% 
+          filter(gl==gl_1) %>% 
+          mutate(cell_1=cell_1) %>% 
+          mutate(delta_pos=abs(mean_pos_1-mean_position_um),
+                 delta_frame=abs(first_frame_1-first_frame),
+                 total_dif=(delta_pos+1)*(delta_frame+1)) %>% 
+          arrange(total_dif) %>%
+          filter(row_number()==1) %>% 
+          select(cell_1,cell,delta_pos,delta_frame,total_dif)
+        return(lc)
+      })(.)) %>% 
+      ungroup()
+    return(closest)
+    }
+  
+closest_old_augmented <- find_closest(old_cells,augmented_cells)
+
+```
+
+```{r}
+# Getting rid of ambiguities
+closest_old_augmented <- closest_old_augmented %>% 
+  group_by(cell) %>% 
+  filter(n()<2) %>% 
+  ungroup()
+```
+
+# NOW COMPARING RESULTS
+
+```{r}
+for(c1 in closest_old_augmented$cell_1[1:10]){
+  c2 <- unique(closest_old_augmented %>% 
+                 filter(cell_1==c1) %>% 
+                 .$cell)
+  
+    print(myframes_to_mycells_model1 %>% 
+    filter(cell==c1) %>% 
+      ggplot()+
+      geom_point(aes(time_sec,volume_um),col="black")+
+      geom_point(data=myframes_to_mycells_model2 %>% 
+                   filter(cell==c2),aes(time_sec,volume_um),col="green"))
+}
+
+```

@@ -1,0 +1,3132 @@
+---
+title: "experimental_data_analysis.Rmd"
+author: "Dany Chauvin"
+date: "2/28/2022"
+output: html_document
+---
+
+# Running inference on simulation data to check the consistency of the inference routine
+
+```{r}
+all_parameters <- myparameters %>% 
+  select(condition,promoter,name,final) %>% 
+  rename(final_experimental=final) %>% 
+  distinct(condition,promoter,name,final_experimental) %>% 
+  left_join(myparameters_from_simulation %>% 
+              select(condition,promoter,final,name) %>% 
+              rename(final_simulation=final) %>% 
+              distinct(condition,promoter,name,final_simulation),by=c("condition","promoter","name"))
+all_errors<- myerrors %>%  
+  filter(epsilon==0.01) %>% 
+  select(-filepath) %>% 
+  pivot_longer(cols = -c(epsilon,condition,promoter),names_to = "name",values_to = "error") %>% 
+  select(condition,promoter,name,error) %>% 
+  rename(error_experimental=error) %>% 
+  distinct(condition,promoter,name,error_experimental) %>% 
+  left_join(myerrors_from_simulation %>% 
+              filter(epsilon==0.01) %>% 
+              select(-filepath) %>% 
+              pivot_longer(cols = -c(epsilon,condition,promoter),names_to = "name",values_to = "error") %>%
+              select(condition,promoter,name,error) %>% 
+              rename(error_simulation=error) %>% 
+              distinct(condition,promoter,name,error_simulation),by=c("condition","promoter","name")) %>% 
+  mutate(error_experimental=sqrt(error_experimental),
+         error_simulation=sqrt(error_simulation))
+all_parameters_with_errors <- left_join(all_parameters,all_errors,by=c("condition","promoter","name")) %>% 
+  pivot_longer(cols = starts_with(c("final","error")),values_to = "value",names_to = "temp_names") %>%
+  separate(temp_names,into=c("nature","type")) %>%
+  pivot_wider(names_from = "nature",values_from = "value") 
+
+all_parameters_with_errors$condition <- factor(all_parameters_with_errors$condition,levels=c("acetate","glycerol","glucose","glucoseaa"))
+```
+
+```{r}
+all_parameters_with_errors %>% 
+  pivot_wider(names_from=type,values_from = c(final,error)) %>% 
+  #filter(promoter!="med3") %>% 
+  filter(name=="mean_lambda") %>%
+  ggplot()+
+  geom_point(aes(log(final_experimental),log(final_simulation),col=promoter,shape=condition),alpha=1,size=3)+
+  geom_errorbar(aes(x=log(final_experimental),ymax=log(final_simulation+error_simulation),ymin=log(final_simulation-error_simulation),col=promoter),width=0)+
+  geom_errorbar(aes(xmin=log(final_experimental-error_experimental),xmax=log(final_experimental+error_experimental),y=log(final_simulation),col=promoter),width=0)+
+  geom_abline(aes(slope=1,intercept=0),linetype=2,color="red")+
+  xlab("mean_lambda (inferred from experimental data)")+
+  ylab("mean_lambda (inferred from simulation data)")
+
+#ggsave("./figures_simulation1_1/simulation_vs_experimental_data_checking_mean_lambda_log.pdf",height=5,width=7)
+```
+
+```{r}
+all_parameters_with_errors %>% 
+  pivot_wider(names_from=type,values_from = c(final,error)) %>% 
+  #filter(promoter!="med3") %>% 
+  filter(name=="mean_q") %>%
+  ggplot()+
+  geom_point(aes(log(final_experimental),log(final_simulation),col=promoter,shape=condition),alpha=1,size=3)+
+  geom_errorbar(aes(x=log(final_experimental),ymax=log(final_simulation+error_simulation),ymin=log(final_simulation-error_simulation),col=promoter),width=0)+
+  geom_errorbar(aes(xmin=log(final_experimental-error_experimental),xmax=log(final_experimental+error_experimental),y=log(final_simulation),col=promoter),width=0)+
+  geom_abline(aes(slope=1,intercept=0),linetype=2,color="red")+
+  xlab("mean_q (inferred from experimental data)")+
+  ylab("mean_q (inferred from simulation data)")
+
+#ggsave("./figures_simulation1_1/simulation_vs_experimental_data_checking_mean_q_log.pdf",height=5,width=7)
+```
+
+
+```{r}
+all_parameters_with_errors %>% 
+  pivot_wider(names_from=type,values_from = c(final,error)) %>% 
+  #filter(promoter!="med3") %>% 
+  filter(name=="var_lambda") %>%
+  ggplot()+
+  geom_point(aes(log(final_experimental),log(final_simulation),col=promoter,shape=condition),alpha=1,size=3)+
+  geom_errorbar(aes(x=log(final_experimental),ymax=log(final_simulation+error_simulation),ymin=log(final_simulation-error_simulation),col=promoter),width=0)+
+  geom_errorbar(aes(xmin=log(final_experimental-error_experimental),xmax=log(final_experimental+error_experimental),y=log(final_simulation),col=promoter),width=0)+
+  geom_abline(aes(slope=1,intercept=0),linetype=2,color="red")+
+  xlab("var_lambda (inferred from experimental data)")+
+  ylab("var_lambda (inferred from simulation data)")
+
+all_parameters_with_errors %>% 
+  pivot_wider(names_from=type,values_from = c(final,error)) %>% 
+  filter(!((promoter=="rplN") & (condition=="glucoseaa") )) %>% 
+  filter(condition %in% c("glucose","glucoseaa")) %>% 
+  filter(name=="var_lambda") %>%
+  ggplot()+
+  geom_point(aes(log(final_experimental),log(final_simulation),col=promoter,shape=condition),alpha=1,size=3)+
+  geom_errorbar(aes(x=log(final_experimental),ymax=log(final_simulation+error_simulation),ymin=log(final_simulation-error_simulation),col=promoter),width=0)+
+  geom_errorbar(aes(xmin=log(final_experimental-error_experimental),xmax=log(final_experimental+error_experimental),y=log(final_simulation),col=promoter),width=0)+
+  geom_abline(aes(slope=1,intercept=0),linetype=2,color="red")+
+  xlab("var_lambda (inferred from experimental data)")+
+  ylab("var_lambda (inferred from simulation data)")
+
+#ggsave("./figures_simulation1_1/simulation_vs_experimental_data_checking_var_lambda_log.pdf",height=5,width=7)
+```
+
+```{r}
+all_parameters_with_errors %>% 
+  pivot_wider(names_from=type,values_from = c(final,error)) %>% 
+  #filter(promoter!="med3") %>% 
+  filter(name=="gamma_lambda") %>%
+  ggplot()+
+  geom_point(aes(log(final_experimental),log(final_simulation),col=promoter,shape=condition),alpha=1,size=3)+
+  geom_errorbar(aes(x=log(final_experimental),ymax=log(final_simulation+error_simulation),ymin=log(final_simulation-error_simulation),col=promoter),width=0)+
+  geom_errorbar(aes(xmin=log(final_experimental-error_experimental),xmax=log(final_experimental+error_experimental),y=log(final_simulation),col=promoter),width=0)+
+  geom_abline(aes(slope=1,intercept=0),linetype=2,color="red")+
+  xlab("gamma_lambda (inferred from experimental data)")+
+  ylab("gamma_lambda (inferred from simulation data)")
+
+#ggsave("./figures_simulation1_1/simulation_vs_experimental_data_checking_gamma_lambda_log.pdf",height=5,width=7)
+```
+
+```{r}
+all_parameters_with_errors %>% 
+  pivot_wider(names_from=type,values_from = c(final,error)) %>% 
+  #filter(promoter!="med3") %>% 
+  filter(name=="var_q") %>%
+  ggplot()+
+  geom_point(aes(log(final_experimental),log(final_simulation),col=promoter,shape=condition),alpha=1,size=3)+
+  geom_errorbar(aes(x=log(final_experimental),ymax=log(final_simulation+error_simulation),ymin=log(final_simulation-error_simulation),col=promoter),width=0)+
+  geom_errorbar(aes(xmin=log(final_experimental-error_experimental),xmax=log(final_experimental+error_experimental),y=log(final_simulation),col=promoter),width=0)+
+  geom_abline(aes(slope=1,intercept=0),linetype=2,color="red")+
+  xlab("var_q (inferred from experimental data)")+
+  ylab("var_q (inferred from simulation data)")
+
+#ggsave("./figures_simulation1_1/simulation_vs_experimental_data_checking_var_q.pdf",height=5,width=7)
+```
+
+```{r}
+all_parameters_with_errors %>% 
+  pivot_wider(names_from=type,values_from = c(final,error)) %>% 
+  #filter(promoter!="med3") %>% 
+  filter(name=="gamma_q") %>%
+  ggplot()+
+  geom_point(aes(log(final_experimental),log(final_simulation),col=promoter,shape=condition),alpha=1,size=3)+
+  geom_errorbar(aes(x=log(final_experimental),ymax=log(final_simulation+error_simulation),ymin=log(final_simulation-error_simulation),col=promoter),width=0)+
+  geom_errorbar(aes(xmin=log(final_experimental-error_experimental),xmax=log(final_experimental+error_experimental),y=log(final_simulation),col=promoter),width=0)+
+  geom_abline(aes(slope=1,intercept=0),linetype=2,color="red")+
+  xlab("gamma_q (inferred from experimental data)")+
+  ylab("gamma_q (inferred from simulation data)")
+
+#ggsave("./figures_simulation1_1/simulation_vs_experimental_data_checking_gamma_q.pdf",height=5,width=7)
+```
+
+```{r}
+all_parameters_with_errors %>% 
+  pivot_wider(names_from=type,values_from = c(final,error)) %>% 
+  #filter(promoter!="med3") %>% 
+  filter(name=="var_dx") %>%
+  ggplot()+
+  geom_point(aes(final_experimental,final_simulation,col=promoter,shape=condition),alpha=1,size=3)+
+  geom_errorbar(aes(x=final_experimental,ymax=final_simulation+error_simulation,ymin=final_simulation-error_simulation,col=promoter),width=0)+
+  geom_errorbar(aes(xmin=final_experimental-error_experimental,xmax=final_experimental+error_experimental,y=final_simulation,col=promoter),width=0)+
+  geom_abline(aes(slope=1,intercept=0),linetype=2,color="red")+
+  xlab("var_dx (inferred from experimental data)")+
+  ylab("var_dx (inferred from simulation data)")
+
+#ggsave("./figures_simulation1_1/simulation_vs_experimental_data_checking_var_dx.pdf",height=5,width=7)
+```
+
+
+```{r}
+all_parameters_with_errors %>% 
+  pivot_wider(names_from=type,values_from = c(final,error)) %>% 
+  #filter(promoter!="med3") %>% 
+  filter(name=="var_dg") %>%
+  ggplot()+
+  geom_point(aes(log(final_experimental),log(final_simulation),col=promoter,shape=condition),alpha=1,size=3)+
+  geom_errorbar(aes(x=log(final_experimental),ymax=log(final_simulation+error_simulation),ymin=log(final_simulation-error_simulation),col=promoter),width=0)+
+  geom_errorbar(aes(xmin=log(final_experimental-error_experimental),xmax=log(final_experimental+error_experimental),y=log(final_simulation),col=promoter),width=0)+
+  geom_abline(aes(slope=1,intercept=0),linetype=2,color="red")+
+  xlab("var_dg (inferred from experimental data)")+
+  ylab("var_dg (inferred from simulation data)")
+
+#ggsave("./figures_simulation1_1/simulation_vs_experimental_data_checking_var_dg.pdf",height=5,width=7)
+```
+
+```{r}
+all_parameters_with_errors %>% 
+  pivot_wider(names_from=type,values_from = c(final,error)) %>% 
+  #filter(promoter!="med3") %>% 
+  filter(name=="var_g") %>%
+  ggplot()+
+  geom_point(aes(log(final_experimental),log(final_simulation),col=promoter,shape=condition),alpha=1,size=3)+
+  geom_errorbar(aes(x=log(final_experimental),ymax=log(final_simulation+error_simulation),ymin=log(final_simulation-error_simulation),col=promoter),width=0)+
+  geom_errorbar(aes(xmin=log(final_experimental-error_experimental),xmax=log(final_experimental+error_experimental),y=log(final_simulation),col=promoter),width=0)+
+  geom_abline(aes(slope=1,intercept=0),linetype=2,color="red")+
+  xlab("var_g (inferred from experimental data)")+
+  ylab("var_g (inferred from simulation data)")
+
+#ggsave("./figures_simulation1_1/simulation_vs_experimental_data_checking_var_g.pdf",height=5,width=7)
+```
+```{r}
+all_parameters_with_errors %>% 
+  pivot_wider(names_from=type,values_from = c(final,error)) %>% 
+  #filter(promoter!="med3") %>% 
+  filter(name=="var_x") %>%
+  ggplot()+
+  geom_point(aes(final_experimental,final_simulation,col=promoter,shape=condition),alpha=1,size=3)+
+  geom_errorbar(aes(x=final_experimental,ymax=final_simulation+error_simulation,ymin=final_simulation-error_simulation,col=promoter),width=0)+
+  geom_errorbar(aes(xmin=final_experimental-error_experimental,xmax=final_experimental+error_experimental,y=final_simulation,col=promoter),width=0)+
+  geom_abline(aes(slope=1,intercept=0),linetype=2,color="red")+
+  xlab("var_x (inferred from experimental data)")+
+  ylab("var_x (inferred from simulation data)")
+
+#ggsave("./figures_simulation1_1/simulation_vs_experimental_data_checking_var_x.pdf",height=5,width=7)
+```
+# Checking traces predictions on simulated data
+
+```{r}
+cond <- "glucoseaa"
+prom <- "rplN"
+
+N <- 10
+simulation_data_selected_cells <- simulation_data_fullnoise %>% 
+  filter(condition==cond,promoter==prom) %>% 
+  distinct(cell) %>% 
+  sample_n(N)
+
+myframes_selected_cells <- myframes_from_simulation %>%
+  filter(condition==cond,promoter==prom) %>% 
+  distinct(cell) %>% 
+  sample_n(N)
+
+
+#Looking at log-length traces
+rbind(
+myframes_from_simulation %>% 
+  filter(condition==cond,promoter==prom) %>% 
+  semi_join(simulation_data_selected_cells,by=c("cell")) %>% 
+  mutate(type="inference") %>% 
+  group_by(cell) %>% 
+  mutate(time_min_since_birth=time_min-first(time_min)) %>% 
+  ungroup() %>% 
+  select(length_um,type,time_min_since_birth,cell),
+
+simulation_data_fullnoise %>% 
+  filter(condition==cond,promoter==prom) %>% 
+  semi_join(simulation_data_selected_cells,by=c("cell")) %>% 
+  mutate(type="raw data") %>%
+  group_by(cell) %>% 
+  mutate(time_min_since_birth=time_min-first(time_min)) %>% 
+  ungroup() %>% 
+  select(length_um,type,time_min_since_birth,cell)) %>%  
+  ggplot()+
+  geom_point(aes(time_min_since_birth,log(length_um),group=interaction("cell","type"),col=type),alpha=0.5)+
+  facet_wrap(~cell)
+
+#Looking at instantaneous lambdas
+rbind(
+  
+myframes_from_simulation %>% 
+  filter(condition==cond,promoter==prom) %>% 
+  semi_join(simulation_data_selected_cells,by=c("cell")) %>% 
+  mutate(type="inferred") %>% 
+  group_by(cell) %>% 
+  mutate(time_min_since_birth=time_min-first(time_min)) %>%
+  mutate(error_lambda=sqrt(cov_ll)) %>% 
+  ungroup() %>% 
+  select(length_um,type,time_min_since_birth,cell,lambda,error_lambda),
+
+simulation_data_fullnoise %>% 
+  filter(condition==cond,promoter==prom) %>% 
+  semi_join(simulation_data_selected_cells,by=c("cell")) %>% 
+  mutate(type="true value (no noise)") %>%
+  group_by(cell) %>% 
+  mutate(time_min_since_birth=time_min-first(time_min)) %>% 
+  mutate(error_lambda=0) %>% 
+  ungroup() %>% 
+  select(length_um,type,time_min_since_birth,cell,lambda,error_lambda)) %>%  
+  ggplot()+
+  geom_point(aes(time_min_since_birth,lambda,group=interaction("cell","type"),col=type),alpha=0.5)+
+  geom_errorbar(aes(time_min_since_birth,ymin=lambda-error_lambda,ymax=lambda+error_lambda,group=interaction("cell","type"),col=type),alpha=0.5)+
+  facet_wrap(~cell)
+```
+
+When in glucoseaa, inferred parameters are obviously wrong, error bars on the instantaneous growth-rate are simply all over the place. In other words, the mean value in inferred quite correctly, but the error bars indicate that in truth, it does not really now where the real value is. It is quite strange. And it is something that I do not understand yet.
+
+Note that the inferred parameters are always characterized by a smaller variance than the true values. This is another demonstration of the fact that the predicted values are brought back to the mean.
+
+Now, if I were to take the error bars into account, I should be able to increase that variance probably. This is something Bjorn is working on at the moment. I think I would take some variance plus some typical variance around the mean.
+
+# Comparing true traces between in silico and experimental data
+
+In order to convince us that the inferred parameters are qualitatively coherent with how the cells are behaving. I am here looking at the full noise. In each conditions, I am picking 10 cells randomly, and looking at the traces for log_length, lambda, gfp and q versus time.
+
+```{r}
+#Select n cells in each data sets, look at their traces in gfp and log_length, that also helps in looking at potential asymmetry in division.
+print_traces_single_cells <- function(N,cond,prom){
+
+  silico_cells <- myframes_from_simulation %>%
+    filter(promoter==prom,condition==cond) %>% 
+    distinct(cell) %>% 
+    sample_n(N)
+  
+  real_cells <- myframes_inferred %>% 
+    filter(promoter==prom,condition==cond) %>% 
+    distinct(cell) %>% 
+    sample_n(N)
+  
+  # Plot everything on the same graph
+  all_cells <- rbind(
+    myframes_inferred %>% 
+    semi_join(real_cells,by=c("cell")) %>% 
+      select(time_min,length_um,gfp_nb,cell,lambda,q,gfp_nb) %>% 
+      mutate(type="experimental"),
+    
+    myframes_from_simulation %>% 
+    filter(promoter==prom,condition==cond) %>% 
+        semi_join(silico_cells,by=c("cell")) %>% 
+      select(time_min,length_um,gfp_nb,cell,lambda,q,gfp_nb) %>% 
+      mutate(type="in silico") 
+    )
+  
+  
+  print(all_cells %>% 
+    group_by(cell) %>% 
+    arrange(time_min) %>% 
+    mutate(time_since_birth=time_min-first(time_min)) %>% 
+    mutate(dl=length_um-first(length_um)) %>% 
+    ungroup() %>% 
+    ggplot()+
+    geom_line(aes(time_since_birth,log(length_um),group=cell,col=type))+
+    facet_wrap(~cell+type)+labs(subtitle=paste(cond,prom,sep=" ")))
+  
+  print(all_cells %>% 
+    group_by(cell) %>% 
+    arrange(time_min) %>% 
+    mutate(time_since_birth=time_min-first(time_min)) %>% 
+    mutate(rl=log(length_um/first(length_um))) %>% 
+    ungroup() %>% 
+    ggplot()+
+    geom_line(aes(time_since_birth,rl,group=cell,col=type))+
+    facet_wrap(~cell+type)+labs(subtitle=paste(cond,prom,sep=" ")))
+  
+  print(all_cells %>% 
+    group_by(cell) %>% 
+    arrange(time_min) %>% 
+    mutate(time_since_birth=time_min-first(time_min)) %>% 
+    mutate(dl=length_um-first(length_um)) %>% 
+    ungroup() %>% 
+    ggplot()+
+    geom_line(aes(time_since_birth,dl,group=cell,col=type))+
+    facet_wrap(~cell+type)+labs(subtitle=paste(cond,prom,sep=" ")))
+  
+  print(all_cells %>% 
+    group_by(cell) %>% 
+    arrange(time_min) %>% 
+    mutate(time_since_birth=time_min-first(time_min)) %>% 
+    mutate(dl=length_um-first(length_um)) %>% 
+    ungroup() %>% 
+    ggplot()+
+    geom_line(aes(time_since_birth,lambda,group=cell,col=type))+
+    facet_wrap(~cell+type)+labs(subtitle=paste(cond,prom,sep=" ")))
+  
+  print(all_cells %>% 
+    group_by(cell) %>% 
+    arrange(time_min) %>% 
+    mutate(time_since_birth=time_min-first(time_min)) %>% 
+    mutate(dl=length_um-first(length_um)) %>% 
+    ungroup() %>% 
+    ggplot()+
+    geom_line(aes(time_since_birth,gfp_nb,group=cell,col=type))+
+    facet_wrap(~cell+type)+labs(subtitle=paste(cond,prom,sep=" ")))
+  
+  print(all_cells %>% 
+    group_by(cell) %>% 
+    arrange(time_min) %>% 
+    mutate(time_since_birth=time_min-first(time_min)) %>% 
+    mutate(dl=length_um-first(length_um)) %>% 
+    ungroup() %>% 
+    ggplot()+
+    geom_line(aes(time_since_birth,q,group=cell,col=type))+
+    facet_wrap(~cell+type)+labs(subtitle=paste(cond,prom,sep=" ")))
+  }
+
+```
+  
+```{r}
+.N<-10
+#.cond <- "glucose"
+#.prom <- "hi1"
+#print_traces_single_cells(.N,.cond,.prom)
+for(c in conditions){
+  for(p in promoters){
+    print_traces_single_cells(.N,c,p)}}
+```
+
+
+# Showing what a typical raw trace look like
+
+```{r}
+# For that I loaded data from myframes_to_mycells from earlier project.
+library(RColorBrewer)
+c25 <- c(
+  "dodgerblue2", "#E31A1C", # red
+  "green4",
+  "#6A3D9A", # purple
+  "#FF7F00", # orange
+  "black", "gold1",
+  "skyblue2", "#FB9A99", # lt pink
+  "palegreen2",
+  "#CAB2D6", # lt purple
+  "#FDBF6F", # lt orange
+  "gray70", "khaki2",
+  "maroon", "orchid1", "deeppink1", "blue1", "steelblue4",
+  "darkturquoise", "green1", "yellow4", "yellow3",
+  "darkorange4", "brown"
+)
+myframes_raw %>% 
+  filter(condition=="glucose",promoter=="hi1") %>% 
+  filter(grepl("20190515.0.b.12",cell)) %>% 
+  filter(cell_rank_beg==0) %>% 
+  ggplot()+
+  geom_point(aes(time_sec/60,gfp_nb/length_um,col=as.character(id)))+
+  scale_color_manual(values = c25)+
+  theme(legend.position='none')+
+  xlab("Time (min)")+
+  ylab("Concentration (raw data)")+
+  labs(title="An experimental cell lineage (hi1, glucose, 20190515.0.b.12)")+
+  theme_cowplot()
+
+#ggsave("./fig_presentation/cell_lineage.pdf", height=5, width=20)
+
+myframes_raw %>% 
+  filter(condition=="glucose",promoter=="hi1") %>% 
+  filter(grepl("20190515.0.b.12",cell)) %>% 
+  filter(cell_rank_beg==0) %>% 
+  ggplot()+
+  geom_point(aes(time_sec/60,log(length_um),col=as.character(id)))+
+  scale_color_manual(values = c25)+
+  theme(legend.position='none')+
+  xlab("Time (min)")+
+  ylab("log(Cell length (um))")+
+  labs(title="An experimental cell lineage (hi1, glucose, 20190515.0.b.12)")+
+  theme_cowplot()
+
+#ggsave("./fig_presentation/cell_lineage_length.pdf", height=5, width=20)
+
+myframes_raw %>% 
+  filter(condition=="glucose",promoter=="hi1") %>% 
+  filter(grepl("20190515.0.b.12",cell)) %>% 
+  filter(cell_rank_beg==0) %>% 
+  ggplot()+
+  geom_point(aes(time_sec/60,gfp_nb,col=as.character(id)))+
+  scale_color_manual(values = c25)+
+  theme(legend.position='none')+
+  xlab("Time (min)")+
+  ylab("GFP")+
+  labs(title="An experimental cell lineage (hi1, glucose, 20190515.0.b.12)")+
+  theme_cowplot()
+
+#ggsave("./fig_presentation/cell_lineage_gfp.pdf", height=5, width=20)
+```
+# Showing mean concentration versus growth rate
+
+```{r}
+myframes_raw %>%
+  filter(promoter %in% c("hi1","hi3","med2","med3","rrnB","rpmB","rpsB","rplN")) %>% 
+  filter(condition %in% c("acetate","glycerol","glucose","glucoseaa")) %>% 
+  filter(vector=="ch") %>% 
+  group_by(condition, promoter) %>% 
+  mutate(mean_concentration=mean(gfp_nb/length_um,na.rm=TRUE)) %>% 
+  mutate(sd_concentration=sd(gfp_nb/length_um,na.rm=TRUE)) %>%
+  mutate(mean_alpha=mean(alpha,na.rm=TRUE)) %>% 
+  mutate(sd_alpha=sd(alpha,na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  distinct(condition,promoter,.keep_all = TRUE) %>% 
+  ggplot()+
+  geom_point(aes(mean_alpha*60,log(mean_concentration),col=promoter))+
+  geom_line(aes(mean_alpha*60,log(mean_concentration),col=promoter))+
+  geom_errorbar(aes(x=mean_alpha*60,ymax=log(mean_concentration+sd_concentration),ymin=log(mean_concentration-sd_concentration),col=promoter),width=0)+
+  geom_errorbar(aes(xmax=mean_alpha*60+sd_alpha*60,xmin=mean_alpha*60-sd_alpha*60,y=log(mean_concentration),col=promoter),height=0)+
+  ylab("Mean concentration (GFP/um)")+
+  xlab("Mean growth rate (min-1)")+
+  theme_cowplot()
+
+#ggsave("./fig_presentation/mean_concentration_mean_growth_rate.pdf",height=5,width=8)
+
+```
+
+# Validating computational methods
+
+## Display some traces
+
+```{r}
+selected_cells <- myframes_inferred %>%
+  distinct(cell,condition,promoter) %>% 
+  group_by(condition,promoter) %>% 
+  dplyr::sample_n(1) %>% 
+  ungroup()
+```
+
+```{r}
+myframes_inferred %>% 
+  filter(promoter=="hi1") %>% 
+  semi_join(selected_cells,by=c("cell","condition","promoter")) %>% 
+  group_by(cell) %>% 
+  mutate(time_min_from_birth=time_min-dplyr::first(time_min)) %>% 
+  ungroup() %>% 
+  ggplot()+
+  geom_point(aes(time_min_from_birth,log(length_um_raw)),col="blue")+
+  geom_line(aes(time_min_from_birth,log(length_um)),col="red")+
+  geom_errorbar(aes(x=time_min_from_birth,ymin=log(length_um)-sqrt(cov_xx),ymax=log(length_um)+sqrt(cov_xx)),col="red",width=0)+
+  facet_wrap(~condition,scale="free",nrow=1)+
+  xlab("Time after birth (min)")+
+  ylab("log(length) (um)")
+  #scale_x_continuous(expand = c(0, 0), limits = c(0, NA)) + 
+  #scale_y_continuous(expand = c(0, 0), limits = c(0, NA))
+  
+
+#ggsave("./fig_presentation/traces_log_length.pdf",width=11,height=3)
+
+myframes_inferred %>% 
+  filter(promoter=="hi1") %>% 
+  semi_join(selected_cells,by=c("cell","condition","promoter")) %>% 
+  group_by(cell) %>% 
+  mutate(time_min_from_birth=time_min-dplyr::first(time_min)) %>% 
+  ungroup() %>% 
+  ggplot()+
+  geom_point(aes(time_min_from_birth,gfp_nb_raw),col="blue")+
+  geom_line(aes(time_min_from_birth,gfp_nb),col="red")+
+  geom_errorbar(aes(x=time_min_from_birth,ymin=gfp_nb-sqrt(cov_gg),ymax=gfp_nb+sqrt(cov_gg)),col="red",width=0)+
+  facet_wrap(~condition,scale="free",nrow=1)+
+  xlab("Time after birth (min)")+
+  ylab("#GFP")
+  #scale_x_continuous(expand = c(0, 0), limits = c(0, NA)) + 
+  #scale_y_continuous(expand = c(0, 0), limits = c(0, NA))
+  
+
+#ggsave("./fig_presentation/traces_gfp.pdf",width=11,height=3)
+
+myframes_inferred %>% 
+  filter(promoter=="hi1") %>% 
+  semi_join(selected_cells,by=c("cell","condition","promoter")) %>% 
+  group_by(cell) %>% 
+  mutate(time_min_from_birth=time_min-dplyr::first(time_min)) %>% 
+  ungroup() %>% 
+  ggplot()+
+  geom_point(aes(time_min_from_birth,q),col="red")+
+  geom_line(aes(time_min_from_birth,q),col="red")+
+  geom_errorbar(aes(x=time_min_from_birth,ymin=q-sqrt(cov_qq),ymax=q+sqrt(cov_qq)),col="red",width=0)+
+  facet_wrap(~condition,scale="free",nrow=1)+
+  xlab("Time after birth (min)")+
+  ylab("Volumic production (#GFP/um/min)")
+  #scale_x_continuous(expand = c(0, 0), limits = c(0, NA)) + 
+  #scale_y_continuous(expand = c(0, 0), limits = c(0, NA))
+  
+#ggsave("./fig_presentation/traces_q.pdf",width=11,height=3)
+
+myframes_inferred %>% 
+  filter(promoter=="hi1") %>% 
+  semi_join(selected_cells,by=c("cell","condition","promoter")) %>% 
+  group_by(cell) %>% 
+  mutate(time_min_from_birth=time_min-dplyr::first(time_min)) %>% 
+  ungroup() %>% 
+  ggplot()+
+  geom_point(aes(time_min_from_birth,lambda),col="red")+
+  geom_line(aes(time_min_from_birth,lambda),col="red")+
+  geom_errorbar(aes(x=time_min_from_birth,ymin=lambda-sqrt(cov_ll),ymax=lambda+sqrt(cov_ll)),col="red",width=0)+
+  facet_wrap(~condition,scale="free",nrow=1)+
+  xlab("Time after birth (min)")+
+  ylab("Growth rate (min-1)")
+  #scale_x_continuous(expand = c(0, 0), limits = c(0, NA)) + 
+  #scale_y_continuous(expand = c(0, 0), limits = c(0, NA))
+  
+#ggsave("./fig_presentation/traces_lambda.pdf",width=11,height=3)
+
+```
+
+# Comparing inferred parameters for lambda
+
+```{r}
+# First format the errors
+myerrors_formatted <- myerrors %>% 
+  select(-filepath) %>% 
+  filter(epsilon==0.01) %>% 
+  pivot_longer(cols=-c(epsilon,condition,promoter),values_to = "error",names_to = "name") %>% 
+  select(-epsilon)
+
+#first, compare all lambda parameters
+myparameters_plot <- myparameters %>% 
+  left_join(myerrors_formatted,by=c("condition","promoter","name")) %>% 
+  select(condition,promoter,name,final,error) %>% 
+  filter(name=="mean_lambda")
+myparameters_plot$condition <- factor(myparameters_plot$condition,levels=c("acetate","glycerol","glucose","glucoseaa"))
+
+myparameters_plot %>% 
+  ggplot()+
+  geom_point(aes(condition,final,col=promoter))+
+  geom_errorbar(aes(x=condition,ymin=final-sqrt(error),ymax=final+sqrt(error),col=promoter),width=0)+
+  xlab("Condition")+
+  ylab("Mean Lambda (min-1)")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+#ggsave("./fig_presentation/inf_param_mean_lambda.pdf",height=3,width=5)
+```
+
+```{r}
+#first, cv_lambda
+myparameters_plot <- myparameters %>% 
+  left_join(myerrors_formatted,by=c("condition","promoter","name")) %>% 
+  select(condition,promoter,name,final,error) %>% 
+  filter(name %in% c("var_lambda","gamma_lambda","mean_lambda")) %>% 
+  mutate(error=sqrt(error)) %>% 
+  pivot_wider(names_from = name,values_from = c(final,error)) %>% 
+  mutate(cv_lambda=sqrt(final_var_lambda/(2*final_gamma_lambda))/final_mean_lambda) %>% 
+  mutate(var_lambda=final_var_lambda/(2*final_gamma_lambda)) %>% 
+  mutate(a=sqrt(final_var_lambda/(2*final_gamma_lambda))) %>% 
+  mutate(error_cv_lambda=abs(-(error_mean_lambda*a)/(final_mean_lambda**2)-
+           (error_var_lambda)/(final_mean_lambda*a*2*final_gamma_lambda)+
+           (final_var_lambda*error_gamma_lambda)/(final_mean_lambda*a*2*final_gamma_lambda**2))) %>% 
+  select(condition,promoter,cv_lambda,error_cv_lambda,final_mean_lambda,var_lambda)
+
+myparameters_plot$condition <- factor(myparameters_plot$condition,levels=c("acetate","glycerol","glucose","glucoseaa"))
+
+myframes_plot <- myframes_inferred %>% 
+  group_by(condition,promoter) %>% 
+  mutate(mean_lambda=mean(lambda,na.rm=TRUE)) %>% 
+  mutate(var_lambda=var(lambda,na.rm=TRUE)) %>%
+  mutate(cv_lambda=sd(lambda,na.rm=TRUE)/mean(lambda,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  distinct(promoter,condition,cv_lambda,mean_lambda,var_lambda)
+  
+myparameters_plot %>% 
+  ggplot()+
+  geom_point(aes(final_mean_lambda,cv_lambda,col=promoter))+
+  geom_point(data=myframes_plot,aes(mean_lambda,cv_lambda),col="blue",shape=2)+
+  geom_errorbar(aes(x=final_mean_lambda,ymin=cv_lambda-error_cv_lambda,ymax=cv_lambda+error_cv_lambda,col=promoter),width=0)+
+  #geom_errorbarh(aes(x=final_mean_lambda,ymin=cv_lambda-error_cv_lambda,ymax=cv_lambda+error_cv_lambda,col=promoter),width=0)+
+  xlab("Mean lambda (min-1)")+
+  ylab("CV Lambda")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+#ggsave("./fig_presentation/inf_param_cv_lambda_vs_mean_lambda.pdf",height=3,width=5)
+
+```
+
+Blue triangles are the empirical measurements.
+
+## Using the method proposed by Bjoern
+
+```{r}
+#first, cv_lambda
+myparameters_plot <- myparameters %>% 
+  left_join(myerrors_formatted,by=c("condition","promoter","name")) %>% 
+  select(condition,promoter,name,final,error) %>% 
+  filter(name %in% c("var_lambda","gamma_lambda","mean_lambda")) %>% 
+  mutate(error=sqrt(error)) %>% 
+  pivot_wider(names_from = name,values_from = c(final,error)) %>% 
+  mutate(cv_lambda=sqrt(final_var_lambda/(2*final_gamma_lambda))/final_mean_lambda) %>% 
+  mutate(a=sqrt(final_var_lambda/(2*final_gamma_lambda))) %>% 
+  mutate(error_cv_lambda=abs(-(error_mean_lambda*a)/(final_mean_lambda**2)-
+           (error_var_lambda)/(final_mean_lambda*a*2*final_gamma_lambda)+
+           (final_var_lambda*error_gamma_lambda)/(final_mean_lambda*a*2*final_gamma_lambda**2))) %>% 
+  select(condition,promoter,cv_lambda,error_cv_lambda,final_mean_lambda)
+
+myparameters_plot$condition <- factor(myparameters_plot$condition,levels=c("acetate","glycerol","glucose","glucoseaa"))
+
+simulation_data_plot <- simulation_data %>% 
+  group_by(condition,promoter) %>% 
+  mutate(mean_lambda=mean(lambda,na.rm=TRUE)) %>% 
+  mutate(cv_lambda=sd(lambda,na.rm=TRUE)/mean(lambda,na.rm=TRUE)) %>%
+  mutate(cv_lambda_b=sqrt((1/n()*sum(lambda**2+var(lambda,na.rm=TRUE))-(1/n()*sum(lambda))**2))/mean_lambda) %>% 
+  ungroup() %>% 
+  distinct(promoter,condition,cv_lambda,mean_lambda,cv_lambda_b)
+
+myframes_plot <- myframes_inferred %>% 
+  group_by(condition,promoter) %>% 
+  mutate(mean_lambda=mean(lambda,na.rm=TRUE)) %>% 
+  mutate(cv_lambda=sd(lambda,na.rm=TRUE)/mean(lambda,na.rm=TRUE)) %>%
+  mutate(cv_lambda_b=sqrt((1/n()*sum(lambda**2+var(lambda,na.rm=TRUE))-(1/n()*sum(lambda))**2))/mean_lambda) %>% 
+  ungroup() %>% 
+  distinct(promoter,condition,cv_lambda,mean_lambda,cv_lambda_b)
+  
+myparameters_plot %>% 
+  ggplot()+
+  geom_point(aes(final_mean_lambda,cv_lambda,col=promoter))+
+  geom_point(data=myframes_plot,aes(mean_lambda,cv_lambda),col="blue",shape=2)+
+  geom_point(data=myframes_plot,aes(mean_lambda,cv_lambda_b),col="blue",shape=3)+
+  geom_point(data=simulation_data_plot,aes(mean_lambda,cv_lambda_b),col="red",shape=3)+
+  geom_point(data=simulation_data_plot,aes(mean_lambda,cv_lambda),col="red",shape=2)+
+  geom_errorbar(aes(x=final_mean_lambda,ymin=cv_lambda-error_cv_lambda,ymax=cv_lambda+error_cv_lambda,col=promoter),width=0)+
+  #geom_errorbarh(aes(x=final_mean_lambda,ymin=cv_lambda-error_cv_lambda,ymax=cv_lambda+error_cv_lambda,col=promoter),width=0)+
+  xlab("Mean lambda (min-1)")+
+  ylab("CV Lambda")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+#ggsave("./fig_presentation/inf_param_cv_lambda_vs_mean_lambda.pdf",height=3,width=5)
+```
+
+# Inferred lambda parameters versus mean lambda
+
+```{r}
+#first, cv_lambda
+myparameters_plot <- myparameters %>% 
+  left_join(myerrors_formatted,by=c("condition","promoter","name")) %>% 
+  select(condition,promoter,name,final,error) %>% 
+  filter(name %in% c("var_lambda","gamma_lambda","mean_lambda")) %>% 
+  mutate(error=sqrt(error)) %>% 
+  pivot_wider(names_from = name,values_from = c(final,error)) %>% 
+  mutate(autotime_lambda=1/final_gamma_lambda) %>% 
+  mutate(error_autotime_lambda=1/(final_gamma_lambda**2)*error_gamma_lambda) %>% 
+  select(condition,promoter,autotime_lambda,error_autotime_lambda,final_mean_lambda)
+
+myparameters_plot$condition <- factor(myparameters_plot$condition,levels=c("acetate","glycerol","glucose","glucoseaa"))
+
+myparameters_plot %>% 
+  ggplot()+
+  geom_point(aes(final_mean_lambda,autotime_lambda,col=promoter))+
+  geom_errorbar(aes(x=final_mean_lambda,ymin=autotime_lambda-error_autotime_lambda,ymax=autotime_lambda+error_autotime_lambda,col=promoter),width=0)+
+  xlab("Mean lambda (min-1)")+
+  ylab("Autocorrelation time (min)")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+#ggsave("./fig_presentation/inf_param_autocorrelation_time_vs_mean_lambda.pdf",height=3,width=5)
+
+myparameters_plot %>% 
+  ggplot()+
+  geom_point(aes(log(final_mean_lambda),log(autotime_lambda),col=promoter))+
+  geom_errorbar(aes(x=log(final_mean_lambda),ymin=log(autotime_lambda-error_autotime_lambda),ymax=log(autotime_lambda+error_autotime_lambda),col=promoter),width=0)+
+  xlab("Mean lambda (min-1) (log)")+
+  ylab("Autocorrelation time (min) (log)")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+#ggsave("./fig_presentation/inf_param_log_autocorrelation_time_vs_log_mean_lambda.pdf",height=3,width=5)
+
+```
+
+```{r}
+#first, cv_lambda
+myparameters_plot <- myparameters %>% 
+  left_join(myerrors_formatted,by=c("condition","promoter","name")) %>% 
+  select(condition,promoter,name,final,error) %>% 
+  filter(name %in% c("var_lambda","gamma_lambda","mean_lambda")) %>% 
+  mutate(error=sqrt(error)) %>% 
+  pivot_wider(names_from = name,values_from = c(final,error)) %>% 
+  mutate(autotime_lambda=1/final_gamma_lambda) %>% 
+  mutate(error_autotime_lambda=1/(final_gamma_lambda**2)*error_gamma_lambda) %>% 
+  select(condition,promoter,autotime_lambda,error_autotime_lambda,final_mean_lambda)
+
+myparameters_plot$condition <- factor(myparameters_plot$condition,levels=c("acetate","glycerol","glucose","glucoseaa"))
+
+myparameters_plot %>% 
+  mutate(s=compute_slope_errxy_robust(log(final_mean_lambda),log(1/autotime_lambda)),
+         i=compute_intercept_errxy_robust(log(final_mean_lambda),log(1/autotime_lambda)),
+         sd=compute_sdslope_errxy_robust(log(final_mean_lambda),log(1/autotime_lambda))) %>%
+  ggplot()+
+  geom_point(aes(log(final_mean_lambda),log(1/autotime_lambda),col=promoter))+
+  geom_line(aes(log(final_mean_lambda),log(final_mean_lambda)*s+i),col="red",linetype=2)+
+  geom_text(aes(x=-5,y=-5,label=sprintf("y=(%s +/- %s) x + %s",round(s,2),round(sd,2),round(i,2))))+
+  #geom_errorbar(aes(x=log(final_mean_lambda),ymin=log(autotime_lambda-error_autotime_lambda),ymax=log(autotime_lambda+error_autotime_lambda),col=promoter),width=0)+
+  xlab("Mean lambda (min-1) (log)")+
+  ylab("Gamma (min-1) (log)")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+ggsave("./20220321_presentation/inf_param_log_autocorrelation_time_vs_log_mean_lambda.pdf",height=3,width=5)
+
+```
+
+```{r}
+#first, cv_lambda
+myparameters_plot <- myparameters %>% 
+  left_join(myerrors_formatted,by=c("condition","promoter","name")) %>% 
+  select(condition,promoter,name,final,error) %>% 
+  filter(name %in% c("var_lambda","gamma_lambda","mean_lambda")) %>% 
+  mutate(error=sqrt(error)) %>% 
+  pivot_wider(names_from = name,values_from = c(final,error)) %>% 
+  rename(final_sigma2_lambda=final_var_lambda,
+         error_sigma2_lambda=error_var_lambda) %>% 
+  select(condition,promoter,final_sigma2_lambda,error_sigma2_lambda,final_mean_lambda)
+
+myparameters_plot$condition <- factor(myparameters_plot$condition,levels=c("acetate","glycerol","glucose","glucoseaa"))
+
+myparameters_plot %>% 
+  mutate(s=compute_slope_errxy_robust(log(final_mean_lambda),log(final_sigma2_lambda)),
+         i=compute_intercept_errxy_robust(log(final_mean_lambda),log(final_sigma2_lambda)),
+         sd=compute_sdslope_errxy_robust(log(final_mean_lambda),log(final_sigma2_lambda))) %>%
+  ggplot()+
+  geom_point(aes(log(final_mean_lambda),log(final_sigma2_lambda),col=promoter))+
+  geom_errorbar(aes(x=log(final_mean_lambda),ymin=log(final_sigma2_lambda-error_sigma2_lambda),ymax=log(final_sigma2_lambda+error_sigma2_lambda),col=promoter),width=0)+
+  geom_line(aes(log(final_mean_lambda),log(final_mean_lambda)*s+i),col="red",linetype=2)+
+  geom_text(aes(x=-5,y=-10,label=sprintf("y=(%s +/- %s) x + %s",round(s,2),round(sd,2),round(i,2))))+
+  xlab("Mean lambda (min-1) (log)")+
+  ylab("sigma2 lambda (log)")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+ggsave("./20220321_presentation/inf_param_log_sigma2_lambda_vs_log_mean_lambda.pdf",height=3,width=5)
+
+```
+
+```{r}
+#first, cv_lambda
+myparameters_plot <- myparameters %>% 
+  left_join(myerrors_formatted,by=c("condition","promoter","name")) %>% 
+  select(condition,promoter,name,final,error) %>% 
+  filter(name %in% c("var_lambda","gamma_lambda","mean_lambda")) %>% 
+  mutate(error=sqrt(error)) %>% 
+  pivot_wider(names_from = name,values_from = c(final,error)) %>% 
+  rename(final_sigma2_lambda=final_var_lambda,
+         error_sigma2_lambda=error_var_lambda) %>% 
+  select(condition,promoter,final_sigma2_lambda,error_sigma2_lambda,final_mean_lambda,final_gamma_lambda,error_gamma_lambda)
+
+myparameters_plot$condition <- factor(myparameters_plot$condition,levels=c("acetate","glycerol","glucose","glucoseaa"))
+
+myparameters_plot %>% 
+  mutate(s=compute_slope_errxy_robust(log(final_gamma_lambda),log(final_sigma2_lambda)),
+         i=compute_intercept_errxy_robust(log(final_gamma_lambda),log(final_sigma2_lambda)),
+         sd=compute_sdslope_errxy_robust(log(final_gamma_lambda),log(final_sigma2_lambda))) %>%
+  ggplot()+
+  geom_point(aes(log(final_gamma_lambda),log(final_sigma2_lambda),col=promoter))+
+  geom_errorbar(aes(x=log(final_gamma_lambda),ymin=log(final_sigma2_lambda-error_sigma2_lambda),ymax=log(final_sigma2_lambda+error_sigma2_lambda),col=promoter),width=0)+
+  geom_errorbar(aes(xmin=log(final_gamma_lambda-error_gamma_lambda),xmax=log(final_gamma_lambda+error_gamma_lambda),y=log(final_sigma2_lambda),col=promoter),width=0)+
+  geom_line(aes(log(final_gamma_lambda),log(final_gamma_lambda)*s+i),col="red",linetype=2)+
+  geom_text(aes(x=-3,y=-10,label=sprintf("y=(%s +/- %s) x + %s",round(s,2),round(sd,2),round(i,2))))+
+  xlab("gamma lambda (min-1) (log)")+
+  ylab("sigma2 lambda (log)")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+ggsave("./20220321_presentation/inf_param_log_sigma2_lambda_vs_log_gamma.pdf",height=3,width=5)
+
+```
+
+
+```{r}
+myparameters_plot <- myparameters %>% 
+  left_join(myerrors_formatted,by=c("condition","promoter","name")) %>% 
+  select(condition,promoter,name,final,error) %>% 
+  filter(name %in% c("var_lambda","gamma_lambda","mean_lambda")) %>% 
+  mutate(error=sqrt(error)) %>% 
+  pivot_wider(names_from = name,values_from = c(final,error)) %>% 
+  mutate(var_lambda=final_var_lambda/(2*final_gamma_lambda)) %>% 
+  mutate(error_var_lambda=abs(1/(2*final_gamma_lambda)*error_var_lambda-final_var_lambda*error_gamma_lambda/(2*final_gamma_lambda**2))) %>% 
+  select(condition,promoter,var_lambda,error_var_lambda,final_mean_lambda)
+
+myparameters_plot$condition <- factor(myparameters_plot$condition,levels=c("acetate","glycerol","glucose","glucoseaa"))
+
+myparameters_plot %>% 
+  mutate(s=compute_slope_errxy_robust(log(final_mean_lambda),log(var_lambda)),
+         i=compute_intercept_errxy_robust(log(final_mean_lambda),log(var_lambda)),
+         sd=compute_sdslope_errxy_robust(log(final_mean_lambda),log(var_lambda))) %>%
+  ggplot()+
+  geom_point(aes(log(final_mean_lambda),log(var_lambda),col=promoter))+
+  geom_errorbar(aes(x=log(final_mean_lambda),ymin=log(var_lambda-error_var_lambda),ymax=log(var_lambda+error_var_lambda),col=promoter),width=0)+
+  geom_line(aes(log(final_mean_lambda),log(final_mean_lambda)*s+i),col="red",linetype=2)+
+  geom_text(aes(x=-5,y=-10,label=sprintf("y=(%s +/- %s) x + %s",round(s,2),round(sd,2),round(i,2))))+
+  xlab("log(mean growth-rate) (min-1) (log)")+
+  ylab("log(var growth-rate) (min)")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+ggsave("./20220321_presentation/inf_param_log_sigma2_vs_log_mean_lambda.pdf",height=3,width=5)
+```
+
+I really have the feeling that sigma2 parameters is the one dictating how the overall variance is going to behave.
+Comparison with empirical data.
+
+```{r}
+myframes_plot <- myframes_inferred  %>% 
+  group_by(cell) %>% 
+  arrange(time_min) %>% 
+  mutate(l_birth=dplyr::first(length_um),
+         l_div=dplyr::last(length_um),
+         g_birth=first(gfp_nb),
+         g_div=last(gfp_nb),
+         alpha=fit_exp_elongation_slope(time_min,length_um)) %>% 
+  ungroup() %>% 
+  distinct(cell,.keep_all=TRUE) %>% 
+  group_by(condition,promoter) %>% 
+  mutate(var_lambda=var(alpha,na.rm=TRUE),
+         mean_lambda=mean(alpha,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  distinct(condition,promoter,.keep_all=TRUE) %>% 
+  select(condition,promoter,var_lambda,mean_lambda) %>% 
+  mutate(type="Experimental data after inference - cell-cyle")
+
+lambdaparameters <- myparameters %>% 
+  select(name,final,condition,promoter) %>% 
+  filter(name %in% c("var_lambda","gamma_lambda","mean_lambda")) %>% 
+  pivot_wider(names_from=name,values_from = final) %>% 
+  mutate(var_lambda=var_lambda/(2*gamma_lambda)) %>% 
+  select(condition,promoter,var_lambda,mean_lambda) %>% 
+  mutate(type="Experimental data - from inferred parameters")
+
+myframes_predictions <- myframes_inferred %>% 
+  group_by(condition, promoter) %>%
+  mutate(var_lambda=var(lambda,na.rm=TRUE),
+         mean_lambda=mean(lambda,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  distinct(condition,promoter,.keep_all=TRUE) %>%
+  select(condition,promoter,var_lambda,mean_lambda) %>% 
+  mutate(type="Experimental data after inference - predictions")
+
+#myframes_predictions_errorbars <- myframes_inferred %>% 
+#  group_by(row_number()) %>% 
+#  #partition(cluster=mycluster) %>%
+#  do(function(.df){
+#    .m <- unique(.df$lambda)
+#    .sd <- sqrt(unique(.df$cov_ll))
+#    .l <- rnorm(1,mean=.m,sd=.sd)
+#    .new_df <- .df %>% 
+#      mutate(lambda=.l)
+#      return(.new_df)}(.)) %>% 
+  #collect() %>% 
+#  ungroup() %>% 
+#  group_by(condition, promoter) %>%
+#  mutate(var_lambda=var(lambda,na.rm=TRUE),
+#         mean_lambda=mean(lambda,na.rm=TRUE)) %>% 
+#  ungroup() %>% 
+#  distinct(condition,promoter,.keep_all=TRUE) %>%
+#  select(condition,promoter,var_lambda,mean_lambda) %>% 
+#  mutate(type="Experimental data after inference - predictions + errorbars")
+
+myframes_predictions_errorbars <- myframes_inferred %>% 
+  mutate(.sd=sqrt(abs(cov_ll))) %>% 
+  rowwise() %>% 
+  mutate(lambda=rnorm(1,mean=lambda,sd=.sd)) %>% 
+  group_by(condition, promoter) %>%
+  mutate(var_lambda=var(lambda,na.rm=TRUE),
+         mean_lambda=mean(lambda,na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  distinct(condition,promoter,.keep_all=TRUE) %>%
+  select(condition,promoter,var_lambda,mean_lambda) %>% 
+  mutate(type="Experimental data after inference - predictions + errorbars")
+
+
+simulation_no_inference <- simulation_data_fullnoise %>% 
+  group_by(condition, promoter) %>%
+  mutate(var_lambda=var(lambda,na.rm=TRUE),
+         mean_lambda=mean(lambda,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  distinct(condition,promoter,.keep_all=TRUE) %>%
+  select(condition,promoter,var_lambda,mean_lambda) %>% 
+  mutate(type="Simulation - true value")
+
+simulation_no_inference_full <- simulation_data_fullnoise %>% 
+  group_by(cell,condition,promoter) %>% 
+  arrange(time_min) %>% 
+  mutate(l_birth=dplyr::first(length_um),
+         l_div=dplyr::last(length_um),
+         g_birth=first(gfp_nb),
+         g_div=last(gfp_nb),
+         alpha=fit_exp_elongation_slope(time_min,length_um)) %>% 
+  ungroup() %>% 
+  distinct(cell,condition,promoter,.keep_all=TRUE) %>% 
+  group_by(condition,promoter) %>% 
+  mutate(var_lambda=var(alpha,na.rm=TRUE),
+         mean_lambda=mean(alpha,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  distinct(condition,promoter,.keep_all=TRUE) %>% 
+  select(condition,promoter,var_lambda,mean_lambda) %>% 
+  mutate(type="Simulation - cell cycle")
+
+simulation_after_inference <- myframes_from_simulation %>% 
+  group_by(condition, promoter) %>%
+  mutate(var_lambda=var(lambda,na.rm=TRUE),
+         mean_lambda=mean(lambda,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  distinct(condition,promoter,.keep_all=TRUE) %>%
+  select(condition,promoter,var_lambda,mean_lambda) %>% 
+  mutate(type="Simulation after inference - predictions")
+
+simulation_after_inference_full <- myframes_from_simulation %>% 
+  group_by(cell,condition,promoter) %>% 
+  arrange(time_min) %>% 
+  mutate(l_birth=dplyr::first(length_um),
+         l_div=dplyr::last(length_um),
+         g_birth=first(gfp_nb),
+         g_div=last(gfp_nb),
+         alpha=fit_exp_elongation_slope(time_min,length_um)) %>% 
+  ungroup() %>% 
+  distinct(cell,condition,promoter,.keep_all=TRUE) %>% 
+  group_by(condition,promoter) %>% 
+  mutate(var_lambda=var(alpha,na.rm=TRUE),
+         mean_lambda=mean(alpha,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  distinct(condition,promoter,.keep_all=TRUE) %>% 
+  select(condition,promoter,var_lambda,mean_lambda) %>% 
+  mutate(type="Simulation after inference - cell cycle ")
+
+
+mydata <- rbind(
+  myframes_plot,
+  lambdaparameters,
+  myframes_predictions,
+  simulation_after_inference,
+  simulation_after_inference_full,
+  simulation_no_inference_full,
+  simulation_no_inference,
+  myframes_predictions_errorbars
+  )
+
+mydata %>% 
+  filter(type %in% c("Experimental data after inference - predictions","Experimental data - from inferred parameters","Experimental data after inference - predictions + errorbars")) %>% 
+  ggplot()+
+  geom_point(aes(mean_lambda,var_lambda,col=type))+
+  xlab("mean(lambda)")+
+  ylab("var(lambda)")
+
+ggsave("./figures/varlambda_meanlambda_all_comparisons.pdf",height=4,width=10)
+
+
+mydata %>% 
+  filter(type %in% c("Experimental data after inference - predictions","Experimental data - from inferred parameters","Experimental data after inference - predictions + errorbars")) %>% 
+  ggplot()+
+  geom_point(aes(log(mean_lambda),log(var_lambda),col=type),alpha=0.5)+
+  xlab("log(mean(lambda))")+
+  ylab("log(var(lambda))")
+
+ggsave("./figures/varlambda_meanlambda_all_comparisons.pdf",height=4,width=10)
+
+
+mydata %>% 
+  ggplot()+
+  geom_point(aes(mean_lambda,sqrt(var_lambda)/mean_lambda,col=type))+
+  xlab("mean(lambda)")+
+  ylab("CV(lambda)")
+
+mydata %>% 
+  mutate(cv_th=mean_lambda**(-0.12)*exp(-1.6)) %>% 
+  filter(type=="Experimental data - from inferred parameters") %>% 
+  ggplot()+
+  geom_point(aes(mean_lambda,sqrt(var_lambda)/mean_lambda,col=type))+
+  geom_point(aes(mean_lambda,cv_th),col="red")+
+  xlab("mean(lambda)")+
+  ylab("CV(lambda)")
+
+ggsave("./figures/cvlambda_meanlambda_all_comparisons.pdf",height=4,width=10)
+```
+
+```{r}
+mydata %>% 
+  filter(type %in% c("Experimental data after inference - predictions","Experimental data - from inferred parameters","Experimental data after inference - predictions + errorbars")) %>% 
+  ggplot()+
+  geom_point(aes(log(mean_lambda),log(var_lambda),col=type),alpha=1)+
+  xlab("log(mean(lambda))")+
+  ylab("log(var(lambda))")
+
+ggsave("./20220321_presentation/varlambda_meanlambda_all_comparisons.pdf",height=5,width=10)
+```
+
+```{r}
+mydata %>% 
+  filter(type=="Experimental data after inference - predictions + errorbars") %>% 
+  mutate(s=compute_slope_errxy_robust(log(mean_lambda),log(var_lambda)),
+         i=compute_intercept_errxy_robust(log(mean_lambda),log(var_lambda)),
+         sd=compute_sdslope_errxy_robust(log(mean_lambda),log(var_lambda))) %>%
+  #ungroup() %>% 
+  ggplot()+
+  geom_point(aes(log(mean_lambda),log(var_lambda),col=promoter,shape=condition))+
+  geom_line(aes(log(mean_lambda),log(mean_lambda)*s+i),col="red",linetype=2)+
+  geom_text(aes(x=-5.5,y=-12,label=sprintf("y=(%s s+/- %s) x + %s",round(s,2),round(sd,2),round(i,2))),size=3)+
+  xlab("mean(growth-rate)")+
+  ylab("var(growth-rate)")
+
+ggsave("./20220321_presentation/varlambda_meanlambda_all_comparisons_pred_errorbars.pdf",height=3,width=5)
+
+
+mydata %>% 
+  filter(type %in% c("Experimental data after inference - predictions + errorbars","Experimental data - from inferred parameters")) %>% 
+  mutate(s=compute_slope_errxy_robust(log(mean_lambda),log(var_lambda)),
+         i=compute_intercept_errxy_robust(log(mean_lambda),log(var_lambda)),
+         sd=compute_sdslope_errxy_robust(log(mean_lambda),log(var_lambda))) %>%
+  #ungroup() %>% 
+  ggplot()+
+  geom_point(aes(log(mean_lambda),sqrt(var_lambda)/mean_lambda,col=type))+
+  #geom_line(aes(log(mean_lambda),log(mean_lambda)*s+i),col="red",linetype=2)+
+  #geom_text(aes(x=-5.5,y=-12,label=sprintf("y=(%s s+/- %s) x + %s",round(s,2),round(sd,2),round(i,2))),size=3)+
+  xlab("mean(growth-rate)")+
+  ylab("CV(growth-rate)")+
+  coord_cartesian(ylim=c(0,0.5))
+
+ggsave("./20220321_presentation/cvlambda_meanlambda_pred_errorbars.pdf",height=5,width=10)
+```
+
+So no, it does not help! What are the error bars looking like in size.
+
+```{r}
+myframes_inferred %>% 
+  mutate(sd_lambda=sqrt(cov_ll),
+         cv_lambda=sd_lambda/lambda) %>% 
+  group_by(condition,promoter) %>% 
+  mutate(mean_cv_lambda=mean(cv_lambda,na.rm=TRUE)) %>% 
+  mutate(mean_lambda=mean(lambda,na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  distinct(condition,promoter,.keep_all = TRUE) %>% 
+  ggplot()+
+  geom_point(aes(mean_lambda,mean_cv_lambda,col=promoter,shape=condition))
+```
+
+So... the truth is that error bars are not so big compared to the mean lambda in all condition. Close to 20%, except for rplN glucose aa, 30%. And somehow, errors bars are smaller (on average) in glycerol.
+
+```{r}
+myframes_inferred %>% 
+  mutate(sd_lambda=sqrt(cov_ll),
+         cv_lambda=sd_lambda/lambda) %>% 
+  group_by(cell,condition,promoter) %>% 
+  mutate(mean_cv_lambda=mean(cv_lambda,na.rm=TRUE)) %>% 
+  mutate(mean_lambda=mean(lambda,na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  #distinct(condition,promoter,.keep_all = TRUE) %>% 
+  ggplot()+
+  geom_freqpoly(aes(cv_lambda,col=promoter),binwidth=.01)+
+  facet_wrap(~condition,ncol=1)+
+  coord_cartesian(xlim=c(0,0.4))
+```
+
+So indeed, error bars are bigger in glucoseaa, but it is also quite overlapping. And rplN is quite an outsider, with pretty big error bars. These errors bars should be the sam between experiments...
+
+
+
+
+
+
+
+
+
+# Inferred lambda parameters versus mean doubling time
+
+```{r}
+#first, cv_lambda
+myparameters_plot <- myparameters %>% 
+  left_join(myerrors_formatted,by=c("condition","promoter","name")) %>% 
+  select(condition,promoter,name,final,error) %>% 
+  filter(name %in% c("var_lambda","gamma_lambda","mean_lambda")) %>% 
+  mutate(error=sqrt(error)) %>% 
+  pivot_wider(names_from = name,values_from = c(final,error)) %>% 
+  mutate(autotime_lambda=1/final_gamma_lambda) %>% 
+  mutate(error_autotime_lambda=1/(final_gamma_lambda**2)*error_gamma_lambda) %>% 
+  mutate(final_doubling_time=log(2)/final_mean_lambda) %>% 
+  select(condition,promoter,autotime_lambda,error_autotime_lambda,final_mean_lambda,final_doubling_time)
+
+myparameters_plot$condition <- factor(myparameters_plot$condition,levels=c("acetate","glycerol","glucose","glucoseaa"))
+
+myparameters_plot %>% 
+  ggplot()+
+  geom_point(aes(final_doubling_time,autotime_lambda,col=promoter))+
+  #geom_abline(aes(slope=1,intercept=0,col=promoter))+
+  geom_errorbar(aes(x=final_doubling_time,ymin=autotime_lambda-error_autotime_lambda,ymax=autotime_lambda+error_autotime_lambda,col=promoter),width=0)+
+  xlab("Mean doubling time")+
+  ylab("Autocorrelation time (min)")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+#ggsave("./fig_presentation/inf_param_autocorrelation_time_vs_mean_lambda.pdf",height=3,width=5)
+
+myparameters_plot %>% 
+  mutate(s=compute_slope_errxy_robust(log(final_doubling_time),log(autotime_lambda)),
+         i=compute_intercept_errxy_robust(log(final_doubling_time),log(autotime_lambda)),
+         sd=compute_sdslope_errxy_robust(log(final_doubling_time),log(autotime_lambda))) %>%
+  ggplot()+
+  geom_point(aes(log(final_doubling_time),log(autotime_lambda),col=promoter))+
+  geom_errorbar(aes(x=log(final_doubling_time),ymin=log(autotime_lambda-error_autotime_lambda),ymax=log(autotime_lambda+error_autotime_lambda),col=promoter),width=0)+
+  geom_line(aes(log(final_doubling_time),log(final_doubling_time)*s+i),col="red",linetype=2)+
+  geom_text(aes(x=5,y=5,label=sprintf("y=(%s +/- %s) x + %s",round(s,2),round(sd,2),round(i,2))))+
+  xlab("Mean doubling time (min) (log)")+
+  ylab("Autocorrelation time (min) (log)")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+#ggsave("./fig_presentation/inf_param_log_autocorrelation_time_vs_log_mean_lambda.pdf",height=3,width=5)
+
+```
+```{r}
+#first, cv_lambda
+myparameters_plot <- myparameters %>% 
+  left_join(myerrors_formatted,by=c("condition","promoter","name")) %>% 
+  select(condition,promoter,name,final,error) %>% 
+  filter(name %in% c("var_lambda","gamma_lambda","mean_lambda")) %>% 
+  mutate(error=sqrt(error)) %>% 
+  pivot_wider(names_from = name,values_from = c(final,error)) %>% 
+  rename(final_sigma2_lambda=final_var_lambda,
+         error_sigma2_lambda=error_var_lambda) %>% 
+  mutate(mean_doubling_time=log(2)/final_mean_lambda) %>% 
+  select(condition,promoter,final_sigma2_lambda,error_sigma2_lambda,mean_doubling_time)
+
+myparameters_plot$condition <- factor(myparameters_plot$condition,levels=c("acetate","glycerol","glucose","glucoseaa"))
+
+myparameters_plot %>% 
+  mutate(s=compute_slope_errxy_robust(log(mean_doubling_time),log(final_sigma2_lambda)),
+         i=compute_intercept_errxy_robust(log(mean_doubling_time),log(final_sigma2_lambda)),
+         sd=compute_sdslope_errxy_robust(log(mean_doubling_time),log(final_sigma2_lambda))) %>%
+  ggplot()+
+  geom_point(aes(log(mean_doubling_time),log(final_sigma2_lambda),col=promoter))+
+  geom_errorbar(aes(x=log(mean_doubling_time),ymin=log(final_sigma2_lambda-error_sigma2_lambda),ymax=log(final_sigma2_lambda+error_sigma2_lambda),col=promoter),width=0)+
+  geom_line(aes(log(mean_doubling_time),log(mean_doubling_time)*s+i),col="red",linetype=2)+
+  geom_text(aes(x=5,y=-10,label=sprintf("y=(%s +/- %s) x + %s",round(s,2),round(sd,2),round(i,2))))+
+  xlab("Mean doubling time (min) (log)")+
+  ylab("sigma2 lambda (log)")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+#ggsave("./fig_presentation/inf_param_log_sigma2_lambda_vs_log_mean_lambda.pdf",height=3,width=5)
+
+```
+
+```{r}
+myparameters_plot <- myparameters %>% 
+  left_join(myerrors_formatted,by=c("condition","promoter","name")) %>% 
+  select(condition,promoter,name,final,error) %>% 
+  filter(name %in% c("var_lambda","gamma_lambda","mean_lambda")) %>% 
+  mutate(error=sqrt(error)) %>% 
+  pivot_wider(names_from = name,values_from = c(final,error)) %>% 
+  mutate(var_lambda=final_var_lambda/(2*final_gamma_lambda)) %>% 
+  mutate(error_var_lambda=abs(1/(2*final_gamma_lambda)*error_var_lambda-final_var_lambda*error_gamma_lambda/(2*final_gamma_lambda**2))) %>% 
+  mutate(final_doubling_time=log(2)/final_mean_lambda) %>% 
+  select(condition,promoter,var_lambda,error_var_lambda,final_mean_lambda,final_doubling_time)
+
+myparameters_plot$condition <- factor(myparameters_plot$condition,levels=c("acetate","glycerol","glucose","glucoseaa"))
+
+myparameters_plot %>% 
+  mutate(s=compute_slope_errxy_robust(log(final_doubling_time),log(var_lambda)),
+         i=compute_intercept_errxy_robust(log(final_doubling_time),log(var_lambda)),
+         sd=compute_sdslope_errxy_robust(log(final_doubling_time),log(var_lambda))) %>%
+  ggplot()+
+  geom_point(aes(log(final_doubling_time),log(var_lambda),col=promoter))+
+  geom_errorbar(aes(x=log(final_doubling_time),ymin=log(var_lambda-error_var_lambda),ymax=log(var_lambda+error_var_lambda),col=promoter),width=0)+
+  geom_line(aes(log(final_doubling_time),log(final_doubling_time)*s+i),col="red",linetype=2)+
+  geom_text(aes(x=4,y=-10,label=sprintf("y=(%s +/- %s) x + %s",round(s,2),round(sd,2),round(i,2))))+
+  xlab("log(mean doubling time) (min)")+
+  ylab("log(variance exponential growth-rate)")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+#ggsave("./fig_presentation/inf_param_log_varlambda_log_mean_lambda.pdf",height=3,width=5)
+```
+
+```{r}
+myframes_plot <- myframes_inferred  %>% 
+  group_by(cell) %>% 
+  arrange(time_min) %>% 
+  mutate(l_birth=dplyr::first(length_um),
+         l_div=dplyr::last(length_um),
+         g_birth=first(gfp_nb),
+         g_div=last(gfp_nb),
+         alpha=fit_exp_elongation_slope(time_min,length_um)) %>% 
+  ungroup() %>% 
+  distinct(cell,.keep_all=TRUE) %>% 
+  group_by(condition,promoter) %>% 
+  mutate(var_lambda=var(alpha,na.rm=TRUE),
+         mean_doubling_time=log(2)/mean(alpha,na.rm=TRUE))%>%
+  ungroup() %>% 
+  distinct(condition,promoter,.keep_all=TRUE) %>% 
+  select(condition,promoter,var_lambda,mean_doubling_time) %>% 
+  mutate(type="Experimental data after inference - cell-cyle")
+
+lambdaparameters <- myparameters %>% 
+  select(name,final,condition,promoter) %>% 
+  filter(name %in% c("var_lambda","gamma_lambda","mean_lambda")) %>% 
+  pivot_wider(names_from=name,values_from = final) %>% 
+  mutate(var_lambda=var_lambda/(2*gamma_lambda)) %>% 
+  mutate(mean_doubling_time=log(2)/mean_lambda) %>% 
+  select(condition,promoter,var_lambda,mean_doubling_time) %>%
+  mutate(type="Experimental data - from inferred parameters")
+
+myframes_predictions <- myframes_inferred %>% 
+  group_by(condition, promoter) %>%
+  mutate(var_lambda=var(lambda,na.rm=TRUE),
+        mean_doubling_time=log(2)/mean(alpha,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  distinct(condition,promoter,.keep_all=TRUE) %>%
+  select(condition,promoter,var_lambda,mean_doubling_time) %>% 
+  mutate(type="Experimental data after inference - predictions")
+
+myframes_predictions_errorbars <- myframes_inferred %>% 
+  group_by(condition, promoter) %>%
+  mutate(var_lambda=var(lambda,na.rm=TRUE),
+         mean_doubling_time=log(2)/mean(lambda,na.rm=TRUE),
+         var_errors=var(sqrt(cov_ll),na.rm=TRUE),
+         var_lambda=var_lambda+var_errors) %>%
+  ungroup() %>% 
+  distinct(condition,promoter,.keep_all=TRUE) %>%
+  select(condition,promoter,var_lambda,mean_doubling_time) %>% 
+  mutate(type="Experimental data after inference - predictions + errorbars")
+
+simulation_no_inference <- simulation_data_fullnoise %>% 
+  group_by(condition, promoter) %>%
+  mutate(var_lambda=var(lambda,na.rm=TRUE)) %>% 
+  mutate(mean_doubling_time=log(2)/mean(lambda,na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  distinct(condition,promoter,.keep_all=TRUE) %>%
+  select(condition,promoter,var_lambda,mean_doubling_time) %>% 
+  mutate(type="Simulation - true value")
+
+simulation_no_inference_full <- simulation_data_fullnoise %>% 
+  group_by(cell,condition,promoter) %>% 
+  arrange(time_min) %>% 
+  mutate(l_birth=dplyr::first(length_um),
+         l_div=dplyr::last(length_um),
+         g_birth=first(gfp_nb),
+         g_div=last(gfp_nb),
+         alpha=fit_exp_elongation_slope(time_min,length_um)) %>% 
+  ungroup() %>% 
+  distinct(cell,condition,promoter,.keep_all=TRUE) %>% 
+  group_by(condition,promoter) %>% 
+  mutate(var_lambda=var(alpha,na.rm=TRUE),
+         mean_doubling_time=log(2)/mean(alpha,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  distinct(condition,promoter,.keep_all=TRUE) %>% 
+  select(condition,promoter,var_lambda,mean_doubling_time) %>% 
+  mutate(type="Simulation - cell cycle")
+
+simulation_after_inference <- myframes_from_simulation %>% 
+  group_by(condition, promoter) %>%
+  mutate(var_lambda=var(lambda,na.rm=TRUE),
+         mean_doubling_time=log(2)/mean(lambda,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  distinct(condition,promoter,.keep_all=TRUE) %>%
+  select(condition,promoter,var_lambda,mean_doubling_time) %>% 
+  mutate(type="Simulation after inference - predictions")
+
+simulation_after_inference_full <- myframes_from_simulation %>% 
+  group_by(cell,condition,promoter) %>% 
+  arrange(time_min) %>% 
+  mutate(l_birth=dplyr::first(length_um),
+         l_div=dplyr::last(length_um),
+         g_birth=first(gfp_nb),
+         g_div=last(gfp_nb),
+         alpha=fit_exp_elongation_slope(time_min,length_um)) %>% 
+  ungroup() %>% 
+  distinct(cell,condition,promoter,.keep_all=TRUE) %>% 
+  group_by(condition,promoter) %>% 
+  mutate(var_lambda=var(alpha,na.rm=TRUE),
+         mean_doubling_time=log(2)/mean(alpha,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  distinct(condition,promoter,.keep_all=TRUE) %>% 
+  select(condition,promoter,var_lambda,mean_doubling_time) %>% 
+  mutate(type="Simulation after inference - cell cycle ")
+
+
+mydata <- rbind(
+  myframes_plot,
+  lambdaparameters,
+  myframes_predictions,
+  simulation_after_inference,
+  simulation_after_inference_full,
+  simulation_no_inference_full,
+  simulation_no_inference,
+  myframes_predictions_errorbars
+  )
+
+mydata %>% 
+  ggplot()+
+  geom_point(aes(mean_doubling_time,var_lambda,col=type))+
+  xlab("mean(lambda)")+
+  ylab("var(lambda)")
+
+#ggsave("./figures/varlambda_meanlambda_all_comparisons.pdf",height=4,width=10)
+
+
+mydata %>% 
+  ggplot()+
+  geom_point(aes(log(mean_doubling_time),log(var_lambda),col=type))+
+  xlab("log(mean(lambda))")+
+  ylab("log(var(lambda))")
+
+#ggsave("./figures/varlambda_meanlambda_all_comparisons.pdf",height=4,width=10)
+
+
+#mydata %>% 
+#  ggplot()+
+#  geom_point(aes(mean_doubling_time,sqrt(var_lambda)/mean_lambda,col=type))+
+#  xlab("mean(lambda)")+
+#  ylab("CV(lambda)")
+
+#ggsave("./figures/cvlambda_meanlambda_all_comparisons.pdf",height=4,width=10)
+```
+
+# Comparing inferred parameters for production (Q)
+
+```{r}
+#first, cv_lambda
+myparameters_plot <- myparameters %>% 
+  left_join(myerrors_formatted,by=c("condition","promoter","name")) %>% 
+  select(condition,promoter,name,final,error) %>% 
+  filter(name %in% c("var_q","gamma_q","mean_q","mean_lambda")) %>% 
+  mutate(error=sqrt(error)) %>% 
+  pivot_wider(names_from = name,values_from = c(final,error)) %>% 
+  select(condition,promoter,final_var_q,error_var_q,final_mean_lambda,final_mean_q)
+
+myparameters_plot$condition <- factor(myparameters_plot$condition,levels=c("acetate","glycerol","glucose","glucoseaa"))
+
+myparameters_plot %>% 
+  ggplot()+
+  geom_point(aes(log(final_mean_lambda),log(final_mean_q),col=promoter))+
+  #geom_errorbar(aes(x=log(final_mean_lambda),ymin=log(final_var_q-error_var_q),ymax=log(final_var_q+error_var_q),col=promoter),width=0)+
+  xlab("Mean lambda (min-1) (log)")+
+  ylab("Mean Q (log)")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+```
+
+```{r}
+#first, cv_lambda
+myparameters_plot <- myparameters %>% 
+  left_join(myerrors_formatted,by=c("condition","promoter","name")) %>% 
+  select(condition,promoter,name,final,error) %>% 
+  filter(name %in% c("var_q","gamma_q","mean_q","mean_lambda")) %>% 
+  mutate(error=sqrt(error)) %>% 
+  pivot_wider(names_from = name,values_from = c(final,error)) %>% 
+  select(condition,promoter,final_var_q,error_var_q,final_mean_lambda)
+
+myparameters_plot$condition <- factor(myparameters_plot$condition,levels=c("acetate","glycerol","glucose","glucoseaa"))
+
+myparameters_plot %>% 
+  ggplot()+
+  geom_point(aes(log(final_mean_lambda),log(final_var_q),col=promoter))+
+  geom_errorbar(aes(x=log(final_mean_lambda),ymin=log(final_var_q-error_var_q),ymax=log(final_var_q+error_var_q),col=promoter),width=0)+
+  xlab("Mean lambda (min-1) (log)")+
+  ylab("sigma2 (log)")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+```
+
+```{r}
+#first, cv_lambda
+myparameters_plot <- myparameters %>% 
+  left_join(myerrors_formatted,by=c("condition","promoter","name")) %>% 
+  select(condition,promoter,name,final,error) %>% 
+  filter(name %in% c("var_q","gamma_q","mean_q","mean_lambda")) %>% 
+  mutate(error=sqrt(error)) %>% 
+  pivot_wider(names_from = name,values_from = c(final,error)) %>% 
+  mutate(cv_q=sqrt(final_var_q/(2*final_gamma_q))/(final_mean_q)) %>% 
+  select(condition,promoter,final_var_q,error_var_q,final_mean_lambda,final_mean_q,error_mean_q,final_gamma_q,cv_q)
+
+myparameters_plot$condition <- factor(myparameters_plot$condition,levels=c("acetate","glycerol","glucose","glucoseaa"))
+
+myparameters_plot %>% 
+  #filter(!((promoter=="med2") & (condition=="acetate"))) %>% 
+  mutate(s=compute_slope_errxy_robust(log(final_mean_q),log(final_var_q)),
+         i=compute_intercept_errxy_robust(log(final_mean_q),log(final_var_q)),
+         sd=compute_sdslope_errxy_robust(log(final_mean_q),log(final_var_q))) %>%
+  ggplot()+
+  geom_point(aes(log(final_mean_q),log(final_var_q),col=promoter,shape=condition),size=3)+
+  geom_errorbar(aes(x=log(final_mean_q),ymin=log(final_var_q-error_var_q),ymax=log(final_var_q+error_var_q),col=promoter),width=0)+
+  geom_errorbar(aes(y=log(final_var_q),xmin=log(final_mean_q-error_mean_q),xmax=log(final_mean_q+error_mean_q),col=promoter),width=0)+
+  geom_line(aes(log(final_mean_q),log(final_mean_q)*s+i),col="red",linetype=2)+
+  geom_text(aes(x=2,y=7,label=sprintf("y=(%s +/- %s) x + %s",round(s,2),round(sd,2),round(i,2))))+
+  xlab("Mean Q (log)")+
+  ylab("sigma2 Q (log)")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+ggsave("./20220321_presentation/sigma2Q_meanQ.pdf",height=3,width=5)
+
+myparameters_plot %>% 
+  filter(!((promoter=="med2") & (condition=="acetate"))) %>% 
+  mutate(s=compute_slope_errxy_robust(log(final_mean_q),log(final_var_q)),
+         i=compute_intercept_errxy_robust(log(final_mean_q),log(final_var_q)),
+         sd=compute_sdslope_errxy_robust(log(final_mean_q),log(final_var_q))) %>%
+  ggplot()+
+  geom_point(aes(log(final_mean_q),log(final_var_q),col=promoter,shape=condition),size=3)+
+  geom_errorbar(aes(x=log(final_mean_q),ymin=log(final_var_q-error_var_q),ymax=log(final_var_q+error_var_q),col=promoter),width=0)+
+  geom_errorbar(aes(y=log(final_var_q),xmin=log(final_mean_q-error_mean_q),xmax=log(final_mean_q+error_mean_q),col=promoter),width=0)+
+  geom_line(aes(log(final_mean_q),log(final_mean_q)*s+i),col="red",linetype=2)+
+  geom_text(aes(x=2,y=7,label=sprintf("y=(%s +/- %s) x + %s",round(s,2),round(sd,2),round(i,2))))+
+  xlab("Mean Q (log)")+
+  ylab("sigma2 Q (log)")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+ggsave("./20220321_presentation/sigma2Q_meanQ_no_med2.pdf",height=3,width=5)
+```
+
+```{r}
+myparameters_plot %>% 
+  mutate(s=compute_slope_errxy_robust(log(final_mean_q),log(final_var_q)),
+         i=compute_intercept_errxy_robust(log(final_mean_q),log(final_var_q)),
+         sd=compute_sdslope_errxy_robust(log(final_mean_q),log(final_var_q))) %>%
+  ggplot()+
+  geom_point(aes(log(final_mean_q),log(final_var_q),col=promoter,shape=condition),size=3)+
+  geom_errorbar(aes(x=log(final_mean_q),ymin=log(final_var_q-error_var_q),ymax=log(final_var_q+error_var_q),col=promoter),width=0)+
+  geom_errorbar(aes(y=log(final_var_q),xmin=log(final_mean_q-error_mean_q),xmax=log(final_mean_q+error_mean_q),col=promoter),width=0)+
+   geom_line(aes(log(final_mean_q),log(final_mean_q)*s+i),col="red",linetype=2)+
+  geom_text(aes(x=2,y=7,label=sprintf("y=(%s +/- %s) x + %s",round(s,2),round(sd,2),round(i,2))))+
+  xlab("Mean Q (log)")+
+  ylab("sigma2 Q (log)")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+
+  facet_wrap(~promoter)
+```
+
+```{r}
+myparameters_plot %>% 
+  group_by(condition) %>% 
+  mutate(s=compute_slope_errxy_robust(log(final_mean_q),log(final_var_q)),
+         i=compute_intercept_errxy_robust(log(final_mean_q),log(final_var_q)),
+         sd=compute_sdslope_errxy_robust(log(final_mean_q),log(final_var_q))) %>%
+  ungroup() %>% 
+  ggplot()+
+  geom_point(aes(log(final_mean_q),log(final_var_q),col=promoter,shape=condition),size=3)+
+  geom_errorbar(aes(x=log(final_mean_q),ymin=log(final_var_q-error_var_q),ymax=log(final_var_q+error_var_q),col=promoter),width=0)+
+  geom_errorbar(aes(y=log(final_var_q),xmin=log(final_mean_q-error_mean_q),xmax=log(final_mean_q+error_mean_q),col=promoter),width=0)+
+ geom_line(aes(log(final_mean_q),log(final_mean_q)*s+i),col="red",linetype=2)+
+  geom_text(aes(x=2,y=7,label=sprintf("y=(%s +/- %s) x + %s",round(s,2),round(sd,2),round(i,2))),size=2)+
+  xlab("Mean Q (log)")+
+  ylab("sigma2 Q (log)")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+
+  facet_wrap(~condition)
+
+ggsave("./20220321_presentation/sigma2Q_meanQ_facetted.pdf",height=3,width=5)
+
+myparameters_plot %>% 
+  filter(!((promoter=="med2") & (condition=="acetate"))) %>% 
+  group_by(condition) %>%
+  mutate(s=compute_slope_errxy_robust(log(final_mean_q),log(final_var_q)),
+         i=compute_intercept_errxy_robust(log(final_mean_q),log(final_var_q)),
+         sd=compute_sdslope_errxy_robust(log(final_mean_q),log(final_var_q))) %>%
+  ungroup() %>% 
+  ggplot()+
+  geom_point(aes(log(final_mean_q),log(final_var_q),col=promoter,shape=condition),size=3)+
+  geom_errorbar(aes(x=log(final_mean_q),ymin=log(final_var_q-error_var_q),ymax=log(final_var_q+error_var_q),col=promoter),width=0)+
+  geom_errorbar(aes(y=log(final_var_q),xmin=log(final_mean_q-error_mean_q),xmax=log(final_mean_q+error_mean_q),col=promoter),width=0)+
+ geom_line(aes(log(final_mean_q),log(final_mean_q)*s+i),col="red",linetype=2)+
+  geom_text(aes(x=2,y=7,label=sprintf("y=(%s +/- %s) x + %s",round(s,2),round(sd,2),round(i,2))),size=2)+
+  xlab("Mean Q (log)")+
+  ylab("sigma2 Q (log)")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+
+  facet_wrap(~condition)
+
+ggsave("./20220321_presentation/sigma2Q_meanQ_facetted_no_med2.pdf",height=3,width=5)
+
+myparameters_plot %>% 
+  group_by(promoter) %>% 
+  mutate(s=compute_slope_errxy_robust(log(final_mean_q),log(final_var_q)),
+         i=compute_intercept_errxy_robust(log(final_mean_q),log(final_var_q)),
+         sd=compute_sdslope_errxy_robust(log(final_mean_q),log(final_var_q))) %>%
+  ungroup() %>% 
+  ggplot()+
+  geom_point(aes(log(final_mean_q),log(final_var_q),col=promoter,shape=condition),size=3)+
+  geom_errorbar(aes(x=log(final_mean_q),ymin=log(final_var_q-error_var_q),ymax=log(final_var_q+error_var_q),col=promoter),width=0)+
+  geom_errorbar(aes(y=log(final_var_q),xmin=log(final_mean_q-error_mean_q),xmax=log(final_mean_q+error_mean_q),col=promoter),width=0)+
+ geom_line(aes(log(final_mean_q),log(final_mean_q)*s+i),col="red",linetype=2)+
+  geom_text(aes(x=2,y=7,label=sprintf("y=(%s +/- %s) x + %s",round(s,2),round(sd,2),round(i,2))),size=3)+
+  xlab("Mean Q (log)")+
+  ylab("sigma2 Q (log)")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+
+  facet_wrap(~promoter)
+
+ggsave("./20220321_presentation/sigma2Q_meanQ_facetted_promoter.pdf",height=6,width=10)
+
+
+myparameters_plot %>% 
+  filter(condition != "acetate") %>% 
+  group_by(promoter) %>% 
+  mutate(s=compute_slope_errxy_robust(log(final_mean_q),log(final_var_q)),
+         i=compute_intercept_errxy_robust(log(final_mean_q),log(final_var_q)),
+         sd=compute_sdslope_errxy_robust(log(final_mean_q),log(final_var_q))) %>%
+  ungroup() %>% 
+  ggplot()+
+  geom_point(aes(log(final_mean_q),log(final_var_q),col=promoter,shape=condition),size=3)+
+  geom_errorbar(aes(x=log(final_mean_q),ymin=log(final_var_q-error_var_q),ymax=log(final_var_q+error_var_q),col=promoter),width=0)+
+  geom_errorbar(aes(y=log(final_var_q),xmin=log(final_mean_q-error_mean_q),xmax=log(final_mean_q+error_mean_q),col=promoter),width=0)+
+ geom_line(aes(log(final_mean_q),log(final_mean_q)*s+i),col="red",linetype=2)+
+  geom_text(aes(x=2,y=7,label=sprintf("y=(%s +/- %s) x + %s",round(s,2),round(sd,2),round(i,2))),size=3)+
+  xlab("Mean Q (log)")+
+  ylab("sigma2 Q (log)")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+
+  facet_wrap(~promoter)
+
+ggsave("./20220321_presentation/sigma2Q_meanQ_facetted_promoter_no_acetate.pdf",height=6,width=10)
+
+```
+
+```{r}
+myparameters_plot %>% 
+  #mutate(s=compute_slope_errxy_robust(log(final_mean_q),log(final_var_q)),
+  #       i=compute_intercept_errxy_robust(log(final_mean_q),log(final_var_q)),
+  #       sd=compute_sdslope_errxy_robust(log(final_mean_q),log(final_var_q))) %>%
+  ggplot()+
+  geom_point(aes(log(final_gamma_q),log(final_var_q),col=promoter,shape=condition),size=3)+
+  #geom_errorbar(aes(x=log(final_mean_q),ymin=log(final_var_q-error_var_q),ymax=log(final_var_q+error_var_q),col=promoter),width=0)+
+  #geom_errorbar(aes(y=log(final_var_q),xmin=log(final_mean_q-error_mean_q),xmax=log(final_mean_q+error_mean_q),col=promoter),width=0)+
+  #geom_line(aes(log(final_mean_q),log(final_mean_q)*s+i),col="red",linetype=2)+
+  #geom_text(aes(x=2,y=5,label=sprintf("y=(%s +/- %s) x + %s",round(s,2),round(sd,2),round(i,2))))+
+  xlab("gamma Q (log)")+
+  ylab("sigma2 Q (log)")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+myparameters_plot %>% 
+  #mutate(s=compute_slope_errxy_robust(log(final_mean_q),log(final_var_q)),
+  #       i=compute_intercept_errxy_robust(log(final_mean_q),log(final_var_q)),
+  #       sd=compute_sdslope_errxy_robust(log(final_mean_q),log(final_var_q))) %>%
+  ggplot()+
+  geom_point(aes(log(final_mean_q),log(final_gamma_q),col=promoter,shape=condition),size=3)+
+  #geom_errorbar(aes(x=log(final_mean_q),ymin=log(final_var_q-error_var_q),ymax=log(final_var_q+error_var_q),col=promoter),width=0)+
+  #geom_errorbar(aes(y=log(final_var_q),xmin=log(final_mean_q-error_mean_q),xmax=log(final_mean_q+error_mean_q),col=promoter),width=0)+
+  #geom_line(aes(log(final_mean_q),log(final_mean_q)*s+i),col="red",linetype=2)+
+  #geom_text(aes(x=2,y=5,label=sprintf("y=(%s +/- %s) x + %s",round(s,2),round(sd,2),round(i,2))))+
+  xlab("mean Q (log)")+
+  ylab("gamma Q (log)")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+myparameters_plot %>% 
+  #mutate(s=compute_slope_errxy_robust(log(final_mean_q),log(final_var_q)),
+  #       i=compute_intercept_errxy_robust(log(final_mean_q),log(final_var_q)),
+  #       sd=compute_sdslope_errxy_robust(log(final_mean_q),log(final_var_q))) %>%
+  ggplot()+
+  geom_point(aes(log(final_mean_q),log(final_gamma_q),col=cv_q),size=3)+
+  #geom_errorbar(aes(x=log(final_mean_q),ymin=log(final_var_q-error_var_q),ymax=log(final_var_q+error_var_q),col=promoter),width=0)+
+  #geom_errorbar(aes(y=log(final_var_q),xmin=log(final_mean_q-error_mean_q),xmax=log(final_mean_q+error_mean_q),col=promoter),width=0)+
+  #geom_line(aes(log(final_mean_q),log(final_mean_q)*s+i),col="red",linetype=2)+
+  #geom_text(aes(x=2,y=5,label=sprintf("y=(%s +/- %s) x + %s",round(s,2),round(sd,2),round(i,2))))+
+  xlab("mean Q (log)")+
+  ylab("gamma Q (log)")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+myparameters_plot %>% 
+  #mutate(s=compute_slope_errxy_robust(log(final_mean_q),log(final_var_q)),
+  #       i=compute_intercept_errxy_robust(log(final_mean_q),log(final_var_q)),
+  #       sd=compute_sdslope_errxy_robust(log(final_mean_q),log(final_var_q))) %>%
+  ggplot()+
+  geom_point(aes(log(final_mean_q),log(final_gamma_q),col=promoter,shape=condition),size=3)+
+  #geom_errorbar(aes(x=log(final_mean_q),ymin=log(final_var_q-error_var_q),ymax=log(final_var_q+error_var_q),col=promoter),width=0)+
+  #geom_errorbar(aes(y=log(final_var_q),xmin=log(final_mean_q-error_mean_q),xmax=log(final_mean_q+error_mean_q),col=promoter),width=0)+
+  #geom_line(aes(log(final_mean_q),log(final_mean_q)*s+i),col="red",linetype=2)+
+  #geom_text(aes(x=2,y=5,label=sprintf("y=(%s +/- %s) x + %s",round(s,2),round(sd,2),round(i,2))))+
+  xlab("mean Q (log)")+
+  ylab("gamma Q (log)")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+
+  facet_wrap(~promoter)
+```
+
+```{r}
+myparameters_plot %>% 
+  mutate(s=compute_slope_errxy_robust(log(final_mean_q),log(final_var_q)),
+         i=compute_intercept_errxy_robust(log(final_mean_q),log(final_var_q)),
+         sd=compute_sdslope_errxy_robust(log(final_mean_q),log(final_var_q))) %>%
+  ggplot()+
+  geom_point(aes(log(final_mean_q),log(final_var_q),col=promoter),size=3)+
+  #geom_errorbar(aes(x=log(final_mean_q),ymin=log(final_var_q-error_var_q),ymax=log(final_var_q+error_var_q),col=promoter),width=0)+
+  #geom_errorbar(aes(y=log(final_var_q),xmin=log(final_mean_q-error_mean_q),xmax=log(final_mean_q+error_mean_q),col=promoter),width=0)+
+  #geom_line(aes(log(final_mean_q),log(final_mean_q)*s+i),col="red",linetype=2)+
+  #geom_text(aes(x=2,y=5,label=sprintf("y=(%s +/- %s) x + %s",round(s,2),round(sd,2),round(i,2))))+
+  xlab("Mean Q (log)")+
+  ylab("sigma2 Q (log)")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+  #facet_wrap(~condition)
+
+```
+
+
+```{r}
+myparameters_plot <- myparameters %>% 
+  left_join(myerrors_formatted,by=c("condition","promoter","name")) %>% 
+  select(condition,promoter,name,final,error) %>% 
+  filter(name %in% c("var_q","gamma_q","mean_q","mean_lambda")) %>% 
+  mutate(error=sqrt(error)) %>% 
+  pivot_wider(names_from = name,values_from = c(final,error)) %>% 
+  mutate(autotime_q=1/final_gamma_q) %>% 
+  mutate(error_autotime_q=1/(final_gamma_q**2)*error_gamma_q) %>% 
+  select(condition,promoter,autotime_q,error_autotime_q,final_mean_q,final_mean_lambda,final_var_q)
+
+myparameters_plot$condition <- factor(myparameters_plot$condition,levels=c("acetate","glycerol","glucose","glucoseaa"))
+
+myparameters_plot %>% 
+  ggplot()+
+  geom_point(aes(log(final_mean_lambda),autotime_q,col=promoter))+
+  geom_errorbar(aes(x=log(final_mean_lambda),ymin=autotime_q-error_autotime_q,ymax=autotime_q+error_autotime_q,col=promoter),width=0)+
+  xlab("Mean growth-rate (min-1) (log)")+
+  ylab("Autocorrelation time (min)")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+ggsave("./20220321_presentation/autocorr_time_Q_mean_lambda.pdf",height=3,width=5)
+
+myparameters_plot %>% 
+  ggplot()+
+  geom_point(aes(log(final_mean_lambda),1/autotime_q,col=promoter))+
+  geom_errorbar(aes(x=log(final_mean_lambda),ymin=1/(autotime_q-error_autotime_q),ymax=1/(autotime_q+error_autotime_q),col=promoter),width=0)+
+  xlab("Mean growth-rate (min-1) (log)")+
+  ylab("Gamma Q (min-1)")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+myparameters_plot %>% 
+  ggplot()+
+  geom_point(aes(log(final_mean_lambda),log(autotime_q),col=promoter))+
+  geom_line(aes(log(final_mean_lambda),log(autotime_q),group=promoter,col=promoter))+
+  geom_errorbar(aes(x=log(final_mean_lambda),ymin=log(autotime_q-error_autotime_q),ymax=log(autotime_q+error_autotime_q),col=promoter),width=0)+
+  xlab("Mean growth-rate (min-1) (log)")+
+  ylab("Autocorrelation time (min) (log)")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+myparameters_plot %>% 
+  ggplot()+
+  geom_point(aes(autotime_q,log(final_var_q),col=promoter))+
+  #geom_errorbar(aes(x=log(final_mean_lambda),ymin=autotime_q-error_autotime_q,ymax=autotime_q+error_autotime_q,col=promoter),width=0)+
+  xlab("Mean growth-rate (min-1) (log)")+
+  ylab("Autocorrelation time (min)")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+ggsave("./20220321_presentation/sigma2_autocorr_time_Q.pdf",height=3,width=5)
+```
+
+```{r}
+myparameters_plot <- myparameters %>% 
+  left_join(myerrors_formatted,by=c("condition","promoter","name")) %>% 
+  select(condition,promoter,name,final,error) %>% 
+  filter(name %in% c("var_q","gamma_q","mean_q","mean_lambda")) %>% 
+  mutate(error=sqrt(error)) %>% 
+  pivot_wider(names_from = name,values_from = c(final,error)) %>% 
+  mutate(autotime_q=1/final_gamma_q) %>% 
+  mutate(error_autotime_q=1/(final_gamma_q**2)*error_gamma_q) %>% 
+  select(condition,promoter,autotime_q,error_autotime_q,final_mean_q,final_mean_lambda,final_mean_q)
+
+myparameters_plot$condition <- factor(myparameters_plot$condition,levels=c("acetate","glycerol","glucose","glucoseaa"))
+
+myparameters_plot %>% 
+  ggplot()+
+  geom_point(aes(log(final_mean_q),autotime_q,col=promoter,shape=condition),size=3)+
+  geom_errorbar(aes(x=log(final_mean_q),ymin=autotime_q-error_autotime_q,ymax=autotime_q+error_autotime_q,col=promoter),width=0)+
+  xlab("Mean Q (log)")+
+  ylab("Q Autocorrelation time (min)")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+myparameters_plot %>% 
+  ggplot()+
+  geom_point(aes(log(final_mean_q),autotime_q,col=promoter,shape=condition),size=3)+
+  geom_errorbar(aes(x=log(final_mean_q),ymin=autotime_q-error_autotime_q,ymax=autotime_q+error_autotime_q,col=promoter),width=0)+
+  xlab("Mean Q (log)")+
+  ylab("Q Autocorrelation time (min)")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+
+  facet_wrap(~promoter)
+
+myparameters_plot %>% 
+  ggplot()+
+  geom_point(aes(log(final_mean_q),autotime_q,col=promoter,shape=condition),size=3)+
+  geom_errorbar(aes(x=log(final_mean_q),ymin=autotime_q-error_autotime_q,ymax=autotime_q+error_autotime_q,col=promoter),width=0)+
+  xlab("Mean Q (log)")+
+  ylab("Q Autocorrelation time (min)")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+
+  facet_wrap(~condition)
+
+```
+
+```{r}
+myparameters_plot <- myparameters %>% 
+  left_join(myerrors_formatted,by=c("condition","promoter","name")) %>% 
+  select(condition,promoter,name,final,error) %>% 
+  filter(name %in% c("var_q","gamma_q","mean_q","mean_lambda")) %>% 
+  mutate(error=sqrt(error)) %>% 
+  pivot_wider(names_from = name,values_from = c(final,error)) %>% 
+  mutate(var_q=final_var_q/(2*final_gamma_q)) %>% 
+  mutate(error_var_q=abs(1/(2*final_gamma_q)*error_var_q-final_var_q*error_gamma_q/(2*final_gamma_q**2))) %>% 
+  select(condition,promoter,var_q,error_var_q,final_mean_q,final_mean_lambda)
+
+myparameters_plot$condition <- factor(myparameters_plot$condition,levels=c("acetate","glycerol","glucose","glucoseaa"))
+
+myparameters_plot %>% 
+  mutate(s=compute_slope_errxy_robust(log(final_mean_q),log(var_q)),
+         i=compute_intercept_errxy_robust(log(final_mean_q),log(var_q)),
+         sd=compute_sdslope_errxy_robust(log(final_mean_q),log(var_q))) %>%
+  ggplot()+
+  geom_point(aes(log(final_mean_q),log(var_q),col=promoter,shape=condition))+
+  geom_errorbar(aes(x=log(final_mean_q),ymin=log(var_q-error_var_q),ymax=log(var_q+error_var_q),col=promoter),width=0)+
+  geom_line(aes(log(final_mean_q),log(final_mean_q)*s+i),col="red",linetype=2)+
+  geom_text(aes(x=2,y=10,label=sprintf("y=(%s s+/- %s) x + %s",round(s,2),round(sd,2),round(i,2))))+
+  xlab("log(mean production) (min-1) (log)")+
+  ylab("log(var(production)) (min)")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+ggsave("./20220321_presentation/inf_param_log_varq_log_mean_q.pdf",height=3,width=5)
+
+myparameters_plot %>% 
+  group_by(condition) %>% 
+  mutate(s=compute_slope_errxy_robust(log(final_mean_q),log(var_q)),
+         i=compute_intercept_errxy_robust(log(final_mean_q),log(var_q)),
+         sd=compute_sdslope_errxy_robust(log(final_mean_q),log(var_q))) %>%
+  ungroup() %>% 
+  ggplot()+
+  geom_point(aes(log(final_mean_q),log(var_q),col=promoter,shape=condition))+
+  geom_errorbar(aes(x=log(final_mean_q),ymin=log(var_q-error_var_q),ymax=log(var_q+error_var_q),col=promoter),width=0)+
+  geom_line(aes(log(final_mean_q),log(final_mean_q)*s+i),col="red",linetype=2)+
+  geom_text(aes(x=2,y=10,label=sprintf("y=(%s s+/- %s) x + %s",round(s,2),round(sd,2),round(i,2))),size=2)+
+  xlab("log(mean production) (min-1) (log)")+
+  ylab("log(var(production)) (min)")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+
+  facet_wrap(~condition)
+  
+
+ggsave("./20220321_presentation/inf_param_log_varq_log_mean_q_facet.pdf",height=3,width=5)
+```
+
+```{r}
+myparameters_plot <- myparameters %>% 
+  left_join(myerrors_formatted,by=c("condition","promoter","name")) %>% 
+  select(condition,promoter,name,final,error) %>% 
+  filter(name %in% c("var_q","gamma_q","mean_q","mean_lambda")) %>% 
+  mutate(error=sqrt(error)) %>% 
+  pivot_wider(names_from = name,values_from = c(final,error)) %>% 
+  mutate(var_q=final_var_q/(2*final_gamma_q)) %>% 
+  mutate(error_var_q=abs(1/(2*final_gamma_q)*error_var_q-final_var_q*error_gamma_q/(2*final_gamma_q**2))) %>% 
+  mutate(cv_q=sqrt(var_q)/final_mean_q) %>% 
+  select(condition,promoter,var_q,error_var_q,final_mean_q,final_mean_lambda,final_gamma_q,cv_q,final_var_q)
+
+myparameters_plot$condition <- factor(myparameters_plot$condition,levels=c("acetate","glycerol","glucose","glucoseaa"))
+
+myparameters_plot %>% 
+  #mutate(s=compute_slope_errxy_robust(log(1/final__q),log(var_q)),
+  #       i=compute_intercept_errxy_robust(log(final_mean_q),log(var_q)),
+  #       sd=compute_sdslope_errxy_robust(log(final_mean_q),log(var_q))) %>%
+  ggplot()+
+  geom_point(aes(log(final_gamma_q),log(cv_q),col=promoter,shape=condition))+
+  #geom_errorbar(aes(x=log(final_mean_q),ymin=log(var_q-error_var_q),ymax=log(var_q+error_var_q),col=promoter),width=0)+
+  #geom_line(aes(log(final_mean_q),log(final_mean_q)*s+i),col="red",linetype=2)+
+  #geom_text(aes(x=2,y=10,label=sprintf("y=(%s s+/- %s) x + %s",round(s,2),round(sd,2),round(i,2))))+
+  #xlab("log(mean production) (min-1) (log)")+
+  #ylab("log(var(production)) (min)")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+myparameters_plot %>% 
+  #mutate(s=compute_slope_errxy_robust(log(1/final__q),log(var_q)),
+  #       i=compute_intercept_errxy_robust(log(final_mean_q),log(var_q)),
+  #       sd=compute_sdslope_errxy_robust(log(final_mean_q),log(var_q))) %>%
+  ggplot()+
+  geom_point(aes(log(final_mean_q),log(cv_q),col=promoter,shape=condition))+
+  #geom_errorbar(aes(x=log(final_mean_q),ymin=log(var_q-error_var_q),ymax=log(var_q+error_var_q),col=promoter),width=0)+
+  #geom_line(aes(log(final_mean_q),log(final_mean_q)*s+i),col="red",linetype=2)+
+  #geom_text(aes(x=2,y=10,label=sprintf("y=(%s s+/- %s) x + %s",round(s,2),round(sd,2),round(i,2))))+
+  #xlab("log(mean production) (min-1) (log)")+
+  #ylab("log(var(production)) (min)")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+myparameters_plot %>% 
+  #mutate(s=compute_slope_errxy_robust(log(final_mean_q**0.045*1/(sqrt(final_gamma_q))),log(var_q)),
+         #i=compute_intercept_errxy_robust(log(final_mean_q**0.045*1/(sqrt(final_gamma_q))),log(var_q)),
+         #sd=compute_sdslope_errxy_robust(log(final_mean_q**0.045*1/(sqrt(final_gamma_q))),log(var_q))) %>%
+  ggplot()+
+  geom_point(aes(final_mean_q**0.045*1/(sqrt(final_gamma_q)),cv_q,col=promoter,shape=condition))+
+  #geom_errorbar(aes(x=log(final_mean_q),ymin=log(var_q-error_var_q),ymax=log(var_q+error_var_q),col=promoter),width=0)+
+  #geom_line(aes(log(final_mean_q**0.045*1/(sqrt(final_gamma_q))),log(final_mean_q**0.045*1/(sqrt(final_gamma_q)))*s+i),col="red",linetype=2)+
+  #geom_text(aes(x=2,y=10,label=sprintf("y=(%s s+/- %s) x + %s",round(s,2),round(sd,2),round(i,2))))+
+  #xlab("log(mean production) (min-1) (log)")+
+  #ylab("log(var(production)) (min)")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+myparameters_plot %>% 
+  #mutate(s=compute_slope_errxy_robust(log(final_mean_q**0.045*1/(sqrt(final_gamma_q))),log(var_q)),
+         #i=compute_intercept_errxy_robust(log(final_mean_q**0.045*1/(sqrt(final_gamma_q))),log(var_q)),
+         #sd=compute_sdslope_errxy_robust(log(final_mean_q**0.045*1/(sqrt(final_gamma_q))),log(var_q))) %>%
+  ggplot()+
+  geom_point(aes(final_mean_q**(-0.06),cv_q,col=promoter,shape=condition))+
+  #geom_errorbar(aes(x=log(final_mean_q),ymin=log(var_q-error_var_q),ymax=log(var_q+error_var_q),col=promoter),width=0)+
+  #geom_line(aes(log(final_mean_q**0.045*1/(sqrt(final_gamma_q))),log(final_mean_q**0.045*1/(sqrt(final_gamma_q)))*s+i),col="red",linetype=2)+
+  #geom_text(aes(x=2,y=10,label=sprintf("y=(%s s+/- %s) x + %s",round(s,2),round(sd,2),round(i,2))))+
+  #xlab("log(mean production) (min-1) (log)")+
+  #ylab("log(var(production)) (min)")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+myparameters_plot %>% 
+  #mutate(s=compute_slope_errxy_robust(log(final_mean_q**0.045*1/(sqrt(final_gamma_q))),log(var_q)),
+         #i=compute_intercept_errxy_robust(log(final_mean_q**0.045*1/(sqrt(final_gamma_q))),log(var_q)),
+         #sd=compute_sdslope_errxy_robust(log(final_mean_q**0.045*1/(sqrt(final_gamma_q))),log(var_q))) %>%
+  ggplot()+
+  geom_point(aes(1/(final_mean_q)/(sqrt(2*final_gamma_q)),cv_q,col=promoter,shape=condition))+
+  #geom_errorbar(aes(x=log(final_mean_q),ymin=log(var_q-error_var_q),ymax=log(var_q+error_var_q),col=promoter),width=0)+
+  #geom_line(aes(log(final_mean_q**0.045*1/(sqrt(final_gamma_q))),log(final_mean_q**0.045*1/(sqrt(final_gamma_q)))*s+i),col="red",linetype=2)+
+  #geom_text(aes(x=2,y=10,label=sprintf("y=(%s s+/- %s) x + %s",round(s,2),round(sd,2),round(i,2))))+
+  #xlab("log(mean production) (min-1) (log)")+
+  #ylab("log(var(production)) (min)")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+
+
+#ggsave("./fig_presentation/inf_param_log_varq_log_mean_q.pdf",height=5,width=7)
+```
+
+
+# Compare var Q obtained using inferred parameters and var Q obtained using predictions.
+
+```{r}
+
+qparameters <- myparameters %>% 
+  select(name,final,condition,promoter) %>% 
+  filter(name %in% c("var_q","gamma_q","mean_q")) %>% 
+  pivot_wider(names_from=name,values_from = final) %>% 
+  mutate(var_q=var_q/(2*gamma_q)) %>% 
+  distinct(condition,promoter,var_q,mean_q) %>% 
+  mutate(type="Experimental data - from inferred parameters")
+  
+myframes_q_predicted <- myframes_inferred %>% 
+  group_by(condition, promoter) %>%
+  mutate(var_q=var(q,na.rm=TRUE),
+         mean_q=mean(q,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  distinct(condition,promoter,var_q,mean_q) %>% 
+  mutate(type="Experimental data after inference - predictions")
+
+myframes_q_predicted_errorbars <- myframes_inferred %>% 
+  mutate(.sd=sqrt(abs(cov_qq))) %>% 
+  rowwise() %>% 
+  mutate(q=rnorm(1,mean=q,sd=.sd)) %>% 
+  group_by(condition, promoter) %>%
+  mutate(var_q=var(q,na.rm=TRUE),
+         mean_q=mean(q,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  distinct(condition,promoter,var_q,mean_q) %>% 
+  mutate(type="Experimental data after inference - predictions + errorbars")
+
+mydata <- rbind(
+  qparameters,
+  myframes_q_predicted,
+  myframes_q_predicted_errorbars)
+  
+ggplot()+
+  geom_point(data=mydata,aes(log(mean_q),log(var_q),col=type))+
+  xlab("mean(Q)")+
+  ylab("var(Q)")
+
+ggsave("./20220321_presentation/varq_meanq_all_comparisons.pdf",height=5,width=10)
+
+mydata %>% 
+  filter(type=="Experimental data after inference - predictions + errorbars") %>% 
+  #group_by(condition,promoter) %>% 
+  mutate(s=compute_slope_errxy_robust(log(mean_q),log(var_q)),
+         i=compute_intercept_errxy_robust(log(mean_q),log(var_q)),
+         sd=compute_sdslope_errxy_robust(log(mean_q),log(var_q))) %>%
+  #ungroup() %>% 
+  ggplot()+
+  geom_point(aes(log(mean_q),log(var_q),col=promoter,shape=condition))+
+  geom_line(aes(log(mean_q),log(mean_q)*s+i),col="red",linetype=2)+
+  geom_text(aes(x=3,y=9,label=sprintf("y=(%s s+/- %s) x + %s",round(s,2),round(sd,2),round(i,2))),size=1)+
+  xlab("mean(Q)")+
+  ylab("var(Q)")
+
+ggsave("./20220321_presentation/varq_meanq_all_comparisons_pred_errorbars.pdf",height=3,width=5)
+
+mydata %>% 
+  filter(type=="Experimental data after inference - predictions + errorbars") %>% 
+  group_by(condition) %>%
+  mutate(s=compute_slope_errxy_robust(log(mean_q),log(var_q)),
+         i=compute_intercept_errxy_robust(log(mean_q),log(var_q)),
+         sd=compute_sdslope_errxy_robust(log(mean_q),log(var_q))) %>%
+  #ungroup() %>% 
+  ggplot()+
+  geom_point(aes(log(mean_q),log(var_q),col=promoter,shape=condition))+
+  geom_line(aes(log(mean_q),log(mean_q)*s+i),col="red",linetype=2)+
+  geom_text(aes(x=3,y=9,label=sprintf("y=(%s s+/- %s) x + %s",round(s,2),round(sd,2),round(i,2))),size=2)+
+  facet_wrap(~condition) +
+  xlab("mean(Q)")+
+  ylab("var(Q)")
+
+ggsave("./20220321_presentation/varq_meanq_all_comparisons_pred_errorbars_condition.pdf",height=3,width=5)
+
+
+mydata %>% 
+  filter(type %in% c("Experimental data after inference - predictions + errorbars","Experimental data - from inferred parameters")) %>% 
+  #group_by(condition) %>%
+  #mutate(s=compute_slope_errxy_robust(log(mean_q),log(var_q)),
+         #i=compute_intercept_errxy_robust(log(mean_q),log(var_q)),
+         #sd=compute_sdslope_errxy_robust(log(mean_q),log(var_q))) %>%
+  #ungroup() %>% 
+  ggplot()+
+  geom_point(aes(log(mean_q),sqrt(var_q)/mean_q,col=promoter,shape=type))+
+  #geom_line(aes(log(mean_q),log(mean_q)*s+i),col="red",linetype=2)+
+  #geom_text(aes(x=3,y=9,label=sprintf("y=(%s s+/- %s) x + %s",round(s,2),round(sd,2),round(i,2))),size=2)+
+  #facet_wrap(~condition) +
+  xlab("mean(Q) (log)")+
+  ylab("CV(Q)")
+
+ggsave("./20220321_presentation/cv_q_mean_q.pdf",height=5,width=10)
+
+```
+
+# Compare concentration statistics and production statistics within one condition
+
+```{r}
+concentration_inferred <- myframes_inferred %>% 
+  group_by(condition,promoter) %>% 
+  mutate(var_c=var(gfp_nb/length_um,na.rm=TRUE),
+         mean_c=mean(gfp_nb/length_um,na.rm=TRUE),
+         cv_c=sqrt(var_c)/mean_c,
+         var_q_pred=var(q,na.rm=TRUE),
+         mean_q_pred=mean(q,na.rm=TRUE),
+         cv_q_pred=sqrt(var_q_pred)/mean_q_pred,
+         mean_lambda_pred=mean(lambda,na.rm=TRUE),
+         var_lambda_pred=var(lambda,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  distinct(condition,promoter,.keep_all=TRUE) %>% 
+  select(condition,promoter,var_c,mean_c,cv_c,var_q_pred,mean_q_pred,cv_q_pred,mean_lambda_pred,var_lambda_pred)
+
+myparameters_plot <- myparameters %>% 
+  left_join(myerrors_formatted,by=c("condition","promoter","name")) %>% 
+  select(condition,promoter,name,final,error) %>% 
+  filter(name %in% c("var_q","gamma_q","mean_q","mean_lambda","var_lambda","gamma_lambda")) %>% 
+  mutate(error=sqrt(error)) %>% 
+  pivot_wider(names_from = name,values_from = c(final,error)) %>% 
+  mutate(var_q=final_var_q/(2*final_gamma_q)) %>%
+  mutate(var_lambda=final_var_lambda/(2*final_gamma_lambda)) %>% 
+  mutate(error_var_q=abs(1/(2*final_gamma_q)*error_var_q-final_var_q*error_gamma_q/(2*final_gamma_q**2))) %>% 
+  mutate(cv_q=sqrt(var_q)/final_mean_q) %>% 
+  select(condition,promoter,var_q,error_var_q,final_mean_q,final_mean_lambda,final_gamma_q,cv_q,final_var_q,final_var_lambda,final_gamma_lambda,var_lambda) %>% 
+  left_join(concentration_inferred,by=c("condition","promoter"))
+
+myparameters_plot %>% 
+  ggplot()+
+  geom_point(aes(log(var_q),log(var_c),col=promoter))+
+  facet_wrap(~condition)
+
+myparameters_plot %>% 
+  ggplot()+
+  geom_point(aes(log(final_mean_q),log(var_c),col=promoter))+
+  facet_wrap(~condition)
+
+myparameters_plot %>% 
+  ggplot()+
+  geom_point(aes(log(final_gamma_q),log(var_c),col=promoter))+
+  facet_wrap(~condition)
+
+myparameters_plot %>% 
+  ggplot()+
+  geom_point(aes(log(final_var_q),log(var_c),col=promoter))+
+  facet_wrap(~condition)
+
+myparameters_plot %>% 
+  #mutate(var_q=final_var_q/(2*final_gamma_q)) %>%
+  group_by(condition) %>% 
+  mutate(s=compute_slope_errxy_robust(log(var_q),log(var_c)),
+         i=compute_intercept_errxy_robust(log(var_q),log(var_c)),
+         sd=compute_sdslope_errxy_robust(log(var_q),log(var_c))) %>%
+  ungroup() %>% 
+  ggplot()+
+  geom_point(aes(log(var_q),log(var_c),col=promoter))+
+  geom_line(aes(log(var_q),log(var_q)*s+i),col="red",linetype=2)+
+  geom_text(aes(x=2,y=10,label=sprintf("y=(%s s+/- %s) x + %s",round(s,2),round(sd,2),round(i,2))))+
+  facet_wrap(~condition)
+
+myparameters_plot %>% 
+  #mutate(var_q=final_var_q/(2*final_gamma_q)) %>%
+  group_by(condition) %>% 
+  mutate(s=compute_slope_errxy_robust(log(var_q),log(var_c)),
+         i=compute_intercept_errxy_robust(log(var_q),log(var_c)),
+         sd=compute_sdslope_errxy_robust(log(var_q),log(var_c))) %>%
+  ungroup() %>% 
+  ggplot()+
+  geom_point(aes(log(var_q),log(var_c),col=promoter))+
+  geom_line(aes(log(var_q),log(var_q)*s+i),col="red",linetype=2)+
+  geom_text(aes(x=2,y=10,label=sprintf("y=(%s s+/- %s) x + %s",round(s,2),round(sd,2),round(i,2))))+
+  facet_wrap(~condition)
+
+myparameters_plot %>% 
+  #mutate(var_q=final_var_q/(2*final_gamma_q)) %>%
+  group_by(condition) %>% 
+  mutate(s=compute_slope_errxy_robust(log(var_q),log(var_c)),
+         i=compute_intercept_errxy_robust(log(var_q),log(var_c)),
+         sd=compute_sdslope_errxy_robust(log(var_q),log(var_c))) %>%
+  ungroup() %>% 
+  ggplot()+
+  geom_point(aes(log(var_q),log(var_c),col=promoter))+
+  geom_line(aes(log(var_q),log(var_q)*s+i),col="red",linetype=2)+
+  geom_text(aes(x=2,y=10,label=sprintf("y=(%s s+/- %s) x + %s",round(s,2),round(sd,2),round(i,2))))+
+  facet_wrap(~condition)
+
+myparameters_plot %>% 
+  #mutate(var_q=final_var_q/(2*final_gamma_q)) %>%
+  group_by(condition) %>% 
+  mutate(s=compute_slope_errxy_robust(log(final_mean_q),log(mean_c)),
+         i=compute_intercept_errxy_robust(log(final_mean_q),log(mean_c)),
+         sd=compute_sdslope_errxy_robust(log(final_mean_q),log(mean_c))) %>%
+  ungroup() %>% 
+  ggplot()+
+  geom_point(aes(log(final_mean_q),log(mean_c),col=promoter))+
+  geom_line(aes(log(final_mean_q),log(final_mean_q)*s+i),col="red",linetype=2)+
+  geom_text(aes(x=2,y=10,label=sprintf("y=(%s s+/- %s) x + %s",round(s,2),round(sd,2),round(i,2))))+
+  facet_wrap(~condition)
+
+myparameters_plot %>% 
+  ggplot()+
+  geom_point(aes(sqrt(final_var_q/(2*final_gamma_q)),sqrt(var_c),col=promoter))+
+  facet_wrap(~condition,scale="free")
+
+myparameters_plot %>% 
+  ggplot()+
+  geom_point(aes(log(final_mean_q),log(mean_c),col=promoter))+
+  facet_wrap(~condition)
+
+
+```
+
+```{r}
+myparameters_plot %>% 
+  ggplot()+
+  geom_point(aes(cv_q,cv_c,col=promoter))+
+  facet_wrap(~condition)
+
+myparameters_plot %>% 
+  filter(promoter!="rplN") %>% 
+  group_by(condition) %>% 
+  mutate(s=compute_slope_errxy_robust(cv_q_pred,cv_c),
+         i=compute_intercept_errxy_robust(cv_q_pred,cv_c),
+         sd=compute_sdslope_errxy_robust(cv_q_pred,cv_c)) %>%
+  ggplot()+
+  geom_point(aes(cv_q_pred,cv_c,col=promoter))+
+  geom_line(aes(cv_q_pred,cv_q_pred*s+i),col="red",linetype=2)+
+  geom_text(aes(x=0.5,y=0.6,label=sprintf("y=(%s s+/- %s) x + %s",round(s,2),round(sd,2),round(i,2))))+
+  facet_wrap(~condition)+
+  coord_cartesian(xlim=c(0,1),ylim=c(0,1))
+  
+```
+
+```{r}
+myparameters_plot %>% 
+  ggplot()+
+  geom_point(aes(log(mean_c),log(var_c),col=promoter))+
+  facet_wrap(~condition)
+```
+So within one condition, it is pretty clear the variance in concentration depends on the variance in Q multiplied by something else, that seems to be the same for all promoters. Given thant their Q characteristics are all different, it seems clear to me that these multiplicative factor mostly depend on growth rate properties.
+
+Now it is pretty clear that what I have to do, is to run new simulations, with parameter sets that I correct and run inference on them. And compare how the predicted concentration, look like compared to inferred parameters. I would like to see how these different 
+
+```{r}
+myparameters_plot %>% 
+  filter(!((condition=="acetate")&(promoter=="med2"))) %>% 
+  filter(promoter!="rplN") %>% 
+  mutate(var_q=final_var_q/(2*final_gamma_q)) %>%
+  mutate(X=log(var_q_pred)-2*log((final_mean_lambda))) %>% 
+         #*(final_gamma_lambda**2)/(final_gamma_q**2+final_gamma_lambda**2))+
+  #         log(1+var_lambda_pred/((final_gamma_q**2)+(final_gamma_lambda**2)))) %>% 
+  group_by(condition) %>% 
+  mutate(s=compute_slope_errxy_robust(X,log(var_c)),
+        i=compute_intercept_errxy_robust(X,log(var_c)),
+        sd=compute_sdslope_errxy_robust(X,log(var_c))) %>%
+  ungroup() %>% 
+  ggplot()+
+  geom_point(aes(X,log(var_c),col=promoter))+
+  geom_line(aes(X,X*s+i),col="red",linetype=2)+
+  geom_abline(aes(slope=1,intercept=0))+
+  geom_text(aes(x=12.5,y=10,label=sprintf("y=(%s s+/- %s) x + %s",round(s,2),round(sd,2),round(i,2))))+
+  facet_wrap(~condition)
+```
+
+```{r}
+# There is a slight offset that I do not undertand.
+# It might be due to the fact that I am "overestimating", the contribution of var_q, since using inferred parameters.
+# What happens now, if I use the empirical ones instead.
+
+myparameters_plot %>% 
+  filter(!((condition=="acetate")&(promoter=="med2"))) %>% 
+  filter(promoter!="rplN") %>% 
+  #mutate(var_q=final_var_q/(2*final_gamma_q)) %>%
+  mutate(X=log(final_var_q)-log((final_gamma_q-final_mean_lambda)**2)) %>% 
+  group_by(condition) %>% 
+  mutate(s=compute_slope_errxy_robust(X,log(var_c)),
+        i=compute_intercept_errxy_robust(X,log(var_c)),
+        sd=compute_sdslope_errxy_robust(X,log(var_c))) %>%
+  ungroup() %>% 
+  ggplot()+
+  geom_point(aes(X,log(var_c),col=promoter))+
+  geom_line(aes(X,X*s+i),col="red",linetype=2)+
+  geom_abline(aes(slope=1,intercept=0))+
+  geom_text(aes(x=5,y=15,label=sprintf("y=(%s s+/- %s) x + %s",round(s,2),round(sd,2),round(i,2))))+
+  facet_wrap(~condition)
+```
+
+
+```{r}
+# There is a slight offset that I do not undertand.
+# It might be due to the fact that I am "overestimating", the contribution of var_q, since using inferred parameters.
+# What happens now, if I use the empirical ones instead.
+
+myparameters_plot %>% 
+  filter(!((condition=="acetate")&(promoter=="med2"))) %>% 
+  #mutate(var_q=final_var_q/(2*final_gamma_q)) %>%
+  mutate(X=log(var_q_pred*final_gamma_lambda/final_gamma_q/(mean_lambda_pred**2)+
+           var_lambda_pred*final_gamma_q/final_gamma_lambda/(mean_q_pred**2))) %>% 
+  group_by(condition) %>% 
+  mutate(s=compute_slope_errxy_robust(X,log(var_c)),
+        i=compute_intercept_errxy_robust(X,log(var_c)),
+        sd=compute_sdslope_errxy_robust(X,log(var_c))) %>%
+  ungroup() %>% 
+  ggplot()+
+  geom_point(aes(X,log(var_c),col=promoter))+
+  geom_line(aes(X,X*s+i),col="red",linetype=2)+
+  geom_abline(aes(slope=1,intercept=0))+
+  geom_text(aes(x=12.5,y=15,label=sprintf("y=(%s s+/- %s) x + %s",round(s,2),round(sd,2),round(i,2))))+
+  facet_wrap(~condition)
+```
+
+```{r}
+myparameters_plot %>% 
+  mutate(t=log(sqrt(final_var_lambda/(2*final_gamma_lambda))/final_mean_lambda)) %>% 
+  select(condition,promoter,t)
+
+```
+
+
+# Compare residuals (difference between mean value and actual value)
+
+My prediction here is that these kicks are bigger in the simulation.
+
+```{r}
+# Write a function to print all distributions
+
+myframes_plot <- myframes_inferred %>% 
+  group_by(condition, promoter) %>%
+  mutate(d_q=q-mean(q,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  #distinct(condition, promoter,.keep_all=TRUE) %>% 
+  select(condition,promoter,d_q) %>% 
+  mutate(type="experimental data")
+
+simulation_data_plot <- simulation_data %>% 
+  group_by(condition, promoter) %>%
+  mutate(d_q=q-mean(q,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  #distinct(condition, promoter,.keep_all=TRUE) %>% 
+  select(condition,promoter,d_q) %>% 
+  mutate(type="simulation data")
+
+plot_distribution <- function(.condition,.promoter){
+  k <- 50
+  data_simulated <- simulation_data_plot %>%
+    filter(condition==.condition) %>% 
+    filter(promoter==.promoter) %>% 
+    .$d_q
+  
+  data_predicted <- myframes_plot %>%
+    filter(condition==.condition) %>% 
+    filter(promoter==.promoter) %>% 
+    .$d_q
+
+summary(data_predicted)
+summary(data_simulated)
+inf_distribution <- min(summary(data_predicted)[1]-10,summary(data_simulated)[1]-10)
+max_distribution <- max(summary(data_predicted)[6]+10,summary(data_simulated)[6]+10)
+end_distribution <- max(abs(c(inf_distribution,max_distribution)))
+
+breakVec <-  seq(-end_distribution,end_distribution,by=end_distribution/k)
+dev.new(width=4, height=4)
+
+h <- hist(data_predicted, breaks = breakVec, density = 10,freq=TRUE,prob=FALSE,ylab="Counts",main="",xaxp=c(-end_distribution,end_distribution,end_distribution/k),plot=FALSE)
+#h$counts = h$counts/((h$breaks[2]-h$breaks[1])*sum(h$counts))
+h$counts = h$counts/sum(h$counts)
+print(sum(h$counts))
+
+g <- hist(data_simulated, breaks = breakVec, density = 10,freq=TRUE,prob=FALSE,ylab="Counts",main="",xaxp=c(-end_distribution,end_distribution,end_distribution/k),plot=FALSE)
+#g$counts = g$counts/((g$breaks[2]-g$breaks[1])*sum(g$counts))
+g$counts = g$counts/sum(g$counts)
+print(sum(g$counts))
+
+
+#h$counts = log10(h$counts)
+pdf(sprintf("./%s_%s_distribution.pdf",.condition,.promoter))
+ylim_max=max(c(h$counts,g$counts))
+plot(h,ylim=c(0,ylim_max*1.2),ylab='Density',main="",xlab="delta Q",col=rgb(0,0,1,1/4))
+plot(g,col=rgb(1,0,0,1/4),main="",add=T)
+title(sprintf("Predicted (blue) vs Simulated (red), %s, %s",.promoter,.condition))
+dev.off()
+}
+```
+
+
+```{r}
+#Acetate
+plot_distribution("acetate","hi1")
+plot_distribution("acetate","hi3")
+plot_distribution("acetate","med2")
+plot_distribution("acetate","med3")
+plot_distribution("acetate","rpmB")
+plot_distribution("acetate","rpsB")
+plot_distribution("acetate","rplN")
+plot_distribution("acetate","rrnB")
+```
+
+```{r}
+#Glycerol
+plot_distribution("glycerol","hi1")
+plot_distribution("glycerol","hi3")
+plot_distribution("glycerol","med2")
+plot_distribution("glycerol","med3")
+plot_distribution("glycerol","rpmB")
+plot_distribution("glycerol","rpsB")
+plot_distribution("glycerol","rplN")
+plot_distribution("glycerol","rrnB")
+```
+
+```{r}
+#Glucose
+plot_distribution("glucose","hi1")
+plot_distribution("glucose","hi3")
+plot_distribution("glucose","med2")
+plot_distribution("glucose","med3")
+plot_distribution("glucose","rpmB")
+plot_distribution("glucose","rpsB")
+plot_distribution("glucose","rplN")
+plot_distribution("glucose","rrnB")
+```
+
+```{r}
+#Glucoseaa
+plot_distribution("glucoseaa","hi1")
+plot_distribution("glucoseaa","hi3")
+plot_distribution("glucoseaa","med2")
+plot_distribution("glucoseaa","med3")
+plot_distribution("glucoseaa","rpmB")
+plot_distribution("glucoseaa","rpsB")
+plot_distribution("glucoseaa","rplN")
+
+```
+
+Probably, another way to look at that, is to compute dq/dt-tau*(mean(q)-q) which should be Sigma * white noise. No it does not make much sense... Because, what are we going to use there as an autocorrelation time anyway?
+
+It is already nice to see that the distributions are asymetrical compared to what could be expected from a OU model. But so far, this way of looking at the size of the kinks is certainly not the best way. Certainly the best would be to look at the CV?
+
+# Plot these distributions for lambda
+
+```{r}
+# Write a function to print all distributions
+
+myframes_plot <- myframes %>% 
+  group_by(condition, promoter) %>%
+  mutate(d_lambda=lambda-mean(lambda,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  #distinct(condition, promoter,.keep_all=TRUE) %>% 
+  select(condition,promoter,d_lambda) %>% 
+  mutate(type="experimental data")
+
+simulation_data_plot <- simulation_data %>% 
+  group_by(condition, promoter) %>%
+  mutate(d_lambda=lambda-mean(lambda,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  #distinct(condition, promoter,.keep_all=TRUE) %>% 
+  select(condition,promoter,d_lambda) %>% 
+  mutate(type="simulation data")
+
+plot_distribution <- function(.condition,.promoter){
+#.condition <- "glucose"
+#.promoter <- "hi1"
+
+  k <- 50
+  data_simulated <- simulation_data_plot %>%
+    filter(condition==.condition) %>% 
+    filter(promoter==.promoter) %>% 
+    .$d_lambda
+  
+  data_predicted <- myframes_plot %>%
+    filter(condition==.condition) %>% 
+    filter(promoter==.promoter) %>% 
+    .$d_lambda
+
+summary(data_predicted)
+summary(data_simulated)
+const <- 0
+inf_distribution <- min(summary(data_predicted)[1]-const,summary(data_simulated)[1]-const)
+max_distribution <- max(summary(data_predicted)[6]+const,summary(data_simulated)[6]+const)
+end_distribution <- max(abs(c(inf_distribution,max_distribution)))
+
+breakVec <-  seq(-end_distribution,end_distribution,by=end_distribution/k)
+dev.new(width=4, height=4)
+
+h <- hist(data_predicted, breaks = breakVec, density = 10,freq=TRUE,prob=FALSE,ylab="Counts",main="",xaxp=c(-end_distribution,end_distribution,end_distribution/k),plot=FALSE)
+#h$counts = h$counts/((h$breaks[2]-h$breaks[1])*sum(h$counts))
+h$counts = h$counts/sum(h$counts)
+print(sum(h$counts))
+
+g <- hist(data_simulated, breaks = breakVec, density = 10,freq=TRUE,prob=FALSE,ylab="Counts",main="",xaxp=c(-end_distribution,end_distribution,end_distribution/k),plot=FALSE)
+#g$counts = g$counts/((g$breaks[2]-g$breaks[1])*sum(g$counts))
+g$counts = g$counts/sum(g$counts)
+print(sum(g$counts))
+
+
+#h$counts = log10(h$counts)
+pdf(sprintf("./%s_%s_distribution_lambda.pdf",.condition,.promoter))
+ylim_max=max(c(h$counts,g$counts))
+plot(h,ylim=c(0,ylim_max*1.2),ylab='Density',main="",xlab="delta lambda",col=rgb(0,0,1,1/4))
+plot(g,col=rgb(1,0,0,1/4),main="",add=T)
+title(sprintf("Predicted (blue) vs Simulated (red), %s, %s",.promoter,.condition))
+dev.off()
+}
+```
+
+
+```{r}
+#Acetate
+plot_distribution("acetate","hi1")
+plot_distribution("acetate","hi3")
+plot_distribution("acetate","med2")
+plot_distribution("acetate","med3")
+plot_distribution("acetate","rpmB")
+plot_distribution("acetate","rpsB")
+plot_distribution("acetate","rplN")
+plot_distribution("acetate","rrnB")
+```
+
+```{r}
+#Glycerol
+plot_distribution("glycerol","hi1")
+plot_distribution("glycerol","hi3")
+plot_distribution("glycerol","med2")
+plot_distribution("glycerol","med3")
+plot_distribution("glycerol","rpmB")
+plot_distribution("glycerol","rpsB")
+plot_distribution("glycerol","rplN")
+plot_distribution("glycerol","rrnB")
+```
+
+I am exactly sure this is the right thing to look at, after all...
+How can I look at an estimate of this sigma2? Cause here I am just looking at the variance of Q, centered on 0...
+
+```{r}
+#Glucose
+plot_distribution("glucose","hi1")
+plot_distribution("glucose","hi3")
+plot_distribution("glucose","med2")
+plot_distribution("glucose","med3")
+plot_distribution("glucose","rpmB")
+plot_distribution("glucose","rpsB")
+plot_distribution("glucose","rplN")
+plot_distribution("glucose","rrnB")
+```
+
+```{r}
+#Glucoseaa
+plot_distribution("glucoseaa","hi1")
+plot_distribution("glucoseaa","hi3")
+plot_distribution("glucoseaa","med2")
+plot_distribution("glucoseaa","med3")
+plot_distribution("glucoseaa","rpmB")
+plot_distribution("glucoseaa","rpsB")
+plot_distribution("glucoseaa","rplN")
+
+```
+
+
+# Looking at the correlation between production and growth-rate
+
+It can also be that these two things are more or less correlated (and I am only talking of empirical correlation here).
+
+## Scatter plot
+
+```{r}
+library(ggpubr)
+
+myframes %>% 
+  group_by(condition, promoter) %>% 
+  ungroup() %>% 
+  ggplot()+
+  geom_point(aes(log(lambda),log(q)),alpha=0.1)+
+  ggpubr::stat_cor(aes(log(lambda),log(q)))+
+  facet_wrap(~paste(promoter,condition),ncol=4,scale="free")
+
+ggsave("lambda_q_cor_log_scatter.pdf",width=15,height=15)
+```
+
+## Correlation matrix
+
+```{r}
+library(reshape2)
+# Print matrix of pearson correlation coefficients
+#row: promoter
+#column: condition
+conditions <- c("acetate","glycerol","glucose","glucoseaa")
+promoters <- c("hi1","hi3","med2","med3","rplN","rpmB","rpsB","rrnB")
+myframes$promoter <- factor(myframes$promoter, levels=promoters)
+
+r.matrix_df <- myframes %>%
+  filter(lambda>0) %>% 
+  filter(q>0) %>% 
+  group_by(promoter,condition) %>% 
+  mutate(r=cor(log(lambda),log(q))) %>% 
+  ungroup() %>% 
+  distinct(promoter,condition,r) %>% 
+  pivot_wider(names_from = condition,values_from = r) %>% 
+  select(promoter,acetate,glycerol,glucose,glucoseaa) %>% 
+  arrange(promoter) %>% 
+  select(acetate,glycerol,glucose,glucoseaa)
+
+r.matrix <- data.matrix(r.matrix_df)
+rownames(r.matrix) <- promoters
+r.matrix <- r.matrix[nrow(r.matrix):1,]
+r.matrix <- melt(r.matrix)
+
+ggplot(r.matrix, aes(x = Var2 , y = Var1)) + 
+  geom_tile(aes(fill = value), colour = "white") + 
+  geom_text(aes(label=as.character(round(as.double(value),2)))) +
+  #geom_raster(aes(fill=value)) + 
+  #geom_text(aes(text=value)) + 
+  scale_fill_gradient2(low="blue",high="red",limits=c(-1,1)) +
+  labs(x="Conditions", y="Promoters", title="Production versus growth-rate (empirical) correlation coefficients") +
+  theme_bw() + theme(axis.text.x=element_text(size=9, angle=90, vjust=0.3),
+                     axis.text.y=element_text(size=9),
+                     plot.title=element_text(size=11))+
+  coord_fixed(ratio=1)+
+  xlab("")
+
+ggsave("./production_vs_growth_rate_cor_matrix.pdf")
+```
+
+Indeed it seems that there is a higher correlation between production and growth in acetate. Now, what are these fluctuations looking like in general, during the cell cycle? Why? It is not clear. How do these fluctuations translate in terms of concentration, in the absence of correlation?
+
+Other irreducible facts that I should look into.
+  - Autocorrelation functions
+  - Cross correlation functions
+  - Plot the parameters and compare them between conditions
+  
+  
+# Autocorrelation and cross-correlation functions
+
+We observe some degree of correlation between production and growth. But the truth is we would like to know what is the fine temporal structure of these correlation. A priori these functions should be directly accessible from files. But where?
+
+```{r}
+
+
+
+```
+
+  
+# Plot parameters
+
+```{r}
+mean_lambda_df <- myparameters  %>% 
+  filter(name=="mean_lambda") %>%
+  mutate(mean_div_time=1/(final/log(2))) %>% 
+  rename(alpha=final) %>% 
+  select(mean_div_time,alpha,condition,promoter)
+
+gamma_lambda_df <- myparameters %>%
+  filter(name=="gamma_lambda") %>%
+  select(-c(no,name,type,init,step,lower_bound,upper_bound,filepath)) %>%
+  rename(gamma_lambda=final) %>% 
+  mutate(tau=1/gamma_lambda) %>% 
+  mutate(type="growth") %>% 
+  select(condition,promoter,tau,type)
+  
+gamma_q_df <- myparameters %>%
+  filter(name=="gamma_q") %>%
+  select(-c(no,name,type,init,step,lower_bound,upper_bound,filepath)) %>%
+  rename(gamma_q=final) %>% 
+  mutate(tau=1/gamma_q) %>%
+  mutate(type="production") %>% 
+  select(condition,promoter,tau,type)
+  
+rbind(gamma_lambda_df,gamma_q_df) %>% 
+  left_join(mean_lambda_df,by=c("condition","promoter")) %>% 
+  ggplot()+
+  geom_point(aes(mean_div_time,tau,col=promoter,shape=type))+
+  geom_abline(aes(slope=1,intercept=0),col="red",linetype=2)+
+  coord_cartesian(xlim=c(0,375),ylim=c(0,250))+
+  ylab("autocorrelation time (min)")+
+  xlab("average division time (min)")
+
+rbind(gamma_lambda_df,gamma_q_df) %>% 
+  left_join(mean_lambda_df,by=c("condition","promoter")) %>% 
+  ggplot()+
+  geom_point(aes(log(mean_div_time),log(tau),col=promoter,shape=type))+
+  geom_line(aes(log(mean_div_time),log(mean_div_time)),col="red",linetype=2)+
+  #coord_cartesian(xlim=c(0,375),ylim=c(0,250))+
+  ylab("autocorrelation time (min)")+
+  xlab("average division time (min)")
+
+rbind(gamma_lambda_df,gamma_q_df) %>% 
+  left_join(mean_lambda_df,by=c("condition","promoter")) %>% 
+  ggplot()+
+  geom_point(aes(log(alpha),log(tau),col=promoter,shape=type))+
+  #geom_line(aes(log(mean_div_time),log(mean_div_time)),col="red",linetype=2)+
+  #coord_cartesian(xlim=c(0,375),ylim=c(0,250))+
+  ylab("log(autocorrelation time (min))")+
+  xlab("log(mean growth rate (min-1))")
+
+rbind(gamma_lambda_df,gamma_q_df) %>% 
+  left_join(mean_lambda_df,by=c("condition","promoter")) %>% 
+  filter(type=="growth") %>% 
+  mutate(s=compute_slope_errxy_robust(log(alpha),log(tau))) %>% 
+  mutate(sd=compute_sdslope_errxy_robust(log(alpha),log(tau))) %>% 
+  mutate(i=compute_intercept_errxy_robust(log(alpha),log(tau))) %>% 
+  ggplot()+
+  geom_point(aes(log(alpha),log(tau),col=promoter,shape=type))+
+  geom_line(aes(log(alpha),log(alpha)*s+i),col="red",linetype=2)+
+  geom_text(aes(x=-4.5,y=4,label=sprintf("(%s+-%s) x + %s",round(s,2),round(sd,2),round(i,2))))+
+  #coord_cartesian(xlim=c(0,375),ylim=c(0,250))+
+  ylab("log(growth autocorrelation time (min))")+
+  xlab("log(mean growth rate (min-1))")
+```
+  
+The autocorrelation time for the growth seems to vary with the mean growth rate according to a power law again... Interestingly we know that this is indeed true for glucose aa. The deviation compared to exponential decrease is small (according to empiricial autocorrelation functions). But this is also there that the discrepancy between the CV of lambda and the var of lambda is the strongest between the predictions and the inferred parameters. Is not that weird? Where it is the most exponential, this is also where the difference is the largest...
+
+# Looking at C statistics
+
+## var C vs mean C, empirical
+
+```{r}
+myframes_inferred %>% 
+  mutate(c=gfp_nb/length_um) %>% 
+  group_by(condition, promoter) %>%
+  mutate(var_c=var(c,na.rm=TRUE),
+         mean_c=mean(c,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  distinct(condition,promoter,.keep_all=TRUE) %>% 
+  mutate(s=compute_slope_errxy_robust(log(mean_c),log(var_c)),
+         i=compute_intercept_errxy_robust(log(mean_c),log(var_c)),
+         sd=compute_sdslope_errxy_robust(log(mean_c),log(var_c))) %>%
+  ggplot()+
+  geom_point(aes(log(mean_c),log(var_c),col=promoter,shape=condition))+
+  geom_line(aes(log(mean_c),log(mean_c)*s+i,col=promoter,shape=condition),col="red")+
+  geom_text(aes(x=5,y=14,label=sprintf("y=(%s +/- %s) x + %s",round(s,2),round(sd,2),round(i,2))))+
+  theme_bw()+
+  ylab("log(var(c)) empirical")+
+  xlab("log(mean(c)) empirical")
+
+#ggsave("./varc_meanc_log_predictions_empirical.pdf",width=6,height=4)
+```
+
+
+
+```{r}
+myframes_c_predicted <- myframes %>% 
+  mutate(c=gfp_nb/length_um) %>% 
+  group_by(condition, promoter) %>%
+  mutate(var_c=var(c,na.rm=TRUE),
+         mean_c=mean(c,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  distinct(condition,promoter,var_c,mean_c)
+
+myframes_c_predicted %>% 
+  group_by(promoter) %>% 
+  mutate(s=compute_slope_errxy_robust(log(mean_c),log(var_c)),
+         sd=compute_sdslope_errxy_robust(log(mean_c),log(var_c)),
+         i=compute_intercept_errxy_robust(log(mean_c),log(var_c))) %>% 
+  ungroup() %>% 
+  ggplot()+
+  geom_point(aes(log(mean_c),log(var_c),shape=condition))+
+  geom_line(aes(log(mean_c),log(mean_c)*s+i),linetype=2,col="red")+
+  geom_abline(aes(slope=1.96,intercept=-2.33),col="black",linetype=2)+
+  #geom_text(aes(x=3,y=9,label=sprintf("y=(%s +/- %s) x + %s",round(s,2),round(sd,2),round(i,2))),size=3)+
+  facet_wrap(~promoter,scale="free")+
+  xlab("log(mean(c))")+
+  ylab("log(var(c))")
+
+ggsave("./varc_meanc_allcomparison_facetted_promoter_fit.pdf",height=5,width=7)
+
+myframes_c_predicted %>% 
+  group_by(promoter) %>% 
+  mutate(s=compute_slope_errxy_robust(log(mean_c),log(var_c)),
+         sd=compute_sdslope_errxy_robust(log(mean_c),log(var_c)),
+         i=compute_intercept_errxy_robust(log(mean_c),log(var_c))) %>% 
+  ungroup() %>% 
+  ggplot()+
+  geom_point(aes(mean_c,var_c,shape=condition))+
+  #geom_line(aes(mean_c,mean_c*s+i),linetype=2,col="red")+
+  #geom_abline(aes(slope=1.96,intercept=-2.33),col="black",linetype=2)+
+  #geom_text(aes(x=3,y=9,label=sprintf("y=(%s +/- %s) x + %s",round(s,2),round(sd,2),round(i,2))),size=3)+
+  facet_wrap(~promoter,scale="free")+
+  xlab("mean(c)")+
+  ylab("var(c)")
+
+ggsave("./varc_meanc_allcomparison_facetted_promoter_fit_nolog.pdf",height=5,width=7)
+```
+
+## variance of C and variance of Q
+
+Compare these:
+
+```{r}
+myframes_inferred %>% 
+  mutate(c=gfp_nb/length_um) %>% 
+  rowwise() %>% 
+  mutate(q_fluc=rnorm(1,mean=q,sd=sqrt(abs(cov_qq)))) %>% 
+  #rowwise() %>% 
+  #mutate(q_fluc=rnorm(1,mean=q,sd=sqrt(abs(cov_qq)))) %>% 
+  group_by(condition, promoter) %>%
+  mutate(var_c=var(c,na.rm=TRUE),
+         var_q=var(q_fluc,na.rm=TRUE),
+         mean_c=mean(c,na.rm=TRUE),
+         mean_q=mean(q,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  distinct(condition,promoter,.keep_all=TRUE) %>% 
+  #mutate(s=compute_slope_errxy_robust(log(mean_c),log(var_c)),
+  #       i=compute_intercept_errxy_robust(log(mean_c),log(var_c)),
+  #       sd=compute_sdslope_errxy_robust(log(mean_c),log(var_c))) %>%
+  group_by(condition) %>% 
+  mutate(s=compute_slope_errxy_robust(log(var_q),log(var_c)),
+         i=compute_intercept_errxy_robust(log(var_q),log(var_c)),
+         sd=compute_sdslope_errxy_robust(log(var_q),log(var_c))) %>%
+  ungroup() %>% 
+  ggplot()+
+  geom_point(aes(log(var_q),log(var_c),col=promoter,shape=condition))+
+  geom_line(aes(log(var_q),log(var_q)*s+i,group=condition),col="red",linetype=2)+
+  #geom_line(aes(log(mean_c),log(mean_c)*s+i,col=promoter,shape=condition),col="red")+
+  #geom_text(aes(x=5,y=14,label=sprintf("y=(%s +/- %s) x + %s",round(s,2),round(sd,2),round(i,2))))+
+  theme_bw()+
+  ylab("log(var(c)) empirical")+
+  xlab("log(var(q)) empirical")
+
+ggsave("./20220321_presentation/varq_varc_log_predictions_empirical.pdf",width=5,height=3)
+
+myframes_inferred %>% 
+  mutate(c=gfp_nb/length_um) %>% 
+  rowwise() %>% 
+  mutate(q_fluc=rnorm(1,mean=q,sd=sqrt(abs(cov_qq)))) %>% 
+  #rowwise() %>% 
+  #mutate(q_fluc=rnorm(1,mean=q,sd=sqrt(abs(cov_qq)))) %>% 
+  group_by(condition, promoter) %>%
+  mutate(var_c=var(c,na.rm=TRUE),
+         var_q=var(q_fluc,na.rm=TRUE),
+         mean_c=mean(c,na.rm=TRUE),
+         mean_q=mean(q,na.rm=TRUE),
+         mean_lambda=mean(lambda,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  distinct(condition,promoter,.keep_all=TRUE) %>% 
+  #mutate(s=compute_slope_errxy_robust(log(mean_c),log(var_c)),
+  #       i=compute_intercept_errxy_robust(log(mean_c),log(var_c)),
+  #       sd=compute_sdslope_errxy_robust(log(mean_c),log(var_c))) %>%
+  group_by(condition) %>% 
+  mutate(s=compute_slope_errxy_robust(log(var_q)-2*log(mean_lambda),log(var_c)),
+         i=compute_intercept_errxy_robust(log(var_q)-2*log(mean_lambda),log(var_c)),
+         sd=compute_sdslope_errxy_robust(log(var_q)-2*log(mean_lambda),log(var_c))) %>%
+  ungroup() %>% 
+  ggplot()+
+  geom_point(aes(log(var_q)-2*log(mean_lambda),log(var_c),col=promoter,shape=condition))+
+  geom_line(aes(log(var_q)-2*log(mean_lambda),(log(var_q)-2*log(mean_lambda))*s+i,group=condition),col="red",linetype=2)+
+  #geom_line(aes(log(mean_c),log(mean_c)*s+i,col=promoter,shape=condition),col="red")+
+  #geom_text(aes(x=5,y=14,label=sprintf("y=(%s +/- %s) x + %s",round(s,2),round(sd,2),round(i,2))))+
+  theme_bw()+
+  ylab("log(var(c)) empirical")+
+  xlab("log(var(q)/mean_lambda**2) empirical")
+
+ggsave("./20220321_presentation/varq_meanlambda_varc_log_predictions_empirical_reduced.pdf",width=5,height=3)
+```
+
+```{r}
+myframes_inferred %>% 
+  mutate(c=gfp_nb/length_um) %>% 
+  rowwise() %>% 
+  mutate(q_fluc=rnorm(1,mean=q,sd=sqrt(abs(cov_qq)))) %>% 
+  group_by(condition, promoter) %>%
+  mutate(var_c=var(c,na.rm=TRUE),
+         var_q=var(q_fluc,na.rm=TRUE),
+         mean_c=mean(c,na.rm=TRUE),
+         mean_q=mean(q,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  distinct(condition,promoter,.keep_all=TRUE) %>% 
+  group_by(condition) %>% 
+  mutate(s=compute_slope_errxy_robust(log(var_q),log(var_c)),
+         i=compute_intercept_errxy_robust(log(var_q),log(var_c)),
+         sd=compute_sdslope_errxy_robust(log(var_q),log(var_c))) %>%
+  ungroup() %>% 
+  ggplot()+
+  geom_point(aes(log(var_q),log(var_c),col=promoter,shape=condition))+
+  geom_line(aes(log(var_q),log(var_q)*s+i,col=promoter,shape=condition),col="red")+
+  geom_text(aes(x=3,y=17,label=sprintf("y=(%s +/- %s) x + %s",round(s,2),round(sd,2),round(i,2))),size=2)+
+  facet_wrap(~condition)+
+  theme_bw()+
+  ylab("log(var(c)) empirical")+
+  xlab("log(var(q)) empirical")
+
+ggsave("./20220321_presentation/varq_varc_log_predictions_empirical_facetted.pdf",width=5,height=3)
+
+myframes_inferred %>% 
+  mutate(c=gfp_nb/length_um) %>% 
+  rowwise() %>% 
+  mutate(q_fluc=rnorm(1,mean=q,sd=sqrt(abs(cov_qq)))) %>% 
+  #rowwise() %>% 
+  #mutate(q_fluc=rnorm(1,mean=q,sd=sqrt(abs(cov_qq)))) %>% 
+  group_by(condition, promoter) %>%
+  mutate(var_c=var(c,na.rm=TRUE),
+         var_q=var(q_fluc,na.rm=TRUE),
+         mean_c=mean(c,na.rm=TRUE),
+         mean_q=mean(q,na.rm=TRUE),
+         mean_lambda=mean(lambda,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  distinct(condition,promoter,.keep_all=TRUE) %>% 
+  #mutate(s=compute_slope_errxy_robust(log(mean_c),log(var_c)),
+  #       i=compute_intercept_errxy_robust(log(mean_c),log(var_c)),
+  #       sd=compute_sdslope_errxy_robust(log(mean_c),log(var_c))) %>%
+  group_by(condition) %>% 
+  mutate(s=compute_slope_errxy_robust(log(var_q)-2*log(mean_lambda),log(var_c)),
+         i=compute_intercept_errxy_robust(log(var_q)-2*log(mean_lambda),log(var_c)),
+         sd=compute_sdslope_errxy_robust(log(var_q)-2*log(mean_lambda),log(var_c))) %>%
+  ungroup() %>% 
+  ggplot()+
+  geom_point(aes(log(var_q)-2*log(mean_lambda),log(var_c),col=promoter,shape=condition))+
+  geom_line(aes(log(var_q)-2*log(mean_lambda),(log(var_q)-2*log(mean_lambda))*s+i,group=condition),col="red",linetype=2)+
+  facet_wrap(~condition)+
+  #geom_line(aes(log(mean_c),log(mean_c)*s+i,col=promoter,shape=condition),col="red")+
+  geom_text(aes(x=12,y=16,label=sprintf("y=(%s +/- %s) x + %s",round(s,2),round(sd,2),round(i,2))),size=2)+
+  theme_bw()+
+  ylab("log(var(c)/mean_lambda**2) empirical")+
+  xlab("log(var(q) empirical")
+
+ggsave("./20220321_presentation/varq_varc_log_predictions_empirical_facetted_reduced.pdf",width=5,height=3)
+
+
+myframes_inferred %>% 
+  mutate(c=gfp_nb/length_um) %>% 
+  rowwise() %>% 
+  mutate(q_fluc=rnorm(1,mean=q,sd=sqrt(abs(cov_qq)))) %>% 
+  group_by(condition, promoter) %>%
+  mutate(var_c=var(c,na.rm=TRUE),
+         var_q=var(q_fluc,na.rm=TRUE),
+         mean_c=mean(c,na.rm=TRUE),
+         mean_q=mean(q,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  distinct(condition,promoter,.keep_all=TRUE) %>% 
+  #group_by(condition) %>% 
+  #mutate(s=compute_slope_errxy_robust(log(var_q),log(var_c)),
+  #       i=compute_intercept_errxy_robust(log(var_q),log(var_c)),
+  #       sd=compute_sdslope_errxy_robust(log(var_q),log(var_c))) %>%
+  #ungroup() %>% 
+  ggplot()+
+  geom_point(aes(sqrt(var_q)/mean_q,sqrt(var_c)/mean_c,col=promoter,shape=condition))+
+  #geom_line(aes(log(var_q),log(var_q)*s+i,col=promoter,shape=condition),col="red")+
+  #geom_text(aes(x=3,y=17,label=sprintf("y=(%s +/- %s) x + %s",round(s,2),round(sd,2),round(i,2))),size=2)+
+  facet_wrap(~condition)+
+  theme_bw()+
+  ylab("cv(c)) empirical")+
+  xlab("cv(q)) empirical")+
+  coord_cartesian(xlim=c(0,1.2),ylim=c(0,0.8))
+
+ggsave("./20220321_presentation/cvq_cvc_log_predictions_empirical_facetted.pdf",width=5,height=3)
+```
+
+
+```{r}
+myframes %>% 
+  mutate(c=gfp_nb/length_um) %>% 
+  group_by(condition, promoter) %>%
+  mutate(var_c=var(c,na.rm=TRUE),
+         var_lambda=var(lambda,na.rm=TRUE),
+         mean_c=mean(c,na.rm=TRUE),
+         mean_lambda=mean(lambda,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  distinct(condition,promoter,.keep_all=TRUE) %>% 
+  group_by(condition) %>% 
+  mutate(s=compute_slope_errxy_robust(log(var_lambda),log(var_c)),
+         i=compute_intercept_errxy_robust(log(var_lambda),log(var_c)),
+         sd=compute_sdslope_errxy_robust(log(var_lambda),log(var_c))) %>%
+  ungroup() %>% 
+  ggplot()+
+  geom_point(aes(log(var_lambda),log(var_c),col=promoter,shape=condition))+
+  #geom_line(aes(log(var_lambda),log(var_lambda)*s+i,col=promoter,shape=condition),col="red")+
+  #geom_text(aes(x=3,y=17,label=sprintf("y=(%s +/- %s) x + %s",round(s,2),round(sd,2),round(i,2))),size=3)+
+  #facet_wrap(~condition,scale="free")+
+  theme_bw()+
+  ylab("log(var(c)) empirical")+
+  xlab("log(var(lambda)) empirical")
+
+ggsave("./varlambda_varc_log_predictions_empirical.pdf",width=9,height=7)
+
+myframes %>% 
+  mutate(c=gfp_nb/length_um) %>% 
+  group_by(condition, promoter) %>%
+  mutate(var_c=var(c,na.rm=TRUE),
+         var_lambda=var(lambda,na.rm=TRUE),
+         mean_c=mean(c,na.rm=TRUE),
+         mean_lambda=mean(lambda,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  distinct(condition,promoter,.keep_all=TRUE) %>% 
+  group_by(condition) %>% 
+  mutate(s=compute_slope_errxy_robust(log(var_lambda),log(var_c)),
+         i=compute_intercept_errxy_robust(log(var_lambda),log(var_c)),
+         sd=compute_sdslope_errxy_robust(log(var_lambda),log(var_c))) %>%
+  ungroup() %>% 
+  ggplot()+
+  geom_point(aes(log(var_lambda),log(var_c),col=promoter,shape=condition))+
+  #geom_line(aes(log(var_lambda),log(var_lambda)*s+i,col=promoter,shape=condition),col="red")+
+  #geom_text(aes(x=3,y=17,label=sprintf("y=(%s +/- %s) x + %s",round(s,2),round(sd,2),round(i,2))),size=3)+
+  facet_wrap(~condition,scale="free")+
+  theme_bw()+
+  ylab("log(var(c)) empirical")+
+  xlab("log(var(lambda)) empirical")
+
+ggsave("./varlambda_varc_log_predictions_empirical_facetted.pdf",width=9,height=7)
+
+myframes %>% 
+  mutate(c=gfp_nb/length_um) %>% 
+  group_by(condition, promoter) %>%
+  mutate(var_c=var(c,na.rm=TRUE),
+         var_lambda=var(lambda,na.rm=TRUE),
+         mean_c=mean(c,na.rm=TRUE),
+         mean_lambda=mean(lambda,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  distinct(condition,promoter,.keep_all=TRUE) %>% 
+  group_by(condition) %>% 
+  mutate(s=compute_slope_errxy_robust(log(var_lambda),log(var_c)),
+         i=compute_intercept_errxy_robust(log(var_lambda),log(var_c)),
+         sd=compute_sdslope_errxy_robust(log(var_lambda),log(var_c))) %>%
+  ungroup() %>% 
+  ggplot()+
+  geom_point(aes(var_lambda,log(var_c),col=promoter,shape=condition))+
+  #geom_line(aes(log(var_lambda),log(var_lambda)*s+i,col=promoter,shape=condition),col="red")+
+  #geom_text(aes(x=3,y=17,label=sprintf("y=(%s +/- %s) x + %s",round(s,2),round(sd,2),round(i,2))),size=3)+
+  facet_wrap(~condition,scale="free")+
+  theme_bw()+
+  ylab("log(var(c)) empirical")+
+  xlab("var(lambda) empirical")
+
+ggsave("./varlambda_varc_log_predictions_empirical_facetted_semilog.pdf",width=9,height=7)
+```
+
+
+```{r}
+myframes %>% 
+  mutate(c=gfp_nb/length_um) %>% 
+  group_by(condition, promoter) %>%
+  mutate(var_c=var(c,na.rm=TRUE),
+         var_q=var(q,na.rm=TRUE),
+         mean_c=mean(c,na.rm=TRUE),
+         mean_q=mean(q,na.rm=TRUE),
+         cv_q=sqrt(var_q)/mean_q,
+         cv_c=sqrt(var_c)/mean_c) %>%
+  ungroup() %>% 
+  distinct(condition,promoter,.keep_all=TRUE) %>% 
+  group_by(condition) %>% 
+  mutate(s=compute_slope_errxy_robust(log(cv_q),log(cv_c)),
+         i=compute_intercept_errxy_robust(log(cv_q),log(cv_c)),
+         sd=compute_sdslope_errxy_robust(log(cv_q),log(cv_c))) %>%
+  ungroup() %>% 
+  ggplot()+
+  geom_point(aes(log(cv_q),log(cv_c),col=promoter,shape=condition))+
+  #geom_line(aes(log(cv_q),log(cv_q)*s+i,col=promoter,shape=condition),col="red")+
+  #geom_text(aes(x=3,y=17,label=sprintf("y=(%s +/- %s) x + %s",round(s,2),round(sd,2),round(i,2))),size=3)+
+  facet_wrap(~condition,scale="free")+
+  theme_bw()+
+  ylab("cv(c) empirical")+
+  xlab("cv(q) empirical")
+
+ggsave("./cvq_cvc_log_predictions_empirical_facetted.pdf",width=9,height=7)
+```
+
+# Do the same but for simulation data, do we see the same thing?
+
+```{r}
+simulation_data %>% 
+  mutate(c=gfp_nb/length_um) %>% 
+  group_by(condition, promoter) %>%
+  mutate(var_c=var(c,na.rm=TRUE),
+         var_q=var(q,na.rm=TRUE),
+         mean_c=mean(c,na.rm=TRUE),
+         mean_q=mean(q,na.rm=TRUE)) %>%
+  ungroup() %>% 
+  distinct(condition,promoter,.keep_all=TRUE) %>% 
+  group_by(condition) %>% 
+  mutate(s=compute_slope_errxy_robust(log(var_q),log(var_c)),
+         i=compute_intercept_errxy_robust(log(var_q),log(var_c)),
+         sd=compute_sdslope_errxy_robust(log(var_q),log(var_c))) %>%
+  ungroup() %>% 
+  ggplot()+
+  geom_point(aes(log(var_q),log(var_c),col=promoter,shape=condition))+
+  geom_line(aes(log(var_q),log(var_q)*s+i,col=promoter,shape=condition),col="red")+
+  geom_text(aes(x=3,y=17,label=sprintf("y=(%s +/- %s) x + %s",round(s,2),round(sd,2),round(i,2))),size=3)+
+  facet_wrap(~condition,scale="free")+
+  theme_bw()+
+  ylab("log(var(c)) empirical")+
+  xlab("log(var(q)) empirical")
+
+ggsave("./varq_varc_log_predictions_empirical_facetted_simulation.pdf",width=9,height=7)
+```
+
+```{r}
+simulation_data %>% 
+  mutate(c=gfp_nb/length_um) %>% 
+  group_by(condition, promoter) %>%
+  mutate(var_c=var(c,na.rm=TRUE),
+         var_q=var(q,na.rm=TRUE),
+         mean_c=mean(c,na.rm=TRUE),
+         mean_q=mean(q,na.rm=TRUE),
+         cv_q=sqrt(var_q)/mean_q,
+         cv_c=sqrt(var_c)/mean_c) %>%
+  ungroup() %>% 
+  distinct(condition,promoter,.keep_all=TRUE) %>% 
+  group_by(condition) %>% 
+  mutate(s=compute_slope_errxy_robust(log(cv_q),log(cv_c)),
+         i=compute_intercept_errxy_robust(log(cv_q),log(cv_c)),
+         sd=compute_sdslope_errxy_robust(log(cv_q),log(cv_c))) %>%
+  ungroup() %>% 
+  ggplot()+
+  geom_point(aes(log(cv_q),log(cv_c),col=promoter,shape=condition))+
+  #geom_line(aes(log(cv_q),log(cv_q)*s+i,col=promoter,shape=condition),col="red")+
+  #geom_text(aes(x=3,y=17,label=sprintf("y=(%s +/- %s) x + %s",round(s,2),round(sd,2),round(i,2))),size=3)+
+  facet_wrap(~condition,scale="free")+
+  theme_bw()+
+  ylab("cv(c) empirical")+
+  xlab("cv(q) empirical")
+
+ggsave("./cvq_cvc_log_predictions_empirical_facetted_simulation.pdf",width=9,height=7)
+```
+
+# Propagating error bars from measurement on the distributions of production and lambda
+
+Can we trust the inferred parameters?
+
+Erik came up with a way to compute the true variance from a set of estimates  q_i or lambda_i of respectively production and growth. I am trying to use this method in order to compute this.
+
+The log-likelihood can be written:
+
+$$L(v) = -\frac{1}{2}\sum_i \log\left[\sigma_i^2 + v \right] - \frac{1}{2} \sum_i \frac{(x_i -x(v))^2}{\sigma_i^2+v},$$
+
+where the estimated average $x(v)$ (which depends on $v$) is
+$$x(v) = \left[\sum_i \frac{1}{\sigma_i^2+v}\right]^{-1} \sum_i \frac{x_i}{\sigma_i^2+v},$$
+a weighted average of the data points where the weight $w_i$ of data-point $i$ is $w_i = 1/(\sigma_i^2+v)$.
+
+It is relatively straight forward to maximize $L(v)$ with respect to $v$, but it has to be done numerically. One needs to find a solution of
+$$\sum_i \frac{1}{\sigma_i^2+v} \left[\frac{(x_i-x(v))^2}{\sigma_i^2+v}-1 \right] = 0.$$
+To get an error-bar on $v$ one would have to either look at $L(v)$ numerically or calculate the second derivative of $L(v)$ at the optimal $v$. The expression for the latter becomes a bit messy so I am not bothering to write it out here. I am not sure whether we need it.
+
+In the following, I am writing a function to compute such $L(v)$, and applying a routine to maximize it.
+
+```{r}
+# In  myframes, the following covariances are useful:
+# cov_ll and cov_qq which are respectively the squares of the error bars for lambda and production.
+
+compute_plot_variance_q <- function(.condition,.promoter,.start=1,.end=10000,.step=100,.optim=FALSE,.plot=FALSE){
+  
+  .df <- myframes %>% 
+    #filter(condition=="glucose",promoter=="hi1")
+    filter(condition==.condition,promoter==.promoter)
+  
+  compute_log_likelihood_q <- function(.v){
+    .df <- .df %>% 
+    mutate(total_var_i=cov_qq+.v,
+           q_v_i=q/total_var_i,
+           weight_i=1/(total_var_i),
+           x_v=sum(q_v_i)/(sum(weight_i)),
+           square_term_i=((q-x_v)**2)/(total_var_i),
+           term2=-1/2*sum(square_term_i),
+           l_total_var_i=log(total_var_i),
+           term1=-1/2*sum(l_total_var_i),
+           L=term1+term2)
+  
+  return(unique(.df$L))}
+  
+  .vs <- seq(.start,.end,by=.step)
+  #.vs <- seq(1,10000,by=100)
+  lls <- lapply(.vs,compute_log_likelihood_q)
+  minus_ll <- function(.v){return(-compute_log_likelihood_q(.v))}
+  
+  if((.optim==FALSE) & (.plot==TRUE)){
+  plot(.vs,lls)
+  title(sprintf("L(v),%s,%s",.condition,.promoter))}
+
+  if((.optim==TRUE) & (.plot==TRUE)){
+  v <- nloptr::cobyla(x0=.start,minus_ll)$par
+  plot(.vs,lls)
+  abline(v=c(v))
+  title(sprintf("L(v),%s,%s",.condition,.promoter))
+  return(v)}
+  
+  if((.optim==TRUE) & (.plot==FALSE)){
+    v <- nloptr::cobyla(x0=.start,minus_ll)$par
+    return(v)}
+  
+  if((.optim==FALSE) & (.plot==FALSE)){
+    return(NA)}
+  }
+```
+
+```{r}
+true_var_vec <- c()
+true_var_vec[1] <- compute_plot_variance_q("acetate","hi1",.end=100,.step=1,.optim=TRUE)
+true_var_vec[2] <- compute_plot_variance_q("acetate","hi3",.end=10,.step=0.1,.optim=TRUE)
+true_var_vec[3] <- compute_plot_variance_q("acetate","med2",.start=0.001,.end=0.1,.step=0.001,.optim=TRUE)
+true_var_vec[4] <- compute_plot_variance_q("acetate","med3",.start=0.001,.end=0.1,.step=0.001,.optim=TRUE)
+true_var_vec[5] <- compute_plot_variance_q("acetate","rpmB",.start=0.1,.end=5,.step=0.1,.optim=TRUE)
+true_var_vec[6] <- compute_plot_variance_q("acetate","rplN",.start=1,.end=200,.step=1,.optim=TRUE)
+true_var_vec[7] <- compute_plot_variance_q("acetate","rrnB",.start=0.001,.end=5,.step=0.1,.optim=TRUE)
+true_var_vec[8] <- compute_plot_variance_q("acetate","rpsB",.start=0.001,.end=5,.step=0.1,.optim=TRUE)
+```
+
+The inferred variances, are smaller than the variance that we get from simulation (and therefore certainly from inferred parameters). Also, I do not understand why med2 glycerol would give me such results. That does not make so much sense.
+
+```{r}
+true_var_vec[9] <- compute_plot_variance_q("glycerol","hi1",.end=500,.step=1,.optim=TRUE)
+true_var_vec[10] <- compute_plot_variance_q("glycerol","hi3",.end=10,.step=0.1,.optim=TRUE)
+true_var_vec[11] <- NA
+#compute_plot_variance_q("glycerol","med2",.start=1e-32,.end=1e-30,.step=1e-32,.plot=TRUE)
+true_var_vec[12] <- compute_plot_variance_q("glycerol","med3",.start=0.1,.end=10,.step=0.1,.optim=TRUE)
+true_var_vec[13] <- compute_plot_variance_q("glycerol","rpmB",.start=1,.end=100,.step=1,.optim=TRUE)
+true_var_vec[14] <- compute_plot_variance_q("glycerol","rplN",.start=10,.end=10000,.step=100,.optim=TRUE)
+true_var_vec[15] <- compute_plot_variance_q("glycerol","rrnB",.start=1,.end=100,.step=1,.optim=TRUE)
+true_var_vec[16] <- compute_plot_variance_q("glycerol","rpsB",.start=1,.end=50,.step=1,.optim=TRUE)
+```
+
+```{r}
+true_var_df <- tibble(condition=rep(c("acetate","glycerol"),each=8),promoter=rep(c(
+  "hi1","hi3","med2","med3","rpmB","rplN","rrnB","rpsB"),times=2),
+  var_q=true_var_vec,type="inferred")
+  
+experimental_var_df <- myframes %>% 
+  filter(condition %in% c("acetate","glycerol")) %>% 
+  left_join(true_var_df,by=c("condition","promoter")) %>% 
+  group_by(condition,promoter) %>% 
+  mutate(init_var_q=var(q,na.rm=TRUE)) %>% 
+  mutate(var_q=var(q,na.rm=TRUE)) %>% 
+  mutate(mean_q=mean(q,na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  mutate(type="experimental") %>% 
+  distinct(condition,promoter,var_q,mean_q,type) 
+
+mean_q_df <- experimental_var_df %>% 
+  distinct(condition,promoter,mean_q)
+
+final_df <- rbind(
+  simulation_data %>% 
+  filter(condition %in% c("acetate","glycerol")) %>% 
+  group_by(condition,promoter) %>% 
+  mutate(init_var_q=0) %>% 
+  mutate(var_q=var(q,na.rm=TRUE)) %>% 
+  mutate(mean_q=mean(q,na.rm=TRUE)) %>% 
+  ungroup() %>% 
+  mutate(type="simulation") %>% 
+  distinct(condition,promoter,var_q,mean_q,type), 
+  experimental_var_df,
+  true_var_df %>% 
+    left_join(mean_q_df,by=c("condition","promoter"))) %>% 
+  arrange(condition,promoter,type)
+
+final_df %>%  ggplot()+
+  geom_point(aes(log(mean_q),log(var_q),col=type))+
+  #geom_point(data=final_df %>% 
+               #filter(type=="experimental (+ inferred variance)"), aes(log(mean_q),log(init_var_q)),shape=2)+
+  #geom_line(aes(log(var_q),log(var_q)),col="red",linetype=2)+
+  xlab("log(mean(q))")+
+  ylab("log(var(q))")
+
+#ggsave("./mean_q_var_q_log_with_inferred_added_variance")
+```
+
+So... as far as acetate and inferred are concerned, the inferred variance (using the error bars...) is actually smaller than the experimental data, not using the error bars. Which is simply impossible. So my guess is that the formula is wrong somewhere.
+
+```{r}
+simulation_data %>% 
+  group_by(condition,promoter) %>% 
+  summarise(var_q=var(q,na.rm=TRUE))
+```
+
+
+
+
+
+
+
+
+
+
+

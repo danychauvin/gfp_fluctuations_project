@@ -1,0 +1,479 @@
+---
+title: "data_analysis.Rmd"
+author: "Dany Chauvin"
+date: "7/25/2022"
+output: html_document
+---
+
+
+# First data set (defocusing_20220727_downwards.csv)
+## Importing data, computing fluorescence and importing objective Z positions (um)
+
+```{r message=FALSE,warning=FALSE}
+source("./loadFunctionsAndPackages.R")
+path_to_MM_data_summary <- "./dataLists/defocusing_20220727_downwards.csv"
+source("./readMMData_20220131.R")
+
+myframes_gfp <- myframes %>% 
+  mutate(strain='MG1655')
+# Converting GFP units
+myframes_gfp <- myframes_gfp %>%
+  # append relevant conversion parameters
+  mutate(autofluo_predict=NA, fp_per_dn=NA,
+         # case of GFPmut2 (from zaslaver library)
+         autofluo_predict = ifelse(strain!='asc662', 133.6, autofluo_predict),
+         fp_per_dn = ifelse(strain!='asc662', 0.198, fp_per_dn),
+         # case of asc662
+         autofluo_predict = ifelse(strain=='asc662', 422.8, autofluo_predict),
+         fp_per_dn = ifelse(strain=='asc662', 0.0361 * 4, fp_per_dn)) %>% 
+  # convert to gfp units (after subtracting autofluorescence)
+  mutate(fluogfp_amplitude = fluo_amplitude - autofluo_predict * length_um_oriented_bbox,
+         gfp_nb = fluogfp_amplitude * fp_per_dn ) %>% 
+  group_by(cell) %>% 
+  arrange(time_sec) %>% 
+  mutate(g_birth=first(gfp_nb)) %>% 
+  mutate(g_div=last(gfp_nb))
+cell_fluo_info <- myframes_gfp %>% 
+  distinct(cell,g_birth,g_div) %>% 
+  ungroup()
+
+zpositions_um <- readr::read_csv("/scicore/home/nimwegen/rocasu25/MM_Data/Dany/20220727/20220727_ch_hi1_curated_20220727glu_downwards_1/zpositions.csv")
+zpositions_um <- zpositions_um %>% 
+  extract(pos,"pos","^Pos([0-9]{1,})",remove=TRUE) %>% 
+  mutate(pos=as.double(pos))
+
+med_z <- median(sort(unique(zpositions_um$z)))
+
+zpositions_um <- zpositions_um %>% 
+         mutate(offset=round(z-med_z,2))
+```
+
+## Fluorescence intensity profiles along growth lane cross section
+
+```{r}
+library(RColorBrewer)
+c25 <- c(
+  "dodgerblue2", "#E31A1C", # red
+  "green4",
+  "#6A3D9A", # purple
+  "#FF7F00", # orange
+  "black", "gold1",
+  "skyblue2", "#FB9A99", # lt pink
+  "palegreen2",
+  "#CAB2D6", # lt purple
+  "#FDBF6F", # lt orange
+  "gray70", "khaki2",
+  "maroon", "orchid1", "deeppink1", "blue1", "steelblue4",
+  "darkturquoise", "green1", "yellow4", "yellow3",
+  "darkorange4", "brown"
+)
+
+myframes_profile_downwards <- myframes_gfp %>%
+  left_join(zpositions_um,by=c("pos")) %>% 
+  filter(gl==16) %>% 
+  filter(frame==0) %>% 
+  distinct(gl,cell,.keep_all=TRUE) %>% 
+  select(cell,pos,gl,fl_intensity_profile,cell_rank,z,offset) %>% 
+  extract(fl_intensity_profile,"fl","^\\[(.*)\\]$") %>% 
+  mutate(fl=str_replace_all(fl,"\\ ","")) %>% 
+  group_by(cell) %>% 
+  mutate(fl=strsplit(as.character(fl), ",")) %>% 
+  unnest(fl) %>% 
+  mutate(fl=as.double(fl)) %>% 
+  #mutate(z=as.character(z)) %>% 
+  mutate(pos=as.character(pos)) %>% 
+  mutate(x=row_number()) %>% 
+  ungroup()
+
+myframes_profile_downwards$offset <- factor(myframes_profile_downwards$offset,levels=as.character(sort(unique(myframes_profile_downwards$offset))))
+nb.cols <- 21
+mycolors <- colorRampPalette(brewer.pal(11, "Spectral"))
+mycolors <- rev(mycolors(nb.cols))
+
+myframes_profile_downwards %>% 
+  filter(cell_rank<4) %>% 
+  ggplot()+
+  geom_line(aes(x,fl,group=offset,col=offset),alpha=1)+
+  facet_wrap(~cell_rank)+
+  scale_y_continuous(trans="log")+
+  theme_cowplot()+
+  #scale_color_manual(values=c25)+
+  scale_color_manual(values=mycolors)+
+  ylab("fluorescence (A.U) (log)")
+
+ggsave("./fluo_profiles_downwards.pdf",height=5,width=7)
+
+myframes_profile_downwards %>% 
+  filter(cell_rank<4) %>% 
+  ggplot()+
+  geom_line(aes(x,fl,group=offset,col=offset),alpha=1)+
+  facet_wrap(~cell_rank)+
+  #scale_y_continuous(trans="log")+
+  theme_cowplot()+
+  #scale_color_manual(values=c25)+
+  scale_color_manual(values=mycolors)+
+  ylab("fluorescence (A.U)")
+
+ggsave("./fluo_profiles_downwards_log.pdf",height=5,width=7)
+```
+
+## Length and gfp
+
+### Length
+
+```{r}
+#distance_df <- tibble(pos=seq(0,10,1),z=seq(0,1,0.1))
+#gl_df <- tibble(gl=c(7,19),position=c("below","above"))
+
+myframes_gfp %>%
+  left_join(zpositions_um,by=c("pos")) %>% 
+  filter(gl==16) %>% 
+  filter(frame==0) %>% 
+  distinct(gl,cell,.keep_all=TRUE) %>% 
+  filter(cell_rank<4) %>% 
+  mutate(cell_rank=as.character(cell_rank)) %>% 
+  ggplot()+
+  geom_point(aes(offset,length_um_oriented_bbox,col=cell_rank))+
+  coord_cartesian(ylim=c(0,4.5))+
+  theme_cowplot()+
+  facet_wrap(~cell_rank,scale="free")+
+  ylab("Length um (oriented bbox)")+
+  xlab("Offset (um)")
+
+ggsave("./length_offset_log.pdf",height=5,width=7)
+
+```
+
+
+### GFP
+
+```{r}
+myframes_gfp_offset <- myframes_gfp %>%
+  left_join(zpositions_um,by=c("pos"))
+
+myframes_gfp_offset %>% 
+  filter(gl==16) %>% 
+  filter(frame==0) %>% 
+  distinct(gl,cell,.keep_all=TRUE) %>% 
+  filter(cell_rank<4) %>% 
+  mutate(cell_rank=as.character(cell_rank)) %>% 
+  ggplot()+
+  geom_point(aes(offset,gfp_nb,col=cell_rank))+
+  #coord_cartesian(ylim=c(0,50000))+
+  theme_cowplot()+
+  facet_wrap(~cell_rank,scale="free")+
+  ylab("#GFP")+
+  xlab("Offset (um)")
+
+ggsave("./gfp_offset_log.pdf",height=5,width=7)
+```
+
+### Concentration
+
+```{r}
+#distance_df <- tibble(pos=seq(0,10,1),z=seq(0,1,0.1))
+#gl_df <- tibble(gl=c(7,19),position=c("below","above"))
+
+myframes_gfp %>%
+  left_join(zpositions_um,by=c("pos")) %>% 
+  filter(gl==16) %>% 
+  filter(frame==0) %>% 
+  distinct(gl,cell,.keep_all=TRUE) %>% 
+  filter(cell_rank<4) %>% 
+  mutate(cell_rank=as.character(cell_rank)) %>% 
+  mutate(concentration=gfp_nb/length_um_oriented_bbox) %>% 
+  ggplot()+
+  geom_point(aes(offset,concentration,col=cell_rank))+
+  coord_cartesian(ylim=c(0,13000))+
+  theme_cowplot()+
+  facet_wrap(~cell_rank,scale="free")+
+  ylab("Concentration")+
+  xlab("Offset (um)")
+
+ggsave("./concentration_offset_log.pdf",height=5,width=7)
+
+```
+
+```{r}
+#distance_df <- tibble(pos=seq(0,10,1),z=seq(0,1,0.1))
+#gl_df <- tibble(gl=c(7,19),position=c("below","above"))
+
+myframes_gfp %>%
+  left_join(zpositions_um,by=c("pos")) %>% 
+  filter(gl==16) %>% 
+  filter(frame==0) %>% 
+  distinct(gl,cell,.keep_all=TRUE) %>% 
+  filter(cell_rank<4) %>% 
+  mutate(cell_rank=as.character(cell_rank)) %>% 
+  mutate(concentration=gfp_nb/length_um_oriented_bbox) %>% 
+  ggplot()+
+  geom_point(aes(pos,concentration,col=cell_rank))+
+  coord_cartesian(ylim=c(0,13000))+
+  theme_cowplot()+
+  facet_wrap(~cell_rank,scale="free")+
+  ylab("Concentration")+
+  xlab("Position index")
+
+ggsave("./concentration_pos.pdf",height=5,width=7)
+
+```
+
+In this case, I would consider Pos4 to Pos12 to be quite acceptable for data acquisition.
+In this range, concentration can vary by how much?
+
+```{r}
+myframes_gfp %>%
+  filter(between(pos,4,12)) %>% 
+  left_join(zpositions_um,by=c("pos")) %>% 
+  filter(gl==16) %>% 
+  filter(frame==0) %>% 
+  distinct(gl,cell,.keep_all=TRUE) %>% 
+  filter(cell_rank<4) %>% 
+  mutate(cell_rank=as.character(cell_rank)) %>% 
+  mutate(concentration=gfp_nb/length_um_oriented_bbox) %>% 
+  ggplot()+
+  geom_point(aes(offset,concentration,col=cell_rank))+
+  coord_cartesian(ylim=c(0,13000))+
+  theme_cowplot()+
+  facet_wrap(~cell_rank,scale="free")+
+  ylab("Concentration")+
+  xlab("Offset (um)")
+
+ggsave("./concentration_offset_log.pdf",height=5,width=7)
+```
+
+```{r}
+myframes_gfp %>%
+  ungroup() %>% 
+  filter(pos %in% c(4,12)) %>% 
+  left_join(zpositions_um,by=c("pos")) %>% 
+  filter(gl==16) %>% 
+  filter(frame==0) %>% 
+  distinct(gl,cell,.keep_all=TRUE) %>% 
+  filter(cell_rank<4) %>% 
+  mutate(cell_rank=as.character(cell_rank)) %>% 
+  mutate(concentration=gfp_nb/length_um_oriented_bbox) %>% 
+  distinct(cell_rank,concentration,pos) %>% 
+  pivot_wider(values_from = concentration,names_from = pos) %>% 
+  rename(top="4",
+         bottom="12") %>% 
+  mutate(mean=1/2*(bottom+top),
+         bottom=bottom/mean,
+         top=top/mean)
+```
+
+60% of the actual fluorescence is left... Fuck. Variations I see are clearly in agreement with these results.
+
+```{r}
+myframes_gfp %>%
+  ungroup() %>% 
+  filter(pos %in% c(4,12)) %>% 
+  left_join(zpositions_um,by=c("pos")) %>% 
+  filter(gl==16) %>% 
+  filter(frame==0) %>% 
+  distinct(gl,cell,.keep_all=TRUE) %>% 
+  filter(cell_rank<4) %>% 
+  mutate(cell_rank=as.character(cell_rank)) %>% 
+  mutate(concentration=gfp_nb/length_um_oriented_bbox) %>% 
+  distinct(cell_rank,offset,pos) %>% 
+  pivot_wider(values_from = offset,names_from = pos) %>% 
+  rename(top="4",
+         bottom="12") %>% 
+  mutate(distance=top-bottom)
+```
+
+Over 0.82 um, phase contrast is pretty good, but fluorescence can vary by +/- 25%.
+
+# Second data set (defocusing_20220727_upwards.csv)
+## Importing data, computing fluorescence and importing objective Z positions (um)
+
+
+```{r message=FALSE,warning=FALSE}
+source("./loadFunctionsAndPackages.R")
+path_to_MM_data_summary <- "./dataLists/defocusing_20220727_upwards.csv"
+source("./readMMData_20220131.R")
+
+myframes_gfp <- myframes %>% 
+  mutate(strain='MG1655')
+# Converting GFP units
+myframes_gfp <- myframes_gfp %>%
+  # append relevant conversion parameters
+  mutate(autofluo_predict=NA, fp_per_dn=NA,
+         # case of GFPmut2 (from zaslaver library)
+         autofluo_predict = ifelse(strain!='asc662', 133.6, autofluo_predict),
+         fp_per_dn = ifelse(strain!='asc662', 0.198, fp_per_dn),
+         # case of asc662
+         autofluo_predict = ifelse(strain=='asc662', 422.8, autofluo_predict),
+         fp_per_dn = ifelse(strain=='asc662', 0.0361 * 4, fp_per_dn)) %>% 
+  # convert to gfp units (after subtracting autofluorescence)
+  mutate(fluogfp_amplitude = fluo_amplitude - autofluo_predict * length_um_oriented_bbox,
+         gfp_nb = fluogfp_amplitude * fp_per_dn ) %>% 
+  group_by(cell) %>% 
+  arrange(time_sec) %>% 
+  mutate(g_birth=first(gfp_nb)) %>% 
+  mutate(g_div=last(gfp_nb))
+cell_fluo_info <- myframes_gfp %>% 
+  distinct(cell,g_birth,g_div) %>% 
+  ungroup()
+
+zpositions_um <- readr::read_csv("/scicore/home/nimwegen/rocasu25/MM_Data/Dany/20220727/20220727_ch_hi1_curated_20220727_upwards/zpositions.csv")
+zpositions_um <- zpositions_um %>% 
+  extract(pos,"pos","^Pos([0-9]{1,})",remove=TRUE) %>% 
+  mutate(pos=as.double(pos))
+med_z <- median(sort(unique(zpositions_um$z)))
+zpositions_um <- zpositions_um %>% 
+         mutate(offset=round(z-med_z,2))
+
+```
+
+## Fluorescence intensity profiles along growth lane cross section
+
+```{r}
+library(RColorBrewer)
+c25 <- c(
+  "dodgerblue2", "#E31A1C", # red
+  "green4",
+  "#6A3D9A", # purple
+  "#FF7F00", # orange
+  "black", "gold1",
+  "skyblue2", "#FB9A99", # lt pink
+  "palegreen2",
+  "#CAB2D6", # lt purple
+  "#FDBF6F", # lt orange
+  "gray70", "khaki2",
+  "maroon", "orchid1", "deeppink1", "blue1", "steelblue4",
+  "darkturquoise", "green1", "yellow4", "yellow3",
+  "darkorange4", "brown"
+)
+
+myframes_profile_upwards <- myframes_gfp %>%
+  left_join(zpositions_um,by=c("pos")) %>% 
+  filter(gl==17) %>% 
+  filter(frame==0) %>% 
+  distinct(gl,cell,.keep_all=TRUE) %>% 
+  select(cell,pos,gl,fl_intensity_profile,cell_rank,z,offset) %>% 
+  extract(fl_intensity_profile,"fl","^\\[(.*)\\]$") %>% 
+  mutate(fl=str_replace_all(fl,"\\ ","")) %>% 
+  group_by(cell) %>% 
+  mutate(fl=strsplit(as.character(fl), ",")) %>% 
+  unnest(fl) %>% 
+  mutate(fl=as.double(fl)) %>% 
+  #mutate(z=as.character(z)) %>% 
+  mutate(pos=as.character(pos)) %>% 
+  mutate(x=row_number()) %>% 
+  ungroup()
+
+myframes_profile_upwards$offset <- factor(myframes_profile_upwards$offset,levels=as.character(sort(unique(myframes_profile_upwards$offset))))
+nb.cols <- 21
+mycolors <- colorRampPalette(brewer.pal(11, "Spectral"))
+mycolors <- rev(mycolors(nb.cols))
+
+myframes_profile_upwards %>% 
+  filter(cell_rank<4) %>% 
+  ggplot()+
+  geom_line(aes(x,fl,group=offset,col=offset),alpha=1)+
+  facet_wrap(~cell_rank)+
+  scale_y_continuous(trans="log")+
+  theme_cowplot()+
+  #scale_color_manual(values=c25)+
+  scale_color_manual(values=mycolors)+
+  ylab("fluorescence (A.U) (log)")
+
+ggsave("./profile_upwards_log.pdf",height=5,width=7)
+
+myframes_profile_upwards %>% 
+  filter(cell_rank<4) %>% 
+  ggplot()+
+  geom_line(aes(x,fl,group=offset,col=offset),alpha=1)+
+  facet_wrap(~cell_rank)+
+  #scale_y_continuous(trans="log")+
+  theme_cowplot()+
+  #scale_color_manual(values=c25)+
+  scale_color_manual(values=mycolors)+
+  ylab("fluorescence (A.U)")
+
+ggsave("./profile_upwards.pdf",height=5,width=7)
+
+```
+
+# Length and gfp
+
+### Length
+
+```{r}
+#distance_df <- tibble(pos=seq(0,10,1),z=seq(0,1,0.1))
+#gl_df <- tibble(gl=c(7,19),position=c("below","above"))
+
+myframes_gfp %>%
+  left_join(zpositions_um,by=c("pos")) %>% 
+  filter(gl==17) %>% 
+  filter(frame==0) %>% 
+  distinct(gl,cell,.keep_all=TRUE) %>% 
+  filter(cell_rank<4) %>% 
+  mutate(cell_rank=as.character(cell_rank)) %>% 
+  ggplot()+
+  geom_point(aes(offset,length_um_oriented_bbox,col=cell_rank))+
+  coord_cartesian(ylim=c(0,4))+
+  theme_cowplot()+
+  facet_wrap(~cell_rank,scale="free")+
+  ylab("Length um (oriented bbox)")+
+  xlab("Offset (um)")
+
+ggsave("./profile_length_upwards.pdf",height=5,width=7)
+
+```
+
+### GFP
+
+```{r}
+#distance_df <- tibble(pos=seq(0,10,1),z=seq(0,1,0.1))
+#gl_df <- tibble(gl=c(7,19),position=c("below","above"))
+
+myframes_gfp %>%
+  left_join(zpositions_um,by=c("pos")) %>% 
+  filter(gl==17) %>% 
+  filter(frame==0) %>% 
+  distinct(gl,cell,.keep_all=TRUE) %>% 
+  filter(cell_rank<4) %>% 
+  mutate(cell_rank=as.character(cell_rank)) %>% 
+  ggplot()+
+  geom_point(aes(offset,gfp_nb,col=cell_rank))+
+  coord_cartesian(ylim=c(0,44000))+
+  coord_cartesian(xlim=c(-0.9,0.8))+
+  theme_cowplot()+
+  facet_wrap(~cell_rank,scale="free")+
+  ylab("#GFP")+
+  xlab("Offset (um)")
+
+ggsave("./profile_gfp_upwards.pdf",height=5,width=7)
+
+```
+
+### Concentration
+
+```{r}
+#distance_df <- tibble(pos=seq(0,10,1),z=seq(0,1,0.1))
+#gl_df <- tibble(gl=c(7,19),position=c("below","above"))
+
+myframes_gfp %>%
+  left_join(zpositions_um,by=c("pos")) %>% 
+  filter(gl==17) %>% 
+  filter(frame==0) %>% 
+  distinct(gl,cell,.keep_all=TRUE) %>% 
+  filter(cell_rank<4) %>% 
+  mutate(cell_rank=as.character(cell_rank)) %>% 
+  mutate(concentration=gfp_nb/length_um_oriented_bbox) %>% 
+  ggplot()+
+  geom_point(aes(offset,concentration,col=cell_rank))+
+  coord_cartesian(ylim=c(0,13000))+
+  coord_cartesian(xlim=c(-0.9,0.8))+
+  theme_cowplot()+
+  facet_wrap(~cell_rank,scale="free")+
+  ylab("Concentration")+
+  xlab("Pos (over to below)")
+
+ggsave("./profile_concentration_upwards.pdf",height=5,width=7)
+
+```
+
+
