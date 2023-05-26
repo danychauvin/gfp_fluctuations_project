@@ -15,23 +15,38 @@ All packages are in /scicore/home/nimwegen/rocasu25/R/x86_64-pc-linux-gnu-librar
 Python 3.8.13 (GCC 7.5.0), with packages os, pandas, numpy, matplotlib, re, shutil, subprocess, seaborn, skimage, glob, tifffile, zarr and scipy.
 Environment is stored in /scicore/home/nimwegen/rocasu25/Documents/Projects/biozentrum/.conda_environment.
 
-### gfp_gaussian_process
+### Denoising using gfp_gaussian_process
 
 Should be installed within this git directory.
 https://github.com/bjks/gfp_gaussian_process
 Commit 5be92d0.
 
-### ggp_notebooks
+### Forward integration using ggp_notebooks
 
 Should be installed within this git directory.
 https://github.com/bjks/ggp_notebooks
 Commit 82ce0a2.
 
+### Microscopy data curation using DeepMoMA
+
+I used the following:
+
+Preprocessing:
+`module use /scicore/home/nimwegen/GROUP/Moma/MM_Analysis/builds/unstable_202304\05__FOR_PREPROCESSING_ONLY__mmpreprocesspy_v0.4.0-5b062368/Modules`
+
+Curation:
+`module use /scicore/home/nimwegen/GROUP/Moma/MM_Analysis/builds/unstable_20230112__moma_v0.6.0-beta14-02af6055/Modules`
+
 ## Dataset handling
 
-### Raw data
+Data were treated the following way:
 
-The list of raw data is available in the following table: `./mother_machine_experiments_toolbox/all_mmexperiments_datalist.csv`.
+### Curating and tyding raw data 
+
+Preprocessing and curation were conducted using my "curation manager" jupyter notebook (`./mother_machine_experiments_toolbox/mother_machine_curation_manager.ipynb`) and the above mentionned version of deepMoma (preprocessing and curation). Once relevant data (i.e CellStats csv files) were copied to a location specified in `./mother_machine_experiments_toolbox/all_mmexperiments_datalist.csv`.
+
+The list of raw data is available in the following table: `./mother_machine_experiments_toolbox/all_mmexperiments_datalist.csv`. This table was written manually, as I accumulated data.
+
 Columns names are the following:
 
 ```
@@ -47,26 +62,28 @@ Where:
 - `time threshold` is an arbitrary number of hours before which cells are discarded, to ensure MM experiment runs in a "permanent regime".
 - `replica` is an arbitrary number to facilitate data analysis.
 
-Other columns are pretty clear.
+### Filtering raw data for denoising
 
-### Import, tidy, filter raw data
-
-To import raw data, run `read_all_raw_MM_Data.R`. Necessary packages will be loaded, and `import_tidy_filter_raw_MMData.R` will be sourced.
-A tidied and filtered of the raw data (one file per condition, promoter, date) will saved on the disk in `./raw_curated_data_complete_cycles`.
+Done running: `./mother_machine_experiments_toolbox/read_all_raw_MM_Data.R`. Necessary packages will be loaded, and `import_tidy_filter_raw_MMData.R` will be sourced.
+A tidied and filtered version of each data (one file per condition, promoter, date) will saved on disk in `./raw_curated_data_complete_cycles`.
 
 NB: `cell_detection_offset` and `time_threshold` are used in `import_tidy_filter_raw_MMData.R` to filter out cell-cycles that occur at the beginning of the experiment, or that get too close to the edge of the growth-lane.
 
-### Denoise raw data
+### Denoising raw data
 
-Once raw data are saved in `./mother_machine_experiments_toolbox/raw_curated_data_complete_cycles`, one can run the following script to denoise the data:
-`./mother_machine_experiments_toolbox/denoise_raw_data.R`. This script will call the `gfp_gaussian` software (`https://github.com/bjks/gfp_gaussian_process`, Bjoern Kscheschinski) to denoised the data, using scicore nodes (1 node per job).
+Once filtered raw data are saved in `./mother_machine_experiments_toolbox/raw_curated_data_complete_cycles`, one can run the following script to denoise the data:
+`./mother_machine_experiments_toolbox/denoise_raw_data.R`.
 
-Data will be stored in `./mother_machine_experiments_toolbox/denoising_raw_data`, in a folder that can be identified with a timestamp (e.g `denoising_20230522144637`). Importantly, joints are also saved in the same folder.
+This script will call the `gfp_gaussian` software (`https://github.com/bjks/gfp_gaussian_process`, Bjoern Kscheschinski) to denoise the data, using scicore nodes (1 node per job).
 
-### Tidy and import denoised data
+Output data will be stored in `./mother_machine_experiments_toolbox/denoising_raw_data`, in a folder that can be identified with a timestamp (e.g `denoising_20230522144637`). Importantly, joints necessary to compute correlation functions are also saved in the same folder.
+
+### Saving denoised data together with raw data on disk
 
 Run `./mother_machine_experiments_toolbox/import_denoised_data.R`. Data will be tidied with all necessary information contained in raw data and then saved in `./denoised_data_complete_cycles`.
-NB: the same data will also be saved in the folder: `denoised_data_complete_cycles_corrected` together with inferred parameters, with q corrected for autofluorescence volumic production.
+In these csv, `gfp_nb_corrected` and `q_corrected` are corrected for the autofluorescence.
+
+NB: the same data will also be saved in the folder: `denoised_data_complete_cycles_corrected` to proceed with forward integration, together with inferred parameters. Beware, in these files, inferred `mean_q` has been corrected for autofluorescence volumic production. It is smaller than inferred `mean_q`, which accounts for all sources of fluorescent molecules. Also, `gfp_nb` and `q` ARE corrected for the autofluorescence.
 
 ### Proceed with forward integration
 
@@ -196,76 +213,26 @@ Output files are stored in `/scicore/home/nimwegen/rocasu25/Documents/Projects/b
 
 ### Compute autocorrelation functions
 
-We make use of the following python script (again from `gfp_gaussian_process`): `https://github.com/bjks/ggp_notebooks`.
+I use of the following python script (again from `gfp_gaussian_process`): `https://github.com/bjks/ggp_notebooks`.
 
 ```
 ./gfp_gaussian_process/python_src/correlation_from_joint.py
 ```
 To run all computation (1 node per dataset), on the cluster, simply run: `./mother_machine_experiments_toolbox/computing_correlation_functions.R`.
 
+## Load data before producing figures
+
+### Load only raw data (filtered)
+
+Run `./mother_machine_experiments_toolbox/load_raw_data.R` to load `raw_data` dataframe in memory.
+
 ### Load all data
+
+Run `./mother_machine_experiments_toolbox/load_simulated_and_denoised_data.R` to load the following in memory:
 - Denoised data together with parameters
 - Forward integration data to assess contribution to overall noise
-- Correlations
+- Correlations data
 
-Run `./mother_machine_experiments_toolbox/load_simulated_and_denoised_data.R`
+## Produce figures
 
-### Make figures
-
-All scripts to make figures are kept in `./figures`. I try to keep it organized by naming script with the same name as their outputs.
-
-## Project structure
-
-The essential scripts and files are listed below:
-
-```
-gfp_fluctuations_project
-│   README.md
-│
-└───analysis: contains Rmd files were data are analyzed to adress specific questions, these Rmd files are also used to produce figures.
-|      └────figures      
-│      
-└───mother_machine_experiments_toolbox
-│      preprocessing_curating_tyding.ipynb
-│      load_functions_and_packages.R
-│      read_MM_data.R
-│      denoise_data.Rmd
-│      import_denoised_data.R: denoised_data_files_dir has to be specified
-│      load_denoised_data.R: denoised_data_dir has to be specified
-|      load_denoised_data_complete_cycles.R: denoised_data_dir has to be specified
-|      load_simulation_data.R: 'simulation_data_folder' has to be specified (path to forward integration folder)
-│      import_simulated_data.R
-│      mm.properties
-│
-└───import_scripts: R scripts to import, curate and export raw data
-│      promoter_condition.Rmd: import, curated and save in ../raw_curated_data_complete_cycles, relevant data. NB: uncomplete cell cycles can also be saved.
-|          uncomplete data are saved in ../raw_curated_data
-│      datalist_promoter_condition.csv: information used by promoter_condition.Rmd to import data
-│      promoter_import_all_data.Rmd: run all promoter_condition.Rmd files
-│      file_list.txt: list of all files that were curated using deepMoma 
-│      make_yaml_files_for_new_curation.Rmd: temporary, follow efforts to recurate datasets
-│
-└───raw_curated_data: contains raw data that can be denoised (**complete and uncomplete** cell cycles), as well as plots of cell traces (log(length) versus time)
-│      e.g: hi1_glycerol040_rawdata.csv and hi1_glycerol040.pdf
-|
-└───raw_curated_data_complete_cycles: contains raw data that can be denoised (**only complete cell cycles**), as well as plots of cell traces (log(length) versus time)
-│      e.g: hi1_glycerol040_rawdata.csv and hi1_glycerol040.pdf
-|
-└───denoising_raw_date: contains the output of the denoising procedure, experimental (data + logs, each denoising attempt is specified by a timestamp: e.g denoising_20220428095255)
-│      └───parameters: contains input parameters for the denoising procedure
-│      │     promoter_condition_parameters.txt
-│      │     e.g: hi1_acetate_parameters.txt
-│      │
-│      └───denoising_timestamp: denoising procedure output
-       denoising_readme.md: content of the denoising procedure output folder
-│
-└───denoised_data: contains denoised data, e.g: glucose020_hi1_denoised.csv
-│
-└───denoised_data_complete_cycles: contains denoised data, e.g: glucose020_hi1_denoised.csv
-│   
-└───gfp_gaussian_process: repository containing the code necessary to run denoising procedure 
-│   
-└───ggp_notebooks: repository containing the code to run forward integration
-    
-```
-
+All scripts to make figures are kept in `./figures/scripts`. I try to keep it organized by naming script with the same name as their outputs, which should be in `./figures/pdfs`.
