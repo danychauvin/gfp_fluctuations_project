@@ -89,13 +89,13 @@ myframes_final <- left_join(myframes_raw,myframes_denoised,by=c("condition","pro
 # Save the data on the disk for further analysis
 
 ## Filtering out cells which have bad segmentation issue.
-bad_cells <- myframes_final %>%
-  mutate(lambda_high_boundary=lambda+sqrt(cov_ll)) %>% 
-  #filter(lambda_high_boundary<0) %>% 
-  distinct(cell)
+#bad_cells <- myframes_final %>%
+#  mutate(lambda_high_boundary=lambda+sqrt(cov_ll)) %>% 
+#  filter(lambda_high_boundary<0) %>% 
+#  distinct(cell)
 
 myframes_final <- myframes_final %>% 
-  anti_join(bad_cells,by=c("cell")) %>% 
+#  anti_join(bad_cells,by=c("cell")) %>% 
   mutate(date=as.character(date))
 
 # importing auto-fluorescence correction table and correcting gfp_nb and q for auto-fluorescence
